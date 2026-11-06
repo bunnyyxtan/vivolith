@@ -64,7 +64,8 @@ export async function createPlayer(): Promise<Player> {
       want.set(0, 0);
       if (!player.frozen && (f || r)) {
         const sy = Math.sin(camYaw), cy = Math.cos(camYaw);
-        want.set(sy * f + cy * r, cy * f - sy * r).normalize().multiplyScalar(top);
+        // forward = (sin, cos); right = (-cos, sin) (screen-right when looking along forward)
+        want.set(sy * f - cy * r, cy * f + sy * r).normalize().multiplyScalar(top);
       }
       const moving = want.lengthSq() > 0;
       const jumpWanted = input.consumePress("Space") && !player.frozen;

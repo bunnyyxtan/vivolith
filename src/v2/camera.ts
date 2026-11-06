@@ -67,7 +67,7 @@ export function createCameraRig(aspect: number, yaw: number): CameraRig {
       // Keyboard orbit too (Q/E or arrows), so the view never depends on the mouse alone.
       const keyYaw = (input.down("KeyE") || input.down("ArrowRight") ? 1 : 0) - (input.down("KeyQ") || input.down("ArrowLeft") ? 1 : 0);
       const keyPitch = (input.down("ArrowDown") ? 1 : 0) - (input.down("ArrowUp") ? 1 : 0);
-      rig.yaw += dx * SENS + keyYaw * KEY_RATE * dt;
+      rig.yaw -= dx * SENS + keyYaw * KEY_RATE * dt; // drag right / E turns the view right
       // Full 360 yaw; pitch from looking up at the sky (camera low) to looking down from above.
       rig.pitch = THREE.MathUtils.clamp(rig.pitch + dy * SENS + keyPitch * KEY_RATE * 0.6 * dt, MIN_PITCH, MAX_PITCH);
       rig.dist = THREE.MathUtils.clamp(rig.dist + input.takeWheel() * 0.004, MIN_DIST, MAX_DIST);
@@ -76,7 +76,7 @@ export function createCameraRig(aspect: number, yaw: number): CameraRig {
 
       const cp = Math.cos(rig.pitch), sp = Math.sin(rig.pitch);
       dir.set(Math.sin(rig.yaw) * cp, -sp, Math.cos(rig.yaw) * cp); // look direction
-      right.set(Math.cos(rig.yaw), 0, -Math.sin(rig.yaw));
+      right.set(-Math.cos(rig.yaw), 0, Math.sin(rig.yaw)); // screen-right of the look direction
       pivot.copy(smooth).addScaledVector(right, SHOULDER);
       toCam.copy(pivot).addScaledVector(dir, -rig.dist).sub(smooth);
       const len = toCam.length();
