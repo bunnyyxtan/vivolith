@@ -104,4 +104,4 @@ window.addEventListener("resize", () => {
 });
 
 // Test hook for automated playtests (read-only inspection).
-(window as unknown as { __nw: unknown }).__nw = { player, rig, world, renderer, input, gameplay };
+(window as unknown as { __nw: unknown }).__nw = { player, rig, world, renderer, input, gameplay, pipeline };
