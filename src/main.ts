@@ -5,6 +5,7 @@ import { createPlayer } from "./player";
 import { createCameraRig } from "./camera";
 import { buildWorld, SUN_DIR } from "./world";
 import { createGameplay } from "./gameplay";
+import { createCrowd, marketStallStops, type Crowd } from "./crowd";
 import { createPipeline, createPortraitStudio, createRenderer, loadEnvironment } from "./render";
 import { loadCharacter, showPlaceholderNotice } from "./character";
 
@@ -38,6 +39,20 @@ const gameplay = createGameplay(
   document.querySelector<HTMLDivElement>("#hud")!, world, player, rig, input, createPortraitStudio(renderer, scene),
 );
 
+// Ambient crowd: browses open stalls; Pema's stall counts as open only while the economy says so.
+let crowd: Crowd | null = null;
+world.ready
+  .then(() => createCrowd(scene, marketStallStops((id) => {
+    if (id !== "pema") return true;
+    const p = gameplay.state().merchants.pema;
+    return p.status === "open" && p.stock.mango + p.stock.lemon > 0;
+  })))
+  .then((c) => {
+    crowd = c;
+    (window as unknown as { __nw: Record<string, unknown> }).__nw.crowd = c;
+  })
+  .catch(() => showPlaceholderNotice("Market crowd failed to load (public/models/*.glb)"));
+
 let started = false;
 // No pointer lock: the cursor stays visible for UI; hold right mouse to orbit (see input.ts).
 playButton.addEventListener("click", () => {
@@ -62,6 +77,7 @@ function frame() {
     rig.update(dt, input, player.mesh.position, world.colliders);
   }
   gameplay.update(dt, started);
+  crowd?.update(dt, player.mesh.position);
 
   world.update(t, player.mesh.position);
   pipeline.render();

@@ -40,8 +40,9 @@ Deadline: 2026-11-14 23:59 UTC. Feature freeze target: 2026-11-13 12:00 UTC (res
 | 1 | First NEAR testnet transaction | VERIFIED | Account `bunnyy-nearworld.testnet` (10 NEAR, 1 full-access key matching local keychain; created by faucet tx `Ao2w4zL97MryDVWp5LBoFGYnbtfQPkkowttsMekVqSK`). In game (2026-11-06): Pema choice 1 -> harbor fee paid (coins 25->10, shipment held->transit) -> relay sent tx **`uKV8uHTnwiWbDUj1yYpRxucK2H41cHQb9do4AQpM3co`**. RPC check: `SuccessValue`, `FINAL`, signer bunnyy-nearworld.testnet -> `guestbook.near-examples.testnet.add_message`, 1.91 TGas; message #857 stored with that sender. After 1-day fast-forward: 30 mangoes delivered, Pema paid rent, Tea House bought 6 from her at 3 c; inspector shows "✔ onchain". https://testnet.nearblocks.io/txns/uKV8uHTnwiWbDUj1yYpRxucK2H41cHQb9do4AQpM3co |
 | 1 | Own game contract (NEP-245 items) | BLOCKED | No Rust/cargo on this machine; installing rustup + cargo-near needs approval. Receipts use the public guestbook contract meanwhile (not ours; honest label) |
 | 2 | Premium dialogue UI | IN PROGRESS | Market-object design (enamel plank, torn paper subtitle strip, live 3D postage-stamp portrait, kraft tag choices in a side column). Compact pass after user feedback; centre of frame stays clear. Typing speed only checked under a throttled pane |
-| 2 | Merchants + pedestrians + nav | NOT STARTED | |
-| 2 | Clouds / sky / grading | NOT STARTED | |
+| 2 | Ambient pedestrians (`src/crowd.ts`) | IN PROGRESS | 10 walkers (Remy/Pema rigs, outfit tints, 0.92-1.04 scale, Remy walk retargeted to Pema rig via rotation tracks) on 6 lane/plaza routes; walk -> browse open stall -> walk, yield to player; skip Pema's stall when the economy says closed/empty. Verified by stepping 4 s: walkers moved ~4-5 m along routes. **Not yet measured:** fps with crowd (direct render: 328 calls, 1.7M tris incl. shadow pass: likely needs LOD / no ped shadows) |
+| 2 | Named merchants for other stalls | NOT STARTED | Needs more character assets (Mixamo) |
+| 2 | Clouds / sky | IN PROGRESS | `src/clouds.ts` fbm cloud deck lit by sun direction; visible in a raw render. Not yet judged in the tone-mapped pipeline |
 | 3 | NEAR Spire + lobby, NEAR Labs room | NOT STARTED | |
 | 4 | Harbor + dispatcher + drivable vehicle | NOT STARTED | |
 | 5 | Mango Crisis end-to-end | NOT STARTED | |

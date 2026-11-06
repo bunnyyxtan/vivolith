@@ -3,6 +3,7 @@
 import * as THREE from "three";
 import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
 import { Sky } from "three/addons/objects/Sky.js";
+import { createClouds } from "./clouds";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { GTAOPass } from "three/addons/postprocessing/GTAOPass.js";
@@ -58,6 +59,7 @@ export async function loadEnvironment(
   u.sunPosition.value.copy(sunDir);
   scene.background = null;
   scene.add(sky);
+  createClouds(scene, sunDir);
 }
 
 /**
