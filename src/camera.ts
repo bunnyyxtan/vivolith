@@ -31,6 +31,8 @@ export interface CameraRig {
   yaw(): number;
   /** Point the orbit (used by cutscenes and automated screenshots). */
   setView(yaw: number, pitch: number): void;
+  /** Conversation framing: bias the camera toward a point of interest and move in (null = gameplay). */
+  setFocus(point: THREE.Vector3 | null): void;
   update(dt: number, input: Input, target: THREE.Vector3, blockers: readonly Box[]): void;
 }
 
@@ -45,6 +47,7 @@ export function createCameraRig(aspect: number): CameraRig {
   let pitch = 0.22;
   let distance = BASE_DISTANCE;
   let zoomDistance = BASE_DISTANCE;
+  let interest: THREE.Vector3 | null = null;
   let first = true;
 
   return {
@@ -54,6 +57,9 @@ export function createCameraRig(aspect: number): CameraRig {
       yaw = y;
       pitch = THREE.MathUtils.clamp(p, MIN_PITCH, MAX_PITCH);
     },
+    setFocus(point) {
+      interest = point ? point.clone() : null;
+    },
     update(dt, input, target, blockers) {
       const look = input.takeLook();
       yaw -= look.dx * MOUSE_SENSITIVITY;
@@ -61,6 +67,7 @@ export function createCameraRig(aspect: number): CameraRig {
       zoomDistance = THREE.MathUtils.clamp(zoomDistance * (1 + input.takeZoom() * 0.12), MIN_DISTANCE, MAX_DISTANCE);
 
       focus.set(target.x, target.y + EYE_HEIGHT, target.z);
+      if (interest) focus.lerp(interest, 0.45);
       if (first) smoothFocus.copy(focus);
       smoothFocus.lerp(focus, 1 - Math.exp(-18 * dt));
 
@@ -72,8 +79,9 @@ export function createCameraRig(aspect: number): CameraRig {
 
       // Pull in when geometry blocks the view; ease back out slowly.
       ray.set(pivot, dir);
-      const hitDistance = rayVsBoxes(ray, blockers, zoomDistance + 0.25);
-      const allowed = Math.max(0.8, Math.min(zoomDistance, hitDistance - 0.25));
+      const wanted = interest ? Math.min(zoomDistance, 3.2) : zoomDistance;
+      const hitDistance = rayVsBoxes(ray, blockers, wanted + 0.25);
+      const allowed = Math.max(0.8, Math.min(wanted, hitDistance - 0.25));
       const rate = allowed < distance ? 25 : 4;
       distance += (allowed - distance) * (1 - Math.exp(-rate * dt));
       if (first) distance = allowed;

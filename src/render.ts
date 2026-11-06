@@ -60,6 +60,50 @@ export async function loadEnvironment(
   scene.add(sky);
 }
 
+/**
+ * Portrait studio: renders a close-up of a conversation partner once into an offscreen target and
+ * returns it as a canvas for the dialogue stamp. Waits briefly so the NPC has turned to face the player.
+ */
+export function createPortraitStudio(renderer: THREE.WebGLRenderer, scene: THREE.Scene) {
+  const SIZE = 384;
+  const rt = new THREE.WebGLRenderTarget(SIZE, SIZE);
+  rt.texture.colorSpace = THREE.SRGBColorSpace;
+  const cam = new THREE.PerspectiveCamera(24, 1, 0.05, 80);
+  const pixels = new Uint8Array(SIZE * SIZE * 4);
+  return (subject: THREE.Vector3, toward: THREE.Vector3, delayMs = 650): Promise<HTMLCanvasElement | null> =>
+    new Promise((resolve) => {
+      setTimeout(() => {
+        try {
+          const dir = toward.clone().sub(subject).setY(0);
+          if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1);
+          dir.normalize();
+          cam.position.copy(subject).addScaledVector(dir, 1.3);
+          cam.position.y += 0.06;
+          cam.lookAt(subject.x, subject.y - 0.06, subject.z);
+          const prev = renderer.getRenderTarget();
+          renderer.setRenderTarget(rt);
+          renderer.render(scene, cam);
+          renderer.setRenderTarget(prev);
+          renderer.readRenderTargetPixels(rt, 0, 0, SIZE, SIZE, pixels);
+          const canvas = document.createElement("canvas");
+          canvas.width = canvas.height = SIZE;
+          const g = canvas.getContext("2d")!;
+          const img = g.createImageData(SIZE, SIZE);
+          for (let y = 0; y < SIZE; y++) {
+            // WebGL rows are bottom-up
+            img.data.set(pixels.subarray((SIZE - 1 - y) * SIZE * 4, (SIZE - y) * SIZE * 4), y * SIZE * 4);
+          }
+          g.putImageData(img, 0, 0);
+          resolve(canvas);
+        } catch {
+          resolve(null);
+        }
+      }, delayMs);
+    });
+}
+
+export type PortraitStudio = ReturnType<typeof createPortraitStudio>;
+
 export function createPipeline(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.PerspectiveCamera): Pipeline {
   const size = renderer.getSize(new THREE.Vector2());
   const target = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: QUALITY_LOW ? 0 : 4 });

@@ -3,8 +3,9 @@ import "./style.css";
 import { createInput } from "./input";
 import { createPlayer } from "./player";
 import { createCameraRig } from "./camera";
-import { buildWorld, SUN_DIR, type Interactable } from "./world";
-import { createPipeline, createRenderer, loadEnvironment } from "./render";
+import { buildWorld, SUN_DIR } from "./world";
+import { createGameplay } from "./gameplay";
+import { createPipeline, createPortraitStudio, createRenderer, loadEnvironment } from "./render";
 import { loadCharacter, showPlaceholderNotice } from "./character";
 
 // Poly Haven "venice_sunset": the sun sits at u=0.600 of the equirect (measured in Blender).
@@ -30,13 +31,12 @@ loadCharacter("/models/player.glb", 1.76)
   .then((c) => player.attachCharacter(c))
   .catch(() => showPlaceholderNotice("Placeholder character: Mixamo model not imported yet (public/models/player.glb)"));
 
-// ---------- HUD ----------
+// ---------- HUD + gameplay ----------
 const titleCard = document.querySelector<HTMLDivElement>("#title-card")!;
 const playButton = document.querySelector<HTMLButtonElement>("#play")!;
-const promptEl = document.querySelector<HTMLDivElement>("#prompt")!;
-const dialogueEl = document.querySelector<HTMLDivElement>("#dialogue")!;
-const speakerEl = dialogueEl.querySelector<HTMLDivElement>(".speaker")!;
-const lineEl = dialogueEl.querySelector<HTMLDivElement>(".line")!;
+const gameplay = createGameplay(
+  document.querySelector<HTMLDivElement>("#hud")!, world, player, rig, input, createPortraitStudio(renderer, scene),
+);
 
 let started = false;
 const lock = () => {
@@ -48,47 +48,6 @@ playButton.addEventListener("click", () => {
   lock();
 });
 canvas.addEventListener("click", () => { if (started && !input.locked()) lock(); });
-
-let talkingTo: Interactable | null = null;
-let lineIndex = 0;
-
-function nearestInteractable(): Interactable | null {
-  let best: Interactable | null = null;
-  let bestDist = Infinity;
-  for (const it of world.interactables) {
-    const d = Math.hypot(it.position.x - player.body.x, it.position.z - player.body.z);
-    if (d < it.radius && d < bestDist) { best = it; bestDist = d; }
-  }
-  return best;
-}
-
-function updateInteraction() {
-  const near = nearestInteractable();
-  if (talkingTo && near !== talkingTo) { talkingTo = null; dialogueEl.hidden = true; }
-
-  if (input.pressed("KeyE") && near) {
-    if (talkingTo === near) {
-      lineIndex += 1;
-      if (lineIndex >= near.lines.length) { talkingTo = null; dialogueEl.hidden = true; }
-    } else {
-      talkingTo = near;
-      lineIndex = 0;
-    }
-    if (talkingTo) {
-      speakerEl.textContent = talkingTo.name;
-      lineEl.textContent = talkingTo.lines[lineIndex];
-      dialogueEl.hidden = false;
-    }
-  }
-
-  world.talk(talkingTo ? talkingTo.id : null); // no-op when unchanged
-
-  const showPrompt = near !== null && started;
-  promptEl.hidden = !showPrompt;
-  if (showPrompt && near) {
-    promptEl.innerHTML = `<kbd>E</kbd>${talkingTo ? "Continue" : `Talk to ${near.name}`}`;
-  }
-}
 
 // ---------- Loop ----------
 const clock = new THREE.Clock();
@@ -103,10 +62,10 @@ function frame() {
     rig.camera.position.set(6 + Math.sin(t * 0.08) * 2, 3.2, 30 - t * 0.15);
     rig.camera.lookAt(0, 12, -21);
   } else {
-    player.update(dt, input, rig.yaw(), world.colliders, false);
+    player.update(dt, input, rig.yaw(), world.colliders, gameplay.frozen());
     rig.update(dt, input, player.mesh.position, world.colliders);
-    updateInteraction();
   }
+  gameplay.update(dt, started);
 
   world.update(t, player.mesh.position);
   pipeline.render();
@@ -133,4 +92,4 @@ window.addEventListener("resize", () => {
 });
 
 // Test hook for automated playtests (read-only inspection).
-(window as unknown as { __nw: unknown }).__nw = { player, rig, world, renderer, input };
+(window as unknown as { __nw: unknown }).__nw = { player, rig, world, renderer, input, gameplay };

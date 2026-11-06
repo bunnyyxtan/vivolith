@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "near-api-js": "7.4.0",
     "three": "0.187.0"
   },
   "devDependencies": {

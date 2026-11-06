@@ -29,20 +29,155 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d12; col
 }
 #title-card button:hover { background: #fff; }
 
-#prompt {
-  position: absolute; left: 50%; top: 62%; transform: translateX(-50%);
-  font-size: 15px; padding: 8px 16px; border-radius: 8px;
-  background: rgba(15, 18, 24, 0.72); border: 1px solid rgba(131, 220, 255, 0.45);
-}
-#prompt kbd { font-family: var(--mono); background: var(--paper); color: var(--ink); border-radius: 4px; padding: 1px 7px; margin-right: 8px; }
+/* ---------- HUD ---------- */
+:root { --glass: rgba(16, 18, 22, 0.74); --line: rgba(238, 238, 235, 0.14); --serif: "Iowan Old Style", "Palatino Linotype", Georgia, serif; }
+.hud-top { position: absolute; top: 16px; left: 18px; display: flex; gap: 8px; font-family: var(--mono); font-size: 13px; }
+.hud-top > div { padding: 6px 11px; border-radius: 6px; background: var(--glass); border: 1px solid var(--line); }
+.hud-purse { color: #ffd27a; }
+.hud-objective { position: absolute; top: 56px; left: 18px; max-width: 340px; padding: 10px 14px 11px; border-left: 2px solid var(--near-blue);
+  background: linear-gradient(90deg, rgba(16,18,22,.78), rgba(16,18,22,.25)); font-size: 14px; line-height: 1.4; }
+.hud-objective-label { display: block; font-family: var(--mono); font-size: 10.5px; letter-spacing: .22em; text-transform: uppercase; color: var(--near-sky); margin-bottom: 3px; }
+.hud-prompt { position: absolute; left: 50%; top: 63%; transform: translateX(-50%); font-size: 15px; padding: 8px 15px; border-radius: 8px;
+  background: var(--glass); border: 1px solid rgba(131, 220, 255, 0.4); }
+.hud-prompt kbd { font-family: var(--mono); background: var(--paper); color: var(--ink); border-radius: 4px; padding: 1px 7px; margin-right: 9px; }
+.hud-toasts { position: absolute; right: 18px; top: 16px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; max-width: 380px; }
+.in-dialogue .hud-toasts { top: calc(6.5vh + 12px); }
+.hud-toast, .hud-receipt { padding: 9px 13px; border-radius: 8px; background: var(--glass); border: 1px solid var(--line); font-size: 13.5px;
+  animation: toast-in .35s ease-out; transition: opacity .6s, transform .6s; }
+.hud-toast.out, .hud-receipt.out { opacity: 0; transform: translateY(6px); }
+.hud-receipt { pointer-events: auto; border-color: rgba(131, 220, 255, .45); }
+.hud-receipt.onchain { border-color: #5fd39a; }
+.hud-receipt.failed { border-color: #e06a5a; }
+.hud-receipt-title { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--near-sky); margin-bottom: 3px; }
+.hud-receipt.onchain .hud-receipt-title { color: #5fd39a; }
+.hud-receipt a { color: var(--near-sky); font-family: var(--mono); font-size: 12px; }
+.hud-receipt-msg { opacity: .7; font-size: 12px; margin-top: 3px; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
 
-#dialogue {
-  position: absolute; left: 50%; bottom: 9vh; transform: translateX(-50%); width: min(640px, 92vw);
-  padding: 16px 20px; border-radius: 12px; background: rgba(15, 18, 24, 0.82);
-  border: 1px solid rgba(131, 220, 255, 0.35); backdrop-filter: blur(6px);
+/* ---------- Conversation: market objects, not a glass card ----------
+   enamel name plank · torn paper slip · postage-stamp portrait · kraft price-tag choices */
+:root {
+  --f-sign: "Alfa Slab One", "Rockwell Extra Bold", Georgia, serif;
+  --f-print: "Fraunces", "Iowan Old Style", Georgia, serif;
+  --f-hand: "Caveat", "Segoe Print", cursive;
+  --ink-brown: #2b2119; --cream: #f4ecda; --kraft: #e3c993; --enamel: #1f4a3d; --gilt: #f2d48a;
 }
-#dialogue .speaker { font-family: var(--mono); font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--near-sky); margin-bottom: 6px; }
-#dialogue .line { font-size: 18px; line-height: 1.45; }
+.dlg-letterbox { position: absolute; inset: 0; pointer-events: none; transition: background .5s; }
+.in-dialogue .dlg-letterbox { pointer-events: auto; background: radial-gradient(ellipse 75% 70% at 50% 42%, transparent 55%, rgba(8, 6, 4, .5)); }
+.dlg-letterbox::before, .dlg-letterbox::after { content: ""; position: absolute; left: 0; right: 0; height: 0; background: #070605; transition: height .5s cubic-bezier(.2,.8,.2,1); }
+.dlg-letterbox::before { top: 0; }
+.dlg-letterbox::after { bottom: 0; }
+.in-dialogue .dlg-letterbox::before, .in-dialogue .dlg-letterbox::after { height: 4.5vh; }
+.in-dialogue #controls, .in-dialogue .hud-objective, .in-dialogue .hud-prompt, .in-dialogue .hud-top { opacity: 0; transition: opacity .3s; }
+
+/* Compact: subtitle strip at the bottom, choices in a side column; the middle of the frame stays clear. */
+.dlg-stage { --accent: var(--near-blue); position: absolute; left: 50%; bottom: calc(4.5vh + 12px); width: min(720px, 62vw);
+  display: grid; grid-template-columns: 72px 1fr; column-gap: 14px; align-items: end;
+  transform: translate(-50%, 30px); opacity: 0; pointer-events: none; filter: drop-shadow(0 12px 18px rgba(0, 0, 0, .45));
+  transition: opacity .35s, transform .45s cubic-bezier(.2, .9, .25, 1.15); }
+.in-dialogue .dlg-stage { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+
+/* Postage-stamp portrait, rendered live from the 3D scene */
+.dlg-stamp { grid-column: 1; grid-row: 1 / span 2; margin: 0 0 4px; position: relative; width: 72px; height: 88px; padding: 6px;
+  /* perforations: transparent holes centred on the outer edge; the portrait covers the inner ones */
+  background: radial-gradient(circle 4.5px at 6px 6px, transparent 96%, #fbf6ea) -6px -6px / 12px 12px;
+  transform: rotate(-4deg); transform-origin: 50% 80%; }
+.dlg-stamp-img { width: 100%; height: 100%; overflow: hidden; background:
+  repeating-linear-gradient(135deg, #d9cdb4 0 6px, #e6dcc6 6px 12px); outline: 1px solid rgba(43, 33, 25, .25); }
+.dlg-stamp-img canvas { width: 100%; height: 100%; object-fit: cover; display: block; filter: contrast(1.06) saturate(1.08) sepia(.14);
+  opacity: 0; transform: scale(1.06); transition: opacity .5s, transform .8s; }
+.dlg-stamp.ready .dlg-stamp-img canvas { opacity: 1; transform: scale(1); }
+.dlg-postmark { display: none; position: absolute; right: -22px; bottom: 8px; width: 74px; height: 74px; border-radius: 50%; place-items: center; text-align: center;
+  border: 2.5px solid var(--accent); color: var(--accent); font: 700 15px/1 var(--f-hand); padding: 8px; transform: rotate(-14deg);
+  background: radial-gradient(circle, transparent 58%, color-mix(in srgb, var(--accent) 18%, transparent) 60%); mix-blend-mode: multiply; opacity: .9; }
+
+/* Enamel shop-sign name plank */
+.dlg-plank { position: absolute; left: 92px; top: -22px; z-index: 2; display: flex; align-items: baseline; gap: 12px; padding: 6px 16px 7px;
+  background: linear-gradient(180deg, #275a4a, var(--enamel)); border-radius: 3px; transform: rotate(-1.6deg);
+  box-shadow: inset 0 0 0 2px #163a2f, inset 0 0 0 4px rgba(242, 212, 138, .55), 0 4px 0 #0e2a22; }
+.dlg-plank::before, .dlg-plank::after { content: ""; position: absolute; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #fff6d6, #9b7a3a); }
+.dlg-plank::before { left: 8px; } .dlg-plank::after { right: 8px; }
+.dlg-plank-name { font: 19px/1 var(--f-sign); color: var(--gilt); letter-spacing: .02em; text-shadow: 0 2px 0 #0e2a22; }
+.dlg-plank-role { font: 600 16px/1 var(--f-hand); color: #e8e0c8; opacity: .9; }
+
+/* Torn paper slip */
+.dlg-paper { grid-column: 2; grid-row: 1; position: relative; min-height: 0; padding: 24px 34px 14px 22px; cursor: pointer; color: var(--ink-brown);
+  background:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .35 0 0 0 0 .27 0 0 0 0 .18 0 0 0 .09 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>"),
+    linear-gradient(176deg, #f8f1e1 0%, var(--cream) 55%, #ebdfc4 100%); }
+.dlg-paper::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 6px; background: linear-gradient(90deg, var(--accent) 0 34%, transparent 34%); opacity: .85; }
+.dlg-text { margin: 0; font: 400 17.5px/1.42 var(--f-print); font-variation-settings: "opsz" 30; min-height: 1.42em; text-wrap: pretty; }
+.dlg-text .ink { animation: ink .35s ease-out both; }
+@keyframes ink { from { opacity: 0; filter: blur(1.2px); } }
+.dlg-paper.swap { animation: slip .32s cubic-bezier(.2, .9, .3, 1.2); }
+@keyframes slip { from { transform: translateY(6px) rotate(.4deg); } }
+.dlg-more { position: absolute; right: 12px; bottom: 10px; width: 16px; color: var(--accent); opacity: 0; transition: opacity .2s; }
+.dlg-more.shown { opacity: 1; animation: bob 1.1s ease-in-out infinite; }
+@keyframes bob { 50% { transform: translateY(4px); } }
+
+/* Kraft price-tag choices */
+.dlg-tags { position: absolute; right: 22px; top: 50%; transform: translateY(-50%); width: min(330px, 30vw); list-style: none; margin: 0; padding: 0;
+  display: grid; gap: 8px; pointer-events: auto; filter: drop-shadow(0 6px 10px rgba(0, 0, 0, .4)); }
+.dlg-tags:not(.shown), #hud:not(.in-dialogue) .dlg-tags { display: none; }
+.dlg-tag { --tilt: 0deg; position: relative; display: flex; gap: 10px; align-items: flex-start; padding: 8px 14px 8px 26px; cursor: pointer; color: var(--ink-brown);
+  background: linear-gradient(170deg, #ecd6a6, var(--kraft) 60%, #d6b97e);
+  -webkit-mask: radial-gradient(circle 9px at 0 50%, #0000 97%, #000) 0 0 / 51% 100% no-repeat, radial-gradient(circle 9px at 100% 50%, #0000 97%, #000) 100% 0 / 51% 100% no-repeat;
+  mask: radial-gradient(circle 9px at 0 50%, #0000 97%, #000) 0 0 / 51% 100% no-repeat, radial-gradient(circle 9px at 100% 50%, #0000 97%, #000) 100% 0 / 51% 100% no-repeat;
+  transform: rotate(var(--tilt)); animation: tag-in .4s var(--delay) cubic-bezier(.2, .9, .3, 1.25) both; transition: transform .18s, background .18s; }
+@keyframes tag-in { from { opacity: 0; transform: translateY(14px) rotate(calc(var(--tilt) * 4)); } }
+.dlg-tag:not(.selected) .dlg-chips { display: none; }
+.dlg-tag::before { content: ""; position: absolute; left: 13px; top: 13px; width: 7px; height: 7px; border-radius: 50%; background: #5a4126; box-shadow: inset 0 1px 1px #000; }
+.dlg-tag.selected { transform: translateY(-4px) rotate(0deg) scale(1.02); background: linear-gradient(170deg, #f8e6bd, #efd59f 60%, #e2c486); }
+.dlg-tag.selected .dlg-num { background: var(--accent); color: #fff; border-color: var(--accent); }
+.dlg-tag.disabled { filter: grayscale(1); opacity: .55; cursor: default; }
+.dlg-tag.disabled .dlg-tag-label { text-decoration: line-through 1.5px; }
+.dlg-tag.stamped::after { content: "DEAL"; position: absolute; right: 14px; top: 50%; padding: 2px 8px; font: 18px/1.1 var(--f-sign); letter-spacing: .08em;
+  color: var(--accent); border: 2.5px solid var(--accent); border-radius: 4px; transform: translateY(-50%) rotate(-12deg) scale(1.6); opacity: 0;
+  animation: stamp .26s ease-out forwards; mix-blend-mode: multiply; }
+@keyframes stamp { to { opacity: .92; transform: translateY(-50%) rotate(-12deg) scale(1); } }
+.dlg-num { flex: none; width: 23px; height: 23px; border-radius: 50%; display: grid; place-items: center; margin-top: -1px;
+  border: 2px solid var(--ink-brown); font: 700 17px/1 var(--f-hand); transition: background .15s, color .15s; }
+.dlg-tag-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.dlg-tag-label { font: 600 14.5px/1.3 var(--f-print); font-variation-settings: "opsz" 20; }
+.dlg-chips { display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.dlg-chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 9px 1px 6px; border-radius: 999px; background: rgba(255, 250, 235, .45);
+  font: 600 14.5px/1.25 var(--f-hand); color: #4a3a28; }
+.dlg-chip svg { width: 14px; height: 14px; flex: none; }
+.dlg-hint { grid-column: 2; justify-self: end; margin-top: 6px; font: 600 15px/1 var(--f-hand); color: var(--cream); opacity: .85; text-shadow: 0 1px 2px #000; }
+@media (max-width: 820px) {
+  .dlg-stage { width: 92vw; grid-template-columns: 56px 1fr; column-gap: 10px; }
+  .dlg-stamp { width: 56px; height: 68px; padding: 5px; }
+  .dlg-plank { left: 70px; }
+  .dlg-plank-role { display: none; }
+  .dlg-text { font-size: 16px; }
+  .dlg-tags { width: 46vw; right: 10px; top: 38%; }
+}
+
+/* ---------- Market inspector ---------- */
+.inspector { position: absolute; top: 16px; right: 16px; bottom: 16px; width: min(430px, 92vw); overflow-y: auto; pointer-events: auto;
+  padding: 14px 16px; border-radius: 12px; background: rgba(12, 13, 16, .9); border: 1px solid var(--line); font-size: 12.5px; line-height: 1.45; }
+.insp-header { display: flex; flex-direction: column; margin-bottom: 8px; }
+.insp-header span, .insp-clock { font-family: var(--mono); font-size: 11px; opacity: .6; }
+.insp-controls { display: flex; gap: 6px; margin: 6px 0 10px; }
+.insp-controls button { font: 600 12px var(--font); padding: 6px 10px; border-radius: 6px; border: 1px solid var(--line); background: #22262d; color: var(--paper); cursor: pointer; }
+.insp-controls button:hover { border-color: var(--near-sky); }
+.insp-m { margin: 8px 0; padding: 8px 10px; border-radius: 8px; background: rgba(255,255,255,.04); }
+.insp-m.closed { outline: 1px solid #e06a5a; }
+.insp-m h4 { margin: 0 0 2px; font-size: 13.5px; display: flex; justify-content: space-between; }
+.insp-m h4 em { font-style: normal; font-family: var(--mono); font-size: 11px; color: #5fd39a; }
+.insp-m.closed h4 em { color: #e06a5a; }
+.insp-cash { font-family: var(--mono); font-size: 11px; opacity: .7; }
+.insp-good { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; margin-top: 4px; }
+.insp-good b { color: #ffd27a; font-family: var(--mono); }
+.insp-good small { grid-column: 1 / -1; opacity: .55; font-size: 11px; }
+.inspector h5 { margin: 12px 0 4px; font-family: var(--mono); font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--near-sky); }
+.inspector table td { font-family: var(--mono); font-size: 11px; padding: 2px 6px 2px 0; }
+.inspector table td.closed { color: #e06a5a; }
+.inspector ul { margin: 0; padding-left: 16px; }
+.insp-receipts li.onchain { color: #5fd39a; }
+.insp-receipts a, .inspector a { color: var(--near-sky); }
+.insp-log time { font-family: var(--mono); opacity: .5; margin-right: 4px; }
 
 #controls {
   position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);

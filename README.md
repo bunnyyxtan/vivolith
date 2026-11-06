@@ -47,6 +47,28 @@ npm run typecheck
 - [Economy design](docs/ECONOMY_DESIGN.md): pricing, chain reaction, loops, onchain scope, login
 - [Asset sources](docs/ASSETS.md)
 
+## The Mango Crisis (playable now)
+
+| Do | See |
+|---|---|
+| Walk to the blue-striped stall, press **E** | Pema explains her shipment is stuck; pick 1-4 (choices change cash, stock, reputation) |
+| Choice 1, then go south past the plaza to the **dispatch board** on the pier, press **E**, pay the fee | Coins -15, shipment goes in transit, a receipt card appears (on NEAR testnet if configured, otherwise clearly marked local) |
+| Press **Tab** | Market inspector: every merchant's cash, stock, prices with reasons; fast-forward 1 day / 1 week |
+| Fast-forward 1 day, talk to Pema again | Her table is restocked, her price is lower, she pays rent; the Tea House bought from her instead of Tomas |
+| Skip the quest and fast-forward | Pema misses rent, her goods vanish and the chalkboard reads "Shutters down" until the harbor releases the crates |
+
+Economy rules: `src/economy/pricing.ts` (one readable file). Self-check: `node src/economy/economy.check.ts`.
+
+## NEAR setup (testnet only)
+
+1. Create a testnet account with near-cli-rs (interactive): `npx near-cli-rs@0.31.1 account create-account`
+   then choose *sponsor-by-faucet-service*, a name like `nearworld-<you>.testnet`, *autogenerate-new-keypair*,
+   *save-to-legacy-keychain*, network *testnet*.
+2. Create `.env.local` (gitignored) with `NEAR_ACCOUNT_ID=nearworld-<you>.testnet`. The relay reads the key from
+   `~/.near-credentials/testnet/<account>.json` (or `NEAR_PRIVATE_KEY`). Mainnet accounts are refused.
+3. Restart `npm run dev`. Paying the harbor fee now writes a receipt with `add_message` to the public testnet contract
+   `guestbook.near-examples.testnet`; the in-game card links the tx on testnet.nearblocks.io.
+
 ## NEAR integration
 
 Planned, not implemented: an NEP-245 multi-token contract on testnet, merchant accounts with real

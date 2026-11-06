@@ -22,7 +22,15 @@ export interface Interactable {
   readonly name: string;
   readonly position: THREE.Vector3;
   readonly radius: number;
-  readonly lines: readonly string[];
+  /** Where the camera looks during the conversation (NPC head / sign face). */
+  readonly focus: THREE.Vector3;
+}
+
+export interface StallView {
+  readonly open: boolean;
+  readonly hasGoods: boolean;
+  readonly title: string;
+  readonly rows: ReadonlyArray<[string, string]>;
 }
 
 export interface World {
@@ -34,6 +42,8 @@ export interface World {
   readonly ready: Promise<void>;
   /** Tell the world which NPC (by interactable id) the player is talking to, or null. */
   talk(id: string | null): void;
+  /** Reflect a stall's economic state: goods on the table and the chalkboard prices. */
+  setStall(id: "pema", view: StallView): void;
   update(time: number, focus: THREE.Vector3): void;
 }
 
@@ -122,12 +132,61 @@ export function buildWorld(scene: THREE.Scene): World {
   colliders.push(box(0, 54, 6, 18, 0.25), box(-3.4, 54, 0.6, 18, 4), box(3.4, 54, 0.6, 18, 4), box(0, 63.4, 6, 0.6, 4));
 
   // ---------- Blender district ----------
+  let pemaBoard: THREE.Mesh | null = null;
+  let pemaGoods: THREE.Object3D | null = null;
+  let pendingStall: StallView | null = null;
+  let lastStallKey = "";
+  const applyStall = (view: StallView) => {
+    const key = JSON.stringify(view);
+    if (key === lastStallKey || !pemaBoard) return;
+    lastStallKey = key;
+    if (pemaGoods) pemaGoods.visible = view.open && view.hasGoods;
+    paintPriceBoard(pemaBoard, view.title, view.open ? view.rows : [["Shutters", "down"], ["Back", "soon?"]]);
+  };
   const ready = loadGLB("/models/saltlight_row.glb").then((gltf) => {
     const prepared = prepareModel(gltf.scene);
     colliders.push(...prepared.colliders);
     scene.add(gltf.scene);
     const board = gltf.scene.getObjectByName("SIGN_pema");
-    if (board instanceof THREE.Mesh) paintPriceBoard(board, "PEMA'S", [["Mangoes", "3 c"], ["Lemons", "1 c"]]);
+    pemaBoard = board instanceof THREE.Mesh ? board : null;
+    pemaGoods = gltf.scene.getObjectByName("GOODS_n0") ?? null;
+    if (pendingStall) applyStall(pendingStall);
+  });
+
+  // ---------- Harbor dispatch board (stand-in until the Gate 4 harbor build) ----------
+  const dispatch = new THREE.Group();
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 256;
+  const g2 = canvas.getContext("2d")!;
+  g2.fillStyle = "#1d2a33";
+  g2.fillRect(0, 0, 512, 256);
+  g2.fillStyle = "#83dcff";
+  g2.font = "700 54px ui-monospace, Consolas, monospace";
+  g2.fillText("DISPATCH", 32, 92);
+  g2.fillStyle = "#eeeeeb";
+  g2.font = "34px ui-monospace, Consolas, monospace";
+  g2.fillText("PIER 2 · COLD STORAGE", 32, 160);
+  g2.fillText("HOLDS & RELEASES", 32, 210);
+  const signTex = new THREE.CanvasTexture(canvas);
+  signTex.colorSpace = THREE.SRGBColorSpace;
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.8), new THREE.MeshStandardMaterial({ map: signTex, emissive: 0xffffff, emissiveMap: signTex, emissiveIntensity: 0.25, roughness: 0.6 }));
+  face.position.set(0, 1.55, 0.06);
+  const backing = new THREE.Mesh(new THREE.BoxGeometry(1.75, 0.95, 0.1), mat(0x2b2a28, 0.6, { metalness: 0.4 }));
+  backing.position.set(0, 1.55, 0);
+  const postMesh = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.1, 0.12), mat(0x2b2a28, 0.6, { metalness: 0.4 }));
+  postMesh.position.set(0, 0.55, 0);
+  for (const m of [face, backing, postMesh]) { m.castShadow = true; dispatch.add(m); }
+  dispatch.position.set(2.4, 0.25, 47.2);
+  dispatch.rotation.y = -0.5;
+  scene.add(dispatch);
+  colliders.push(box(2.4, 47.2, 0.5, 0.5, 2.0, 0.25));
+  interactables.push({
+    id: "harbor",
+    name: "the dispatch board",
+    position: new THREE.Vector3(1.6, 0, 48.4),
+    radius: 2.2,
+    focus: new THREE.Vector3(2.4, 1.55, 47.2),
   });
 
   // ---------- Auntie Pema (Mixamo character, idles behind her stall, turns and talks in dialogue) ----------
@@ -155,11 +214,7 @@ export function buildWorld(scene: THREE.Scene): World {
     name: "Auntie Pema",
     position: new THREE.Vector3(19, 0, -4.3),
     radius: 2.4,
-    lines: [
-      "Mangoes! Sweetest on the Row. Three coins a crate... for you, maybe two.",
-      "Rent is due tonight and the Tea House hasn't paid me. Don't tell anyone.",
-      "Everyone on this street hears about every deal. Remember that, newcomer.",
-    ],
+    focus: new THREE.Vector3(19, 1.55, -6.9),
   });
 
   let lastTime = 0;
@@ -172,6 +227,10 @@ export function buildWorld(scene: THREE.Scene): World {
     talk(id) {
       talkingTo = id;
       pema?.setAction(id === "pema" ? "Talking" : null);
+    },
+    setStall(_id, view) {
+      pendingStall = view;
+      applyStall(view);
     },
     update(time, focus) {
       const dt = Math.min(time - lastTime, 0.05);
