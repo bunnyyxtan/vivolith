@@ -60,6 +60,16 @@ Deadline: 2026-11-14 23:59 UTC. Feature freeze target: 2026-11-13 12:00 UTC (res
 | NEP-245 items | ROADMAP (needs Rust toolchain approval) |
 | NEAR Intents | Not used: no testnet (HACKATHON.md Q-007) |
 
+## Next actions (in order)
+
+1. Gate 2 finish: pedestrian-player collision (push or sidestep), 2-3 named merchants on other stalls (needs more
+   Mixamo characters + idle/talk), morning preset toggle.
+2. Gate 3: NEAR Spire as `blender/build_spire.py` -> `public/models/spire.glb`. Site: north of the plaza through the
+   gap behind the Ledger Tower (Blender x -5.7..6.3, y 30..39), Protocol Plaza at Blender y 40..80. Two glass/dark-metal
+   wings joined by an inclined skybridge (NEAR "N" read from the skyline), stone podium, enterable glass lobby with
+   colliders; NEAR Labs room off the lobby with one interactive engineer NPC.
+3. Rust toolchain (needs approval) -> own NEP-245 contract for mango crates / shop shares; switch receipts to it.
+
 ## Working commands
 
 - `npm run dev` then open http://localhost:5173 · `npm run typecheck` · `node src/physics/collision.check.ts`
