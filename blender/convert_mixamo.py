@@ -60,8 +60,11 @@ def _strip_root_motion(act):
         fc.update()
 
 
-def _texture_budget(max_px=1024):
-    for img in bpy.data.images:
+def _texture_budget(objs, max_px=1024):
+    """Cap only this character's textures (other scenes in the .blend keep theirs)."""
+    imgs = {n.image for o in objs if o.type == "MESH" for m in o.data.materials if m and m.use_nodes
+            for n in m.node_tree.nodes if n.type == "TEX_IMAGE" and n.image}
+    for img in imgs:
         w, h = img.size
         if w and max(w, h) > max_px:
             s = max_px / max(w, h)
@@ -107,7 +110,7 @@ def convert(name, character_fbx, animations, max_tex=1024, in_place=("Walk", "Ru
         for o in new:
             bpy.data.objects.remove(o)
 
-    _texture_budget(max_tex)
+    _texture_budget(objs, max_tex)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     out = OUT_DIR / f"{name}.glb"
     with _quiet():
@@ -120,3 +123,34 @@ def convert(name, character_fbx, animations, max_tex=1024, in_place=("Walk", "Ru
         )
     tracks = [t.name for t in arm.animation_data.nla_tracks]
     print(f"exported {out.name} {round(out.stat().st_size / 1e6, 2)} MB, clips: {tracks}")
+
+
+# ---------------------------------------------------------------- cast ----
+# Distinct Mixamo characters for NPCs. Files come from the Mixamo export flow documented in docs/ASSETS.md
+# (Mixamo/nw__<id>__skin_Idle.fbx = character + idle, other files = "without skin" clips on the same rig).
+# id: (Mixamo character, texture cap, clips)
+CAST = {
+    "npc_engineer": ("Elizabeth", 1024, ("Idle", "Talking", "Explain", "Walk")),
+    "npc_tomas": ("Joe", 1024, ("Idle", "Talking")),
+    "npc_teahouse": ("Martha", 1024, ("Idle", "Talking")),
+    "ped_sophie": ("Sophie", 512, ("Idle", "Walk")),
+    "ped_shannon": ("Shannon", 512, ("Idle", "Walk")),
+    "ped_megan": ("Megan", 512, ("Idle", "Walk")),
+    "ped_bryce": ("Bryce", 512, ("Idle", "Walk")),
+    "ped_josh": ("Josh", 512, ("Idle", "Walk")),
+    "ped_pete": ("Pete", 512, ("Idle", "Walk")),
+    "ped_porter": ("Peasant Man", 512, ("Idle", "Walk")),
+    "ped_abe": ("Abe", 512, ("Idle", "Walk")),
+}
+MIXAMO = REPO / "Mixamo"
+
+
+def convert_cast(only=None):
+    for cid, (_, cap, clips) in CAST.items():
+        if only and cid not in only:
+            continue
+        key = cid.replace("npc_", "") if cid.startswith("npc_") else cid
+        src = lambda clip: str(MIXAMO / f"nw__{key}__{'skin_' if clip == 'Idle' else ''}{clip}.fbx")
+        convert(cid, src("Idle"), {c: src(c) for c in clips}, max_tex=cap)
+        scene = bpy.data.scenes.get("Char_" + cid)
+        bpy.data.scenes.remove(scene)  # keep the .blend light between characters

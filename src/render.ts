@@ -70,7 +70,9 @@ export function createPortraitStudio(renderer: THREE.WebGLRenderer, scene: THREE
   const SIZE = 384;
   const rt = new THREE.WebGLRenderTarget(SIZE, SIZE);
   rt.texture.colorSpace = THREE.SRGBColorSpace;
-  const cam = new THREE.PerspectiveCamera(24, 1, 0.05, 80);
+  // Close and wide enough to frame the head (~0.46 m) while staying in front of a player who stands
+  // as near as the collision allows (NPC 0.3 m + player 0.35 m radius).
+  const cam = new THREE.PerspectiveCamera(34, 1, 0.05, 80);
   const pixels = new Uint8Array(SIZE * SIZE * 4);
   return (subject: THREE.Vector3, toward: THREE.Vector3, delayMs = 650): Promise<HTMLCanvasElement | null> =>
     new Promise((resolve) => {
@@ -79,7 +81,7 @@ export function createPortraitStudio(renderer: THREE.WebGLRenderer, scene: THREE
           const dir = toward.clone().sub(subject).setY(0);
           if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1);
           dir.normalize();
-          cam.position.copy(subject).addScaledVector(dir, 1.3);
+          cam.position.copy(subject).addScaledVector(dir, 0.75);
           cam.position.y += 0.06;
           cam.lookAt(subject.x, subject.y - 0.06, subject.z);
           const prev = renderer.getRenderTarget();

@@ -5,6 +5,7 @@ import * as THREE from "three";
 import { box, type Box } from "./physics/collision";
 import { loadGLB, prepareModel } from "./assets";
 import { loadCharacter, showPlaceholderNotice, type AnimatedCharacter } from "./character";
+import { NAMED_NPCS } from "./cast";
 
 /** Low golden-hour sun from the west: it rakes down Market Lane from the plaza. The HDRI is rotated to match. */
 export const SUN_DIR = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(80.5), THREE.MathUtils.degToRad(-100));
@@ -33,6 +34,12 @@ export interface StallView {
   readonly rows: ReadonlyArray<[string, string]>;
 }
 
+/** A runtime-painted display in the Spire (info totem, Labs agent feed). */
+export interface ScreenView {
+  readonly title: string;
+  readonly lines: readonly string[];
+}
+
 export interface World {
   readonly colliders: Box[];
   readonly interactables: Interactable[];
@@ -44,6 +51,8 @@ export interface World {
   talk(id: string | null): void;
   /** Reflect a stall's economic state: goods on the table and the chalkboard prices. */
   setStall(id: "pema", view: StallView): void;
+  /** Paint a Spire display ("spire_info" totem, "labs_board" agent feed). */
+  setScreen(id: "spire_info" | "labs_board", view: ScreenView): void;
   update(time: number, focus: THREE.Vector3): void;
 }
 
@@ -77,10 +86,39 @@ function paintPriceBoard(mesh: THREE.Mesh, title: string, rows: ReadonlyArray<[s
   mesh.material = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.12 });
 }
 
+/** Dark-glass display painted at runtime: sky-blue title, monospace lines (glTF UVs, flipY off). */
+function paintScreen(mesh: THREE.Mesh, view: ScreenView): void {
+  const c = document.createElement("canvas");
+  c.width = 1024;
+  c.height = 512;
+  const g = c.getContext("2d")!;
+  g.fillStyle = "#07121d";
+  g.fillRect(0, 0, c.width, c.height);
+  g.fillStyle = "#0091fd";
+  g.fillRect(0, 0, c.width, 6);
+  g.fillStyle = "#83dcff";
+  g.font = "700 46px ui-monospace, Consolas, monospace";
+  g.fillText(view.title, 40, 76);
+  g.fillStyle = "#eeeeeb";
+  g.font = "30px ui-monospace, Consolas, monospace";
+  view.lines.slice(0, 10).forEach((line, i) => g.fillText(line.slice(0, 58), 40, 140 + i * 40));
+  const tex = new THREE.CanvasTexture(c);
+  tex.flipY = false;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  const old = mesh.material as THREE.MeshStandardMaterial;
+  old.map?.dispose();
+  mesh.material = new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.9, roughness: 0.35 });
+}
+
 export function buildWorld(scene: THREE.Scene): World {
   const colliders: Box[] = [];
   const interactables: Interactable[] = [];
   const animated: Array<(t: number) => void> = [];
+  // Point lights are forward-shaded on every pixel (3 interior lights cost ~3.2 ms at 720p on an RTX 3050),
+  // so each district's practical lights are only enabled while the player is in that district.
+  const marketLights: THREE.PointLight[] = [];
+  const spireLights: THREE.PointLight[] = [];
 
   // ---------- Sun + atmosphere (sky and image-based light come from the HDRI, see render.ts) ----------
   const sunDir = SUN_DIR;
@@ -104,6 +142,7 @@ export function buildWorld(scene: THREE.Scene): World {
     const l = new THREE.PointLight(PALETTE.sodium, 4, 8, 2);
     l.position.set(x, 2.0, z);
     scene.add(l);
+    marketLights.push(l);
   }
   const towerGlow = new THREE.PointLight(PALETTE.sky, 40, 26, 1.6);
   towerGlow.position.set(0, 36, -21);
@@ -122,7 +161,9 @@ export function buildWorld(scene: THREE.Scene): World {
   water.position.set(0, -0.6, 196);
   scene.add(water);
   colliders.push(box(-53, 46.5, 94, 1, 4), box(53, 46.5, 94, 1, 4)); // sea edge, pier gap open
-  colliders.push(box(0, -42, 160, 2, 6), box(-32, 0, 2, 100, 6), box(86, 0, 2, 60, 6)); // district bounds
+  // District bounds. North of the plaza the Ledger Tower gap opens onto the Spire precinct, whose own
+  // walls come from spire.glb; this segment closes the yard behind Market Lane's north row.
+  colliders.push(box(51.1, -42, 69.8, 2, 6), box(-32, 0, 2, 100, 6), box(86, 0, 2, 60, 6));
 
   const plank = mat(0x6e5236, 0.8);
   const deck = new THREE.Mesh(new THREE.BoxGeometry(6, 0.25, 18), plank);
@@ -189,64 +230,111 @@ export function buildWorld(scene: THREE.Scene): World {
     focus: new THREE.Vector3(2.4, 1.55, 47.2),
   });
 
-  // ---------- Auntie Pema (Mixamo character, idles behind her stall, turns and talks in dialogue) ----------
-  const pemaPos = new THREE.Vector3(19, 0.15, -6.9);
-  const npc = new THREE.Group();
-  npc.position.copy(pemaPos);
-  scene.add(npc);
-  colliders.push(box(pemaPos.x, pemaPos.z, 0.6, 0.6, 1.7, 0.15));
-  let pema: AnimatedCharacter | null = null;
+  // ---------- Named NPCs from the cast registry (idle at their post, turn and talk in dialogue) ----------
+  interface NamedNpc { readonly id: string; readonly group: THREE.Group; readonly yaw: number; char: AnimatedCharacter | null; pending: number }
+  const npcs: NamedNpc[] = [];
   let talkingTo: string | null = null;
-  loadCharacter("/models/pema.glb", 1.62)
-    .then((c) => {
-      c.setSpeed(0, 1, 2);
-      npc.add(c.root);
-      pema = c;
-    })
-    .catch(() => {
-      showPlaceholderNotice("Placeholder NPC: public/models/pema.glb failed to load");
-      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.3, 0.7, 6, 16), mat(0xb5462f, 0.8));
-      body.position.y = 0.9;
-      npc.add(body);
+  for (const m of NAMED_NPCS) {
+    if (!m.post || !m.talk) continue;
+    const group = new THREE.Group();
+    group.position.set(m.post.x, m.post.y, m.post.z);
+    group.rotation.y = m.post.yaw;
+    scene.add(group);
+    colliders.push(box(m.post.x, m.post.z, m.radius * 2, m.radius * 2, 1.7, m.post.y));
+    const npc: NamedNpc = { id: m.id, group, yaw: m.post.yaw, char: null, pending: 0 };
+    npcs.push(npc);
+    loadCharacter(m.url, m.height)
+      .then((c) => {
+        c.setSpeed(0, 1, 2);
+        group.add(c.root);
+        npc.char = c;
+      })
+      .catch(() => showPlaceholderNotice(`NPC model failed to load: ${m.url}`));
+    interactables.push({
+      id: m.id,
+      name: m.name,
+      position: new THREE.Vector3(m.talk.x, 0, m.talk.z),
+      radius: m.talk.radius,
+      focus: new THREE.Vector3(m.post.x, m.post.y + m.talk.focusY, m.post.z),
     });
-  interactables.push({
-    id: "pema",
-    name: "Auntie Pema",
-    position: new THREE.Vector3(19, 0, -4.3),
-    radius: 2.4,
-    focus: new THREE.Vector3(19, 1.55, -6.9),
+  }
+
+  // ---------- NEAR Spire + Protocol Plaza (blender/build_spire.py) ----------
+  const screens = new Map<string, THREE.Mesh>();
+  const pendingScreens = new Map<string, ScreenView>();
+  const spireReady = loadGLB("/models/spire.glb").then((gltf) => {
+    const prepared = prepareModel(gltf.scene);
+    colliders.push(...prepared.colliders);
+    scene.add(gltf.scene);
+    for (const id of ["spire_info", "labs_board"]) {
+      const m = gltf.scene.getObjectByName(`SIGN_${id}`);
+      if (m instanceof THREE.Mesh) {
+        screens.set(id, m);
+        const v = pendingScreens.get(id);
+        if (v) paintScreen(m, v);
+      }
+    }
   });
+  // Interior fill: the lobby and Labs sit under a 72 m tower (no sun), the HDRI alone reads flat.
+  for (const [x, y, z, color, power] of [[-24, 6.4, -58.5, 0xffe2c0, 30], [-26.5, 3.5, -67.8, 0xdcefff, 26], [-19.5, 3.5, -67.8, 0xdcefff, 20]] as const) {
+    const l = new THREE.PointLight(color, power, 14, 2);
+    l.position.set(x, y, z);
+    scene.add(l);
+    spireLights.push(l);
+  }
 
   let lastTime = 0;
+  let frameNo = 0;
   return {
     colliders,
     interactables,
     spawn: new THREE.Vector3(14, 0, 1.5),
     sun,
-    ready,
+    ready: Promise.all([ready, spireReady]).then(() => undefined),
     talk(id) {
       talkingTo = id;
-      pema?.setAction(id === "pema" ? "Talking" : null);
+      for (const n of npcs) n.char?.setAction(n.id === id ? "Talking" : null);
+    },
+    setScreen(id, view) {
+      pendingScreens.set(id, view);
+      const m = screens.get(id);
+      if (m) paintScreen(m, view);
     },
     setStall(_id, view) {
       pendingStall = view;
       applyStall(view);
     },
     update(time, focus) {
-      const dt = Math.min(time - lastTime, 0.05);
+      const dt = THREE.MathUtils.clamp(time - lastTime, 0, 0.05); // never negative (clock resets, tests)
       lastTime = time;
-      // Face the street at rest; turn toward the player while in conversation.
-      const want = talkingTo === "pema" ? Math.atan2(focus.x - npc.position.x, focus.z - npc.position.z) : 0;
-      let delta = want - npc.rotation.y;
-      delta = Math.atan2(Math.sin(delta), Math.cos(delta));
-      npc.rotation.y += delta * (1 - Math.exp(-6 * dt));
-      pema?.update(dt);
+      // Face their post's direction at rest; turn toward the player while in conversation.
+      frameNo++;
+      for (const n of npcs) {
+        const g = n.group;
+        const want = talkingTo === n.id ? Math.atan2(focus.x - g.position.x, focus.z - g.position.z) : n.yaw;
+        let delta = want - g.rotation.y;
+        delta = Math.atan2(Math.sin(delta), Math.cos(delta));
+        g.rotation.y += delta * (1 - Math.exp(-6 * dt));
+        // Far NPCs animate at 1/6 rate (they still idle, never freeze in bind pose).
+        // ponytail: rate-only LOD; swap to a low-poly mesh when the cast grows past ~20 named NPCs.
+        n.pending += dt;
+        const dist = Math.abs(focus.x - g.position.x) + Math.abs(focus.z - g.position.z);
+        const far = dist > 40;
+        g.visible = dist < 70 || talkingTo === n.id; // not drawn from across the district
+        if (n.char && (!far || talkingTo === n.id || frameNo % 6 === 0)) {
+          n.char.update(n.pending);
+          n.pending = 0;
+        }
+      }
       // Keep the shadow frustum centred on the player, snapped to texels to avoid shimmering.
       const texel = (sc.right - sc.left) / sun.shadow.mapSize.x;
       const fx = Math.round(focus.x / texel) * texel;
       const fz = Math.round(focus.z / texel) * texel;
       sun.target.position.set(fx, 0, fz);
       sun.position.set(fx, 0, fz).addScaledVector(sunDir, 120);
+      const inSpire = focus.z < -44; // north of the Ledger Tower gap
+      for (const l of spireLights) l.visible = inSpire;
+      for (const l of marketLights) l.visible = !inSpire;
       for (const fn of animated) fn(time);
     },
   };

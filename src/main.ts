@@ -8,6 +8,7 @@ import { createGameplay } from "./gameplay";
 import { createCrowd, marketStallStops, type Crowd } from "./crowd";
 import { createPipeline, createPortraitStudio, createRenderer, loadEnvironment } from "./render";
 import { loadCharacter, showPlaceholderNotice } from "./character";
+import type { Box } from "./physics/collision";
 
 // Poly Haven "venice_sunset": the sun sits at u=0.600 of the equirect (measured in Blender).
 const HDRI_URL = "/hdri/venice_sunset_2k.hdr";
@@ -43,15 +44,27 @@ const gameplay = createGameplay(
 let crowd: Crowd | null = null;
 world.ready
   .then(() => createCrowd(scene, marketStallStops((id) => {
-    if (id !== "pema") return true;
-    const p = gameplay.state().merchants.pema;
-    return p.status === "open" && p.stock.mango + p.stock.lemon > 0;
+    const owner = id === "pema" ? "pema" : id === "n1" ? "tomas" : null;
+    if (!owner) return true;
+    const m = gameplay.state().merchants[owner];
+    return m.status === "open" && m.stock.mango + m.stock.lemon > 0;
   })))
   .then((c) => {
     crowd = c;
     (window as unknown as { __nw: Record<string, unknown> }).__nw.crowd = c;
   })
-  .catch(() => showPlaceholderNotice("Market crowd failed to load (public/models/*.glb)"));
+  .catch((err: unknown) => showPlaceholderNotice(`Crowd failed to load: ${err instanceof Error ? err.message : String(err)}`));
+
+// Player collides with the static world plus the live pedestrian bodies (camera only with the world).
+const solids: Box[] = [];
+function playerSolids(): readonly Box[] {
+  const want = world.colliders.length + (crowd?.bodies.length ?? 0);
+  if (solids.length !== want) {
+    solids.length = 0;
+    solids.push(...world.colliders, ...(crowd?.bodies ?? []));
+  }
+  return solids;
+}
 
 let started = false;
 // No pointer lock: the cursor stays visible for UI; hold right mouse to orbit (see input.ts).
@@ -73,7 +86,7 @@ function frame() {
     rig.camera.position.set(6 + Math.sin(t * 0.08) * 2, 3.2, 30 - t * 0.15);
     rig.camera.lookAt(0, 12, -21);
   } else {
-    player.update(dt, input, rig.yaw(), world.colliders, gameplay.frozen());
+    player.update(dt, input, rig.yaw(), playerSolids(), gameplay.frozen());
     rig.update(dt, input, player.mesh.position, world.colliders);
   }
   gameplay.update(dt, started);
@@ -105,3 +118,6 @@ window.addEventListener("resize", () => {
 
 // Test hook for automated playtests (read-only inspection).
 (window as unknown as { __nw: unknown }).__nw = { player, rig, world, renderer, input, gameplay, pipeline };
+if (import.meta.env.DEV) {
+  void import("./dev/playtest").then((m) => m.installPlaytest((window as unknown as { __nw: Parameters<typeof m.installPlaytest>[0] }).__nw));
+}

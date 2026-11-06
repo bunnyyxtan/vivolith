@@ -810,9 +810,12 @@ def build_buildings():
     facade_building("W0", -27.0, -24.0, math.pi / 2, 5, 4, {2})
     facade_building("W1", -27.0, -8.7, math.pi / 2, 5, 5, {1, 3})
     facade_building("W2", -27.0, 6.6, math.pi / 2, 6, 4, {2})
-    facade_building("P0", -27.0, 30.0, 0.0, 4, 5, {1})
-    facade_building("P1", -14.7, 30.0, 0.0, 3, 4, {1})
-    facade_building("P2", 6.3, 30.0, 0.0, 3, 5, {1})
+    facade_building("P0", -27.0, 30.0, 0.0, 4, 5, {1}, back=True)  # rear faces the Spire plaza
+    facade_building("P1", -14.7, 30.0, 0.0, 3, 4, {1}, back=True)
+    facade_building("P2", 6.3, 30.0, 0.0, 3, 5, {1}, back=True)
+    # Side faces lining the Ledger Tower gap (the walk to the NEAR Spire), 5 cm proud of the blocks.
+    facade_building("P1g", -5.65, 30.0, math.pi / 2, 3, 4, {1}, depth=0.2, lit_ratio=0.3)
+    facade_building("P2g", 6.25, 39.0, -math.pi / 2, 3, 5, {1}, depth=0.2, lit_ratio=0.3)
     # Corner block between the plaza and Market Lane (seen from both).
     # Facade runs from y=LANE_HALF+12.3 down to the lane's north building line; body extends east (+X) behind it.
     facade_building("C0", LANE_X0 - 0.3, LANE_HALF + 12.3, -math.pi / 2, 4, 4, {1}, depth=8.0)

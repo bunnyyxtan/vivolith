@@ -76,6 +76,14 @@ function shipments(state: EconomyState): void {
       s.status = "delivered";
       state.merchants[s.to].stock[s.good] += s.qty;
       log(state, "shipment", `${s.qty} ${s.good === "mango" ? "mangoes" : `${s.good}s`} delivered to ${state.merchants[s.to].shop}.`);
+      const forward = Number(state.flags.forwardQty ?? 0);
+      if (forward > 0 && s.good === "mango") { // pre-paid crates (NEAR Labs forward order) go straight on
+        const units = Math.min(forward, state.merchants[s.to].stock.mango);
+        state.merchants[s.to].stock.mango -= units;
+        state.merchants.teahouse.stock.mango += units;
+        state.flags.forwardQty = 0;
+        log(state, "trade", `${units} pre-paid crates went from ${state.merchants[s.to].name} to the Tea House.`);
+      }
     }
   }
 }
@@ -83,7 +91,7 @@ function shipments(state: EconomyState): void {
 function hourTick(state: EconomyState, hour: number): void {
   const day = dayOf(state.minute);
   shipments(state);
-  if (hour === 6) {
+  if (hour === 6 && state.flags.contract !== "challenged") {
     // Tomas holds the harbor's standing supply contract: he restocks every morning.
     const t = state.merchants.tomas;
     const need = Math.max(0, t.target.mango - t.stock.mango);
@@ -198,6 +206,51 @@ export function pemaBuysFromTomas(state: EconomyState, wanted: number): ActionRe
   p.stock.mango += qty;
   log(state, "trade", `Pema bought ${qty} mangoes from Tomas Vell at ${price} c each.`);
   return { ok: true, message: `Pema bought ${qty} at ${price} c.` };
+}
+
+/** Labs insight A: the player files the agent's finding that T. Vell's standing berth contract gives his
+ *  cargo cold-storage priority. The harbor suspends it: Pema's hold clears at the next 06:00 and Tomas
+ *  loses his free morning restock. */
+export function challengeStandingContract(state: EconomyState): ActionResult {
+  if (state.flags.contract) return { ok: false, message: "The contract has already been dealt with." };
+  state.flags.contract = "challenged";
+  const s = state.shipments.find((x) => x.id === "pema-mangoes");
+  if (s && s.status === "held") {
+    const dayStart = Math.floor(state.minute / MINUTES_PER_DAY) * MINUTES_PER_DAY;
+    const next6 = dayStart + 6 * 60 > state.minute ? dayStart + 6 * 60 : dayStart + MINUTES_PER_DAY + 6 * 60;
+    (s as { autoReleaseAt: number }).autoReleaseAt = Math.min(s.autoReleaseAt, next6);
+  }
+  log(state, "quest", "Harbor suspended T. Vell's standing berth contract after a NEAR Labs report.");
+  return { ok: true, message: s?.status === "held" ? `Pema's hold now clears ${clockOf(s.autoReleaseAt)}.` : "Contract suspended." };
+}
+
+/** Labs insight B: the agent matches the Tea House's mango need to Pema's held crates. The Tea House
+ *  pre-pays at cost now; the crates go to it when the shipment lands. */
+export function teahouseForwardBuy(state: EconomyState, qty: number): ActionResult {
+  const tea = state.merchants.teahouse;
+  const price = state.merchants.pema.baseCost.mango;
+  const s = state.shipments.find((x) => x.id === "pema-mangoes");
+  if (!s || s.status === "delivered") return { ok: false, message: "The shipment already landed." };
+  if (Number(state.flags.forwardQty ?? 0) > 0) return { ok: false, message: "A forward order is already booked." };
+  const units = Math.min(qty, Math.floor(tea.cash / price));
+  if (units <= 0) return { ok: false, message: "The Tea House cannot pre-pay." };
+  tea.cash -= units * price;
+  state.merchants.pema.cash += units * price;
+  state.flags.forwardQty = units;
+  log(state, "trade", `Tea House pre-paid Pema ${units * price} c for ${units} crates on the held shipment.`);
+  return { ok: true, message: `Tea House pre-paid ${units * price} c to Pema.` };
+}
+
+/** Insight C: the player sells the finding to Tomas, who pays to keep his contract quiet. */
+export function sellInsightToTomas(state: EconomyState, fee: number): ActionResult {
+  if (state.flags.contract) return { ok: false, message: "The contract has already been dealt with." };
+  const t = state.merchants.tomas;
+  const paid = Math.min(fee, Math.floor(t.cash));
+  t.cash -= paid;
+  state.player.coins += paid;
+  state.flags.contract = "sold";
+  log(state, "player", `+${paid} c: Tomas Vell paid you to forget his harbor contract.`);
+  return { ok: true, message: `+${paid} c from Tomas.` };
 }
 
 export function adjustRep(state: EconomyState, id: MerchantId, delta: number): void {

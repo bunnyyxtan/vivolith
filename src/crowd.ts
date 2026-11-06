@@ -1,11 +1,10 @@
-// Ambient market crowd: data-driven pedestrians on sidewalk/lane routes with a small state machine
-// (walk -> browse an open stall -> walk on), pausing for the player. Reuses the two Mixamo rigs with
-// outfit tints and body-scale variation; Remy's walk is retargeted to the Pema rig (rotation tracks only).
+// Ambient pedestrians: data-driven walkers on lane / plaza / Spire routes with a small state machine
+// (walk -> browse an open stall -> walk on), pausing for the player. Every walker is a different Mixamo
+// character from the cast registry (src/cast.ts) with its own Idle and Walk clips: no clones, no tints.
 import * as THREE from "three";
-import { clone as cloneSkinned } from "three/addons/utils/SkeletonUtils.js";
 import { loadGLB } from "./assets";
-
-type Rig = "remy" | "pema";
+import type { Box } from "./physics/collision";
+import { PEDESTRIANS, type CastMember } from "./cast";
 
 interface Pedestrian {
   readonly root: THREE.Group;
@@ -14,9 +13,14 @@ interface Pedestrian {
   readonly idle: THREE.AnimationAction;
   readonly route: readonly THREE.Vector3[];
   readonly speed: number;
+  /** Ground speed the Walk clip was authored for (m/s), so the stride matches the movement. */
+  readonly clipSpeed: number;
+  readonly body: Box;
   target: number;
   state: "walk" | "browse" | "yield";
   timer: number;
+  /** Metres stepped aside while yielding to the player. */
+  sidestep: number;
   browsedAt: number;
 }
 
@@ -31,91 +35,100 @@ export interface StallStop {
 export interface Crowd {
   update(dt: number, player: THREE.Vector3): void;
   count(): number;
+  /** Live collision boxes (one per walker) so the player cannot walk through people. */
+  readonly bodies: readonly Box[];
 }
 
 const LANE_NORTH = -3.7;
 const LANE_SOUTH = 3.7;
 const BROWSE_CHANCE = 0.45;
 const YIELD_DISTANCE = 1.4;
+const BODY_HALF = 0.28;
+const BODY_HEIGHT = 1.7;
+const SIDESTEP_MAX = 1.2;
+/** Manhattan metres beyond which a walker is not drawn (fog hides it anyway). */
+const CULL_DISTANCE = 55;
+const SIDESTEP_SPEED = 0.8;
 
-// Loops through Market Lane and around the plaza fountain (three.js coordinates, y = 0 road level).
+// Loops through Market Lane, around the plaza fountain, and up through the Ledger Tower gap to the Spire.
 function routes(): THREE.Vector3[][] {
   const v = (x: number, z: number) => new THREE.Vector3(x, 0, z);
   const ring = (cx: number, cz: number, r: number, n: number, phase: number) =>
     Array.from({ length: n }, (_, i) => v(cx + Math.cos(phase + (i / n) * Math.PI * 2) * r, cz + Math.sin(phase + (i / n) * Math.PI * 2) * r));
+  const spire = [v(6, -12), v(5, -26), v(3.5, -37.5), v(10, -43), v(11, -52.3), v(-11, -52.3), v(-10, -43), v(-3.5, -37.5), v(-4.5, -26), v(-6, -12)];
   return [
     [v(14, LANE_NORTH), v(72, LANE_NORTH), v(72, LANE_SOUTH), v(14, LANE_SOUTH)],
+    spire,
     [v(70, LANE_SOUTH + 0.5), v(15, LANE_SOUTH + 0.5), v(15, LANE_NORTH - 0.4), v(70, LANE_NORTH - 0.4)],
-    [v(40, LANE_NORTH + 0.5), v(66, LANE_NORTH + 0.5), v(66, LANE_SOUTH - 0.5), v(40, LANE_SOUTH - 0.5)],
     ring(0, 0, 8.5, 10, 0),
+    [v(40, LANE_NORTH + 0.5), v(66, LANE_NORTH + 0.5), v(66, LANE_SOUTH - 0.5), v(40, LANE_SOUTH - 0.5)],
     ring(0, 0, 10.5, 12, 1.4).reverse(),
     [v(-8, 13.6), v(10, 13.6), v(14, 2), v(30, 2), v(30, -2), v(10, -10), v(-12, -10), v(-12, 10)],
+    [...spire].reverse(),
   ];
 }
 
-const OUTFITS = ["#6b7f9a", "#9a5a3e", "#4f6b4a", "#8a7a5c", "#3f4a5e", "#a8865a", "#6c4a6e", "#5a6f73"];
-
-function tint(root: THREE.Object3D, color: THREE.Color, onlyNames: RegExp | null): void {
-  root.traverse((o) => {
-    if (!(o instanceof THREE.Mesh)) return;
-    if (onlyNames && !onlyNames.test(o.name)) return;
-    const mats = (Array.isArray(o.material) ? o.material : [o.material]).map((m) => {
-      const c = (m as THREE.MeshStandardMaterial).clone();
-      c.color.multiply(color);
-      return c;
-    });
-    o.material = Array.isArray(o.material) ? mats : mats[0];
-  });
+interface LoadedWalker {
+  readonly scene: THREE.Group;
+  readonly idle: THREE.AnimationClip;
+  readonly walk: THREE.AnimationClip;
+  readonly scale: number;
 }
 
-function prepare(model: THREE.Object3D, height: number): number {
-  model.traverse((o) => {
+async function loadWalker(m: CastMember): Promise<LoadedWalker> {
+  const gltf = await loadGLB(m.url);
+  gltf.scene.traverse((o) => {
     if (o instanceof THREE.Mesh) {
       o.castShadow = true;
       o.receiveShadow = true;
-      o.frustumCulled = false;
+      o.frustumCulled = false; // skinned bounds don't follow the animation
     }
   });
-  const size = new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3());
-  return height / Math.max(size.y, 1e-3);
+  const idle = gltf.animations.find((c) => /idle/i.test(c.name));
+  const walk = gltf.animations.find((c) => /walk/i.test(c.name));
+  if (!idle || !walk) throw new Error(`${m.url}: needs Idle + Walk (found ${gltf.animations.map((c) => c.name).join(", ")})`);
+  const size = new THREE.Box3().setFromObject(gltf.scene).getSize(new THREE.Vector3());
+  return { scene: gltf.scene, idle, walk, scale: m.height / Math.max(size.y, 1e-3) };
 }
 
-export async function createCrowd(scene: THREE.Scene, stalls: readonly StallStop[], count = 10): Promise<Crowd> {
-  const [remy, pema] = await Promise.all([loadGLB("/models/player.glb"), loadGLB("/models/pema.glb")]);
-  const remyScale = prepare(remy.scene, 1.76);
-  const pemaScale = prepare(pema.scene, 1.62);
-  const walkClip = remy.animations.find((c) => /walk/i.test(c.name))!;
-  const remyIdle = remy.animations.find((c) => /idle/i.test(c.name))!;
-  const pemaIdle = pema.animations.find((c) => /idle/i.test(c.name))!;
-  // Retarget: bone names match across Mixamo rigs; keep rotations only so proportions stay the Pema rig's.
-  const walkForPema = new THREE.AnimationClip("Walk", walkClip.duration, walkClip.tracks.filter((t) => t.name.endsWith(".quaternion")));
-
+export async function createCrowd(scene: THREE.Scene, stalls: readonly StallStop[]): Promise<Crowd> {
+  const loaded = await Promise.allSettled(PEDESTRIANS.map(loadWalker));
   const allRoutes = routes();
   const peds: Pedestrian[] = [];
-  for (let i = 0; i < count; i++) {
-    const rig: Rig = i % 2 === 0 ? "remy" : "pema";
-    const src = rig === "remy" ? remy.scene : pema.scene;
-    const model = cloneSkinned(src);
-    const variation = 0.92 + ((i * 37) % 13) / 100;
-    model.scale.setScalar((rig === "remy" ? remyScale : pemaScale) * variation);
-    const outfit = new THREE.Color(OUTFITS[i % OUTFITS.length]).lerp(new THREE.Color("#ffffff"), 0.35);
-    tint(model, outfit, rig === "remy" ? /Tops|Bottoms|Shoes/i : null);
+  const failed: string[] = [];
+  loaded.forEach((res, i) => {
+    if (res.status !== "fulfilled") {
+      failed.push(PEDESTRIANS[i].url);
+      return;
+    }
+    const { scene: model, idle: idleClip, walk: walkClip, scale } = res.value;
+    model.scale.setScalar(scale);
+    model.position.y = -new THREE.Box3().setFromObject(model).min.y;
     const root = new THREE.Group();
     root.add(model);
     scene.add(root);
     const mixer = new THREE.AnimationMixer(model);
-    const walk = mixer.clipAction(rig === "remy" ? walkClip : walkForPema).play();
-    const idle = mixer.clipAction(rig === "remy" ? remyIdle : pemaIdle).play();
+    const walk = mixer.clipAction(walkClip).play();
+    const idle = mixer.clipAction(idleClip).play();
     idle.setEffectiveWeight(0);
     walk.time = (i * 0.37) % walkClip.duration;
     const route = allRoutes[i % allRoutes.length];
-    const start = Math.floor((i * 5) / allRoutes.length) % route.length;
-    const startPos = route[start].clone().lerp(route[(start + 1) % route.length], 0.3 + (i % 3) * 0.2);
-    root.position.copy(startPos);
-    peds.push({ root, mixer, walk, idle, route, speed: 1.15 + ((i * 17) % 7) / 20, target: (start + 1) % route.length, state: "walk", timer: 0, browsedAt: -1 });
-  }
+    const start = (i * 3) % route.length;
+    root.position.copy(route[start]).lerp(route[(start + 1) % route.length], 0.3 + (i % 3) * 0.2);
+    const hurried = /hurried/i.test(PEDESTRIANS[i].appearance);
+    peds.push({
+      root, mixer, walk, idle, route,
+      speed: hurried ? 1.55 : 1.1 + ((i * 17) % 7) / 25,
+      clipSpeed: hurried ? 1.55 : 1.25,
+      body: { minX: 0, maxX: 0, minY: 0, maxY: BODY_HEIGHT, minZ: 0, maxZ: 0 },
+      target: (start + 1) % route.length, state: "walk", timer: 0, sidestep: 0, browsedAt: -1,
+    });
+  });
+  if (failed.length) throw new Error(`pedestrians failed to load: ${failed.join(", ")}`);
 
   const tmp = new THREE.Vector3();
+  const dir = new THREE.Vector3();
+  const toPlayer = new THREE.Vector3();
   const blend = (p: Pedestrian, walking: boolean, dt: number) => {
     const w = THREE.MathUtils.damp(p.walk.getEffectiveWeight(), walking ? 1 : 0, 6, dt);
     p.walk.setEffectiveWeight(w);
@@ -126,12 +139,23 @@ export async function createCrowd(scene: THREE.Scene, stalls: readonly StallStop
     d = Math.atan2(Math.sin(d), Math.cos(d));
     p.root.rotation.y += d * (1 - Math.exp(-8 * dt));
   };
+  const syncBody = (p: Pedestrian) => {
+    const { x, z } = p.root.position;
+    p.body.minX = x - BODY_HALF; p.body.maxX = x + BODY_HALF;
+    p.body.minZ = z - BODY_HALF; p.body.maxZ = z + BODY_HALF;
+  };
 
   return {
     count: () => peds.length,
+    bodies: peds.map((p) => p.body),
     update(dt, player) {
       for (const p of peds) {
-        p.mixer.update(dt);
+        // Distance cull: skinned meshes skip frustum culling (bounds don't follow the pose), so far walkers
+        // are hidden and not skinned; they keep walking their route.
+        const far = Math.abs(player.x - p.root.position.x) + Math.abs(player.z - p.root.position.z) > CULL_DISTANCE;
+        p.root.visible = !far;
+        if (!far) p.mixer.update(dt);
+        syncBody(p);
         if (p.state === "browse") {
           p.timer -= dt;
           blend(p, false, dt);
@@ -141,22 +165,30 @@ export async function createCrowd(scene: THREE.Scene, stalls: readonly StallStop
         const goal = p.route[p.target];
         tmp.subVectors(goal, p.root.position).setY(0);
         const dist = tmp.length();
-        const heading = Math.atan2(tmp.x, tmp.z);
+        dir.copy(tmp).normalize();
         // Yield to the player standing in the way.
-        const toPlayer = new THREE.Vector3(player.x - p.root.position.x, 0, player.z - p.root.position.z);
-        const blocked = toPlayer.length() < YIELD_DISTANCE && toPlayer.normalize().dot(tmp.clone().normalize()) > 0.4;
-        if (blocked) {
+        toPlayer.set(player.x - p.root.position.x, 0, player.z - p.root.position.z);
+        const close = toPlayer.length() < YIELD_DISTANCE;
+        if (close && toPlayer.normalize().dot(dir) > 0.4) {
+          // Yield: pause, then step aside to the right so a head-on player can pass (no deadlock).
           p.state = "yield";
-          blend(p, false, dt);
+          p.timer += dt;
+          if (p.timer > 0.4 && p.sidestep < SIDESTEP_MAX) {
+            const s = SIDESTEP_SPEED * dt;
+            p.root.position.x += -dir.z * s;
+            p.root.position.z += dir.x * s;
+            p.sidestep += s;
+          }
+          blend(p, p.timer > 0.4 && p.sidestep < SIDESTEP_MAX, dt);
           face(p, Math.atan2(toPlayer.x, toPlayer.z), dt);
           continue;
         }
+        if (p.state === "yield") { p.timer = 0; p.sidestep = 0; }
         p.state = "walk";
         blend(p, true, dt);
-        face(p, heading, dt);
-        const step = Math.min(dist, p.speed * dt);
-        p.root.position.addScaledVector(tmp.normalize(), step);
-        p.walk.timeScale = p.speed / 1.25;
+        face(p, Math.atan2(dir.x, dir.z), dt);
+        p.root.position.addScaledVector(dir, Math.min(dist, p.speed * dt));
+        p.walk.timeScale = p.speed / p.clipSpeed;
         if (dist < 0.3) p.target = (p.target + 1) % p.route.length;
         // Browse an open stall when passing its counter (skip closed or empty ones: the economy shows).
         for (const s of stalls) {

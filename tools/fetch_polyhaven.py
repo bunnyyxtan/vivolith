@@ -20,8 +20,12 @@ MODELS_1K = [
     "wicker_basket_01", "wicker_basket_02", "plastic_crate_01", "cardboard_box_01", "Barrel_01",
     "planter_box_01", "Lantern_01", "wooden_lantern_01", "modular_wooden_pier",
     "bananas", "food_apple_01", "food_lime_01", "food_pomegranate_01", "lemon", "yellow_onion",
+    # NEAR Spire lobby + Labs (Gate 3)
+    "metal_office_desk", "desk_lamp_arm_01", "modern_arm_chair_01", "potted_plant_01", "potted_plant_04",
+    "modern_ceiling_lamp_01", "sofa_03", "modern_coffee_table_01", "office_notepads", "planter_box_02",
 ]
-TEXTURES_1K = ["cobblestone_floor_08", "concrete_pavement", "patterned_paving", "beige_wall_001", "brown_planks_05"]
+TEXTURES_1K = ["cobblestone_floor_08", "concrete_pavement", "patterned_paving", "beige_wall_001", "brown_planks_05",
+               "marble_01", "granite_tile", "metal_plate", "brushed_concrete", "terrazzo_tiles"]
 TEXTURE_MAPS = ["Diffuse", "nor_gl", "Rough", "arm"]
 HDRIS_2K = ["venice_sunset"]
 

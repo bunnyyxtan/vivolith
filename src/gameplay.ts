@@ -3,7 +3,7 @@
 import type { Input } from "./input";
 import type { Player } from "./player";
 import type { CameraRig } from "./camera";
-import type { Interactable, World } from "./world";
+import type { Interactable, ScreenView, World } from "./world";
 import { advance } from "./economy/sim.ts";
 import { quote } from "./economy/pricing.ts";
 import { clearSave, loadGame, saveGame } from "./economy/save.ts";
@@ -115,6 +115,47 @@ export function createGameplay(
     });
   }
 
+  // Spire displays: repainted only when their text changes (canvas upload is not free).
+  const lastScreens: Record<string, string> = {};
+  function reflectScreens(): void {
+    const sh = econ.shipments.find((x) => x.id === "pema-mangoes")!;
+    const onchain = econ.receipts.filter((r) => r.status === "onchain");
+    const last = onchain[onchain.length - 1];
+    const contract = econ.flags.contract === "challenged" ? "[SUSPENDED]" : "[ACTIVE]";
+    const views: Array<["spire_info" | "labs_board", ScreenView]> = [
+      ["spire_info", {
+        title: "NEAR SPIRE · LOBBY",
+        lines: [
+          clockOf(econ.minute).slice(0, -3) + ":00",
+          "",
+          "Saltlight Row ledger",
+          `receipts ${econ.receipts.length} · on NEAR testnet ${onchain.length}`,
+          last?.txHash ? `last tx ${last.txHash.slice(0, 14)}...` : "last tx: none yet",
+          "",
+          "NEAR Labs: door behind reception, right",
+        ],
+      }],
+      ["labs_board", {
+        title: "AGENT FEED · HARBOR LEDGER",
+        lines: [
+          `berth 2 standing contract  T. VELL ${contract}`,
+          `pema-mangoes  30 crates  ${sh.status.toUpperCase()}`,
+          sh.status === "held" ? `  queued behind contract cargo` : "",
+          sh.status === "held" ? `  auto-release ${clockOf(sh.autoReleaseAt)}` : "",
+          `tea house mango ${econ.merchants.teahouse.stock.mango} · forward order ${econ.flags.forwardQty ?? 0}`,
+          `pema cash ${Math.round(econ.merchants.pema.cash)} c · rent ${econ.merchants.pema.rent} c at 21:00`,
+          `vell restock 06:00 ${econ.flags.contract === "challenged" ? "BLOCKED" : "ok"}`,
+        ],
+      }],
+    ];
+    for (const [id, view] of views) {
+      const key = view.lines.join("|");
+      if (lastScreens[id] === key) continue;
+      lastScreens[id] = key;
+      world.setScreen(id, view);
+    }
+  }
+
   function announceNewEvents(): void {
     for (const e of econ.log.slice(seenLog)) {
       if (e.kind === "closed" || e.kind === "reopened" || e.kind === "shipment") hud.toast(e.text);
@@ -130,6 +171,7 @@ export function createGameplay(
       ffRemaining -= ffStep;
       advance(econ, dt * TIME_SCALE + ffStep);
       reflectWorld();
+      reflectScreens();
       announceNewEvents();
       dialogue.update(dt);
       inspector.update(econ);

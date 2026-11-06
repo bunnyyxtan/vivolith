@@ -5,6 +5,7 @@ import { quote } from "../economy/pricing.ts";
 import { addCoins, adjustRep, note, payReleaseFee, pemaBuysFromTomas, playerBuy } from "../economy/sim.ts";
 import { clockOf } from "../economy/state.ts";
 import type { Choice, Conversation, DialogueContext } from "./dialogue.ts";
+import { engineer, teahouse, tomas } from "./labs.ts";
 
 type Stage = "accepted" | "accepted_hard" | "rival" | "refused" | "rewarded";
 const stage = (s: EconomyState): Stage | undefined => s.flags.mango as Stage | undefined;
@@ -208,4 +209,4 @@ export const harbor: Conversation = {
   },
 };
 
-export const CONVERSATIONS: Record<string, Conversation> = { pema, harbor };
+export const CONVERSATIONS: Record<string, Conversation> = { pema, harbor, tomas, teahouse, engineer };
