@@ -61,6 +61,8 @@ Deadline: 2026-11-14 23:59 UTC. Feature freeze target: 2026-11-13 12:00 UTC (res
 | 3 | Protocol Plaza + traversal | VERIFIED | Granite plaza, reflecting pool, Street Lamp 02s, symbol monolith, planter walls; precinct bounds; north bound moved, yard behind Market Lane still closed. Gap side walls and rear of the plaza's north row got kit facades. On-foot test (`__pt` helpers, 2026-11-06): spawn (14, 1.5) -> plaza -> gap -> Spire plaza -> lobby door -> reception -> Labs (z -70.1); front glass blocks at z -53.43; reception desk blocks at z -58.98 |
 | 3 | Glass lobby (enterable) | VERIFIED | Clear storefront with slim frame + door opening + parked sliding leaves, lit canopy, marble floor, reception desk with kick light, feature wall with the NEAR symbol extruded from the SVG path, elevator bank, lounge (Poly Haven sofa/table/plants), info totem painted live from receipts. `gate3-lobby-interior.jpg`. Camera collides with walls/ceiling (colliders up to 7.6 m + tower body) |
 | 3 | NEAR Labs room + engineer | VERIFIED | Ines Varga (Mixamo "Elizabeth", Idle/Talking/Explain/Walk) by a live agent-feed wall (harbor ledger), 4 Poly Haven desks + chairs + lamps, modelled dual monitors, LED server racks. Choice 1 in game: `flags.contract` -> challenged, Pema's auto-release Day 4 08:00 -> **Day 2 06:00**, rep pema +4 / tomas -8, Tomas's 06:00 restock blocked; receipt **`BPRjMKj9QJQYbrEhTr9oyoy6uoKPeC2LBSaRhrgHNZNW`** on testnet (RPC: SuccessValue, FINAL, `add_message`). Choices 2 (Tea House forward buy) and 3 (sell to Tomas) covered by `economy.check.ts` paths 5/6 + code. `gate3-labs-interior.jpg`, `gate3-labs-conversation.jpg` |
+| 3 | View corridor + plaza re-plan | VERIFIED (2026-11-06) | User feedback: buildings blocked the Spire. Ledger Tower moved to Blender (-20, 21.5) as a corner campanile; blocks P1/P2 removed; 30 m promenade (x -15..15) framed by P0 and new P3 with promenade facades; yard gap closed by a planter wall. Walk test: plaza -> promenade to the monolith, yard wall blocks at x 13.88, tower plinth at x -16.28. 720p: plaza axis 5.0 ms, lane 5.1, Spire plaza 4.2. `layout-plaza-axis.jpg`, `layout-plaza-wide.jpg`, `layout-campanile.jpg` |
+| 3 | Conversation UI + interaction prompt | VERIFIED (2026-11-06) | Rebuilt twice on feedback: now solid opaque dialogue panel (portrait, name, role, Source Serif 4 line) and a solid Respond card (ivory selected row, accent bar, chips). `ui-dialogue-labs.jpg`, `ui-interact-prompt.jpg` (prompt screenshot predates the solid pill) |
 | 3 | Open issues (tracked) | IN PROGRESS | (1) Empty fallback ground around the district from elevated views. (2) Upper tower glass is uniform; no interior depth on office floors. (3) Garden wedge glass reads flat and white in sun. (4) Labs: the dialogue's side tags cover Ines (camera framing in tight rooms). (5) Monitor screens are flat emissive blue (no UI texture). (6) No stairs/elevator travel; office floors are not enterable (by design for now) |
 | 4 | Harbor + dispatcher + drivable vehicle | NOT STARTED | |
 | 5 | Mango Crisis end-to-end | NOT STARTED | |
@@ -77,8 +79,8 @@ Deadline: 2026-11-14 23:59 UTC. Feature freeze target: 2026-11-13 12:00 UTC (res
 
 ## Next actions (in order)
 
-1. Quality pass per `docs/QUALITY_STANDARD.md` on the weakest areas: district surroundings (no empty ground from
-   elevated views), weathering/variation on the Row's facades, tower glass depth, lighting/atmosphere presets.
+1. Quality pass per `docs/QUALITY_STANDARD.md` (section 3 lists the gaps): lighting into the sun, facade weathering,
+   district surroundings, an alpha-carded game tree for the promenade, tower interior glass.
 2. Gate 4: harbor (cranes, containers, warehouse, dispatcher) + one drivable vehicle.
 3. Rust toolchain (needs approval) -> own NEP-245 contract for mango crates / shop shares; switch receipts to it.
 4. Character library growth: more Mixamo civilians (harbor, cafe, security) + clips (sit, carry box, phone, wave).

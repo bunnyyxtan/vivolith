@@ -83,8 +83,8 @@ function frame() {
     // Title shot: slow orbit-free drift towards the tower until the player clicks in.
     input.takeLook();
     input.takeZoom();
-    rig.camera.position.set(6 + Math.sin(t * 0.08) * 2, 3.2, 30 - t * 0.15);
-    rig.camera.lookAt(0, 12, -21);
+    rig.camera.position.set(2 + Math.sin(t * 0.08) * 2, 2.6, 26 - t * 0.15);
+    rig.camera.lookAt(0, 24, -60); // down the promenade to the NEAR Spire
   } else {
     player.update(dt, input, rig.yaw(), playerSolids(), gameplay.frozen());
     rig.update(dt, input, player.mesh.position, world.colliders);

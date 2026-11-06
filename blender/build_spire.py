@@ -538,11 +538,14 @@ def labs(M):
 # ================================================================ plaza ====
 def plaza(M):
     box_mesh("SPIRE_plaza", -32.0, 39.0, -0.2, 32.0, 84.0, 0.02, M["plaza"], 2.0)
-    box_mesh("SPIRE_gap_paving", -5.7, 29.8, -0.2, 6.3, 39.0, 0.02, M["plaza"], 2.0)
+    box_mesh("SPIRE_gap_paving", -15.0, 29.8, -0.2, 15.0, 39.0, 0.02, M["plaza"], 2.0)  # the promenade
+    # Planting: deliberately none yet. Poly Haven's scanned jacaranda (312k tris) cannot be decimated to a
+    # game budget without breaking (trunk -> stick, leaf cards -> shards); needs an alpha-carded game tree.
     box_mesh("SPIRE_pool_rim", -6.0, 44.0, 0.0, 6.0, 51.0, 0.45, M["stone"], 1.0, None, 0.03)
     box_mesh("SPIRE_pool_water", -5.6, 44.4, 0.0, 5.6, 50.6, 0.4, M["water"], 2.0)
     collider("pool", -6.0, 44.0, 6.0, 51.0, 0, 0.45)
-    walls = [(15.4, 39.0, 16.2, 54.0), (-32.8, 39.0, -32.0, 84.0), (-32.0, 83.2, 32.8, 84.0), (32.0, 72.0, 32.8, 84.0)]
+    # Precinct edges; the first closes the yard between the corner block C0 and the promenade's east block.
+    walls = [(14.2, 20.3, 15.0, 30.0), (15.4, 39.0, 16.2, 54.0), (-32.8, 39.0, -32.0, 84.0), (-32.0, 83.2, 32.8, 84.0), (32.0, 72.0, 32.8, 84.0)]
     root = empty("hedges")
     for i, (a, b, c, d) in enumerate(walls):
         box_mesh(f"hedge{i}", a, b, 0.0, c, d, 0.9, M["stone"], 1.5, root, 0.02)
@@ -607,7 +610,7 @@ def export():
     with quiet():
         bpy.ops.export_scene.gltf(
             filepath=str(OUT), export_format="GLB", use_active_scene=True,
-            export_apply=True, export_image_format="JPEG", export_jpeg_quality=85,
+            export_apply=True, export_image_format="JPEG", export_jpeg_quality=85,  # use "AUTO" once cut-out foliage needs PNG alpha
             export_draco_mesh_compression_enable=True, export_draco_mesh_compression_level=6,
             export_lights=False, export_cameras=False,
         )

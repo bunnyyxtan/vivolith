@@ -58,6 +58,16 @@ def fetch_model(asset: str, res: str) -> None:
         download(item["url"], target)
 
 
+# Maps the glTF packages omit but the models need (the jacaranda's leaf cut-out is not in its glTF diffuse).
+EXTRA_MAPS = {"jacaranda_tree": ["leaves_alpha"]}
+
+
+def fetch_extra_maps(asset: str, res: str) -> None:
+    files = get_json(f"{API}/files/{asset}")
+    for key in EXTRA_MAPS.get(asset, []):
+        download(files[key][res]["png"]["url"], OUT / asset / "textures" / f"{asset}_{key}_{res}.png")
+
+
 def fetch_texture(asset: str, res: str) -> None:
     files = get_json(f"{API}/files/{asset}")
     for key in TEXTURE_MAPS:
@@ -76,6 +86,8 @@ def main() -> None:
     for asset, res, fn in jobs:
         try:
             fn(asset, res)
+            if asset in EXTRA_MAPS:
+                fetch_extra_maps(asset, res)
             info = get_json(f"{API}/info/{asset}")
             manifest[asset] = {"name": info.get("name"), "authors": list(info.get("authors", {})), "res": res,
                                "url": f"https://polyhaven.com/a/{asset}", "license": "CC0"}

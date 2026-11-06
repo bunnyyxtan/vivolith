@@ -69,6 +69,14 @@ export function prepareModel(root: THREE.Object3D): PreparedModel {
       if (tint) m.color.set(`#${tint[1]}`); // hex is sRGB; three converts
       if (m.name.startsWith("modular_urban_apartments_facade_glass")) dressGlass(m, false);
       if (m.name.startsWith("facade_glass_lit")) dressGlass(m, true);
+      if (/leaves/i.test(m.name)) {
+        // Foliage cards: alpha-tested cut-out (sorted blending flickers and turns canopies see-through).
+        m.transparent = false;
+        m.alphaTest = 0.5;
+        m.depthWrite = true;
+        m.side = THREE.DoubleSide;
+        m.needsUpdate = true;
+      }
     }
     if (obj.name.startsWith("BLD_")) blockers.push(obj);
   });

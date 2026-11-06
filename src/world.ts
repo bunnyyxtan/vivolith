@@ -147,7 +147,7 @@ export function buildWorld(scene: THREE.Scene): World {
     marketLights.push(l);
   }
   const towerGlow = new THREE.PointLight(PALETTE.sky, 40, 26, 1.6);
-  towerGlow.position.set(0, 36, -21);
+  towerGlow.position.set(-20, 36, -21.5); // Ledger Tower lantern (corner campanile)
   scene.add(towerGlow);
   animated.push((t) => { towerGlow.intensity = 34 + Math.sin(t * 1.3) * 8; });
 
