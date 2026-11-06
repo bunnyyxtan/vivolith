@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/brand/favicon.svg" />
+    <title>NEAR WORLD: Saltlight Row</title>
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+    <div id="hud">
+      <div id="title-card">
+        <img src="/brand/near-wordmark-white.svg" alt="NEAR" class="wordmark" />
+        <h1>WORLD</h1>
+        <p class="district">Saltlight Row</p>
+        <p class="tagline">Everyone has a wallet. Everyone remembers.</p>
+        <button id="play">Click to enter</button>
+      </div>
+      <div id="prompt" hidden></div>
+      <div id="dialogue" hidden>
+        <div class="speaker"></div>
+        <div class="line"></div>
+      </div>
+      <div id="controls">WASD move · Shift run · Space jump · Mouse (or drag) orbit camera · Wheel zoom · E interact · Esc release mouse</div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

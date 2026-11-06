@@ -1,0 +1,54 @@
+:root {
+  --near-blue: #0091fd;
+  --near-sky: #83dcff;
+  --ink: #272727;
+  --paper: #eeeeeb;
+  --font: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d12; color: var(--paper); font-family: var(--font); }
+#game { display: block; width: 100vw; height: 100vh; }
+#hud { position: fixed; inset: 0; pointer-events: none; }
+
+#title-card {
+  position: absolute; left: 6vw; bottom: 14vh; max-width: 520px;
+  transition: opacity 0.9s ease, transform 0.9s ease;
+  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.55);
+}
+#title-card.hidden { opacity: 0; transform: translateY(12px); }
+#title-card .wordmark { height: 44px; display: block; filter: drop-shadow(0 2px 10px rgba(0,0,0,.5)); }
+#title-card h1 { margin: 4px 0 0; font-size: 64px; letter-spacing: 0.18em; font-weight: 700; line-height: 1; }
+#title-card .district { margin: 14px 0 0; font-family: var(--mono); font-size: 14px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--near-sky); }
+#title-card .tagline { margin: 8px 0 22px; font-size: 18px; opacity: 0.9; }
+#title-card button {
+  pointer-events: auto; cursor: pointer; font: 600 15px var(--font); letter-spacing: 0.06em;
+  color: var(--ink); background: var(--paper); border: 0; border-radius: 999px; padding: 12px 26px;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.4), 0 8px 30px rgba(0, 145, 253, 0.35);
+}
+#title-card button:hover { background: #fff; }
+
+#prompt {
+  position: absolute; left: 50%; top: 62%; transform: translateX(-50%);
+  font-size: 15px; padding: 8px 16px; border-radius: 8px;
+  background: rgba(15, 18, 24, 0.72); border: 1px solid rgba(131, 220, 255, 0.45);
+}
+#prompt kbd { font-family: var(--mono); background: var(--paper); color: var(--ink); border-radius: 4px; padding: 1px 7px; margin-right: 8px; }
+
+#dialogue {
+  position: absolute; left: 50%; bottom: 9vh; transform: translateX(-50%); width: min(640px, 92vw);
+  padding: 16px 20px; border-radius: 12px; background: rgba(15, 18, 24, 0.82);
+  border: 1px solid rgba(131, 220, 255, 0.35); backdrop-filter: blur(6px);
+}
+#dialogue .speaker { font-family: var(--mono); font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--near-sky); margin-bottom: 6px; }
+#dialogue .line { font-size: 18px; line-height: 1.45; }
+
+#controls {
+  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
+  font-family: var(--mono); font-size: 12px; opacity: 0.55; white-space: nowrap;
+}
+@media (max-width: 700px) {
+  #title-card h1 { font-size: 44px; }
+  #controls { white-space: normal; text-align: center; width: 92vw; }
+}

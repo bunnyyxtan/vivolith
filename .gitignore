@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.blend1
+assets-src/downloads/
+# Raw Mixamo FBX downloads: converted GLBs in public/models are used instead (Mixamo terms: no standalone redistribution)
+Mixamo/
+.env
+.env.*
+!.env.example
+*.local
