@@ -6,7 +6,8 @@ export interface Hud {
   update(state: EconomyState, objective: string | null, fastForward: boolean): void;
   toast(text: string): void;
   receipt(r: Receipt): void;
-  prompt(text: string | null): void;
+  /** Interaction prompt: verb ("Talk", "Read") + target name, or null to hide. */
+  prompt(p: { verb: string; name: string } | null): void;
 }
 
 export function createHud(root: HTMLElement): Hud {
@@ -24,6 +25,7 @@ export function createHud(root: HTMLElement): Hud {
   const prompt = document.createElement("div");
   prompt.className = "hud-prompt";
   prompt.hidden = true;
+  let promptKey = "";
   root.append(top, objective, toasts, prompt);
 
   let lastObjective = "";
@@ -82,9 +84,19 @@ export function createHud(root: HTMLElement): Hud {
       }
       push(card, 9000);
     },
-    prompt(text) {
-      prompt.hidden = !text;
-      if (text) prompt.innerHTML = `<kbd>E</kbd>${text.replace(/[<>&]/g, "")}`;
+    prompt(p) {
+      const key = p ? `${p.verb}|${p.name}` : "";
+      if (key === promptKey) return; // called every frame: only touch the DOM on change
+      promptKey = key;
+      prompt.hidden = !p;
+      if (!p) return;
+      const cap = Object.assign(document.createElement("kbd"), { textContent: "E" });
+      const label = document.createElement("span");
+      label.className = "hud-prompt-label";
+      const verb = Object.assign(document.createElement("span"), { className: "hud-prompt-verb", textContent: p.verb });
+      const name = Object.assign(document.createElement("span"), { className: "hud-prompt-name", textContent: p.name });
+      label.append(verb, name);
+      prompt.replaceChildren(cap, label);
     },
   };
 }

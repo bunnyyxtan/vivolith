@@ -25,6 +25,8 @@ export interface Interactable {
   readonly radius: number;
   /** Where the camera looks during the conversation (NPC head / sign face). */
   readonly focus: THREE.Vector3;
+  /** Prompt verb ("Talk" by default). */
+  readonly verb?: string;
 }
 
 export interface StallView {
@@ -224,7 +226,8 @@ export function buildWorld(scene: THREE.Scene): World {
   colliders.push(box(2.4, 47.2, 0.5, 0.5, 2.0, 0.25));
   interactables.push({
     id: "harbor",
-    name: "the dispatch board",
+    name: "Dispatch board",
+    verb: "Read",
     position: new THREE.Vector3(1.6, 0, 48.4),
     radius: 2.2,
     focus: new THREE.Vector3(2.4, 1.55, 47.2),

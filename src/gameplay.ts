@@ -179,7 +179,7 @@ export function createGameplay(
 
       if (started && !dialogue.isOpen()) {
         const near = nearest();
-        hud.prompt(near ? `Talk to ${near.name}` : null);
+        hud.prompt(near ? { verb: near.verb ?? "Talk", name: near.name } : null);
         if (near && cooldown === 0 && input.pressed("KeyE")) {
           const conv = CONVERSATIONS[near.id];
           if (conv) {
