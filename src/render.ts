@@ -4,6 +4,7 @@ import * as THREE from "three";
 import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
 import { Sky } from "three/addons/objects/Sky.js";
 import { createClouds } from "./clouds";
+import { tameSky } from "./atmosphere";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { GTAOPass } from "three/addons/postprocessing/GTAOPass.js";
@@ -13,6 +14,8 @@ import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 export interface Pipeline {
   render(): void;
   resize(w: number, h: number): void;
+  /** Bloom pass (null in low quality), exposed for tuning. */
+  readonly bloom: UnrealBloomPass | null;
 }
 
 export const QUALITY_LOW = new URLSearchParams(location.search).get("quality") === "low";
@@ -52,11 +55,15 @@ export async function loadEnvironment(
   const sky = new Sky();
   sky.scale.setScalar(4000);
   const u = sky.material.uniforms;
-  u.turbidity.value = 8;
-  u.rayleigh.value = 2.6;
-  u.mieCoefficient.value = 0.007;
-  u.mieDirectionalG.value = 0.86;
+  // Clear coastal evening: low turbidity, modest Mie with a tight forward lobe (a crisp corona, not a
+  // frame-filling haze). tameSky scales the radiance and soft-clips the disc so bloom stays on emitters.
+  u.turbidity.value = 3.5;
+  u.rayleigh.value = 1.6;
+  u.mieCoefficient.value = 0.0035;
+  u.mieDirectionalG.value = 0.93;
   u.sunPosition.value.copy(sunDir);
+  tameSky(sky.material, 0.55, 6.0);
+  scene.userData.sky = sky;
   scene.background = null;
   scene.add(sky);
   createClouds(scene, sunDir);
@@ -114,17 +121,21 @@ export function createPipeline(renderer: THREE.WebGLRenderer, scene: THREE.Scene
   const composer = new EffectComposer(renderer, target);
   composer.setPixelRatio(renderer.getPixelRatio());
   composer.addPass(new RenderPass(scene, camera));
+  let bloom: UnrealBloomPass | null = null;
 
   if (!QUALITY_LOW) {
     const ao = new GTAOPass(scene, camera, size.x, size.y);
     ao.updateGtaoMaterial({ radius: 0.6, distanceExponent: 1.5, thickness: 1.2, scale: 1.0, samples: 12 });
     ao.blendIntensity = 0.85;
     composer.addPass(ao);
-    composer.addPass(new UnrealBloomPass(size.clone(), 0.18, 0.5, 0.95));
+    // HDR threshold above lit surfaces: only emitters (LEDs, lamps, lit windows) and the sun disc bloom.
+    bloom = new UnrealBloomPass(size.clone(), 0.14, 0.35, 1.4);
+    composer.addPass(bloom);
   }
   composer.addPass(new OutputPass());
 
   return {
+    bloom,
     render: () => composer.render(),
     resize: (w, h) => {
       renderer.setSize(w, h);

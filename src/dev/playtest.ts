@@ -17,6 +17,18 @@ interface Hooks {
 }
 
 type Call = (...a: unknown[]) => void;
+type Vec3 = [number, number, number];
+
+/** Reference views for lighting/visual reviews (three.js coordinates; the sun sets in the west, -x). */
+const VIEWS: Record<string, { player: [number, number]; pos: Vec3; at: Vec3 }> = {
+  laneIntoSun: { player: [44, 0.5], pos: [45, 1.7, 0.5], at: [0, 8, -7] },
+  laneSunBehind: { player: [24, 0.5], pos: [24, 1.7, 0.5], at: [70, 4, 0.5] },
+  plazaAxis: { player: [1, 10], pos: [0.5, 1.7, 16], at: [0, 26, -60] },
+  spireIntoSun: { player: [5, -46], pos: [5, 1.7, -46], at: [-40, 10, -55] },
+  elevated: { player: [0, -42], pos: [-55, 48, 18], at: [0, 22, -48] },
+  pier: { player: [0, 46], pos: [-1, 1.7, 44], at: [-30, 3, 62] },
+  lobby: { player: [-21.5, -58], pos: [-19, 1.7, -55.2], at: [-27, 3.2, -62.5] },
+};
 
 export function installPlaytest(nw: Hooks): void {
   let t = 0; // world.update clamps dt, so interleaving with the live loop's clock is safe
@@ -74,8 +86,48 @@ export function installPlaytest(nw: Hooks): void {
       nw.pipeline.render();
       const blob = await new Promise<Blob | null>((r) => nw.renderer.domElement.toBlob(r, "image/jpeg", 0.88));
       if (!blob) throw new Error("canvas capture failed");
-      const res = await fetch(`/__evidence?name=${encodeURIComponent(name)}`, { method: "POST", body: blob });
+      const slug = name.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
+      const res = await fetch(`/__evidence?name=${encodeURIComponent(slug)}`, { method: "POST", body: blob });
       return `${res.status} ${await res.text()}`;
+    },
+    /** Render one frame and measure it: mean luma (0-255), % clipped (>=250), % crushed (<=6), mean saturation. */
+    stats(cam?: { pos: [number, number, number]; at: [number, number, number] }) {
+      if (cam) {
+        nw.rig.camera.position.set(...cam.pos);
+        nw.rig.camera.lookAt(...cam.at);
+        nw.rig.camera.updateMatrixWorld();
+      }
+      nw.pipeline.render();
+      const c = document.createElement("canvas");
+      c.width = 320;
+      c.height = 180;
+      const g = c.getContext("2d")!;
+      g.drawImage(nw.renderer.domElement, 0, 0, 320, 180);
+      const d = g.getImageData(0, 0, 320, 180).data;
+      let luma = 0, clipped = 0, crushed = 0, sat = 0;
+      const n = d.length / 4;
+      for (let i = 0; i < d.length; i += 4) {
+        const r = d[i], gg = d[i + 1], b = d[i + 2];
+        const y = 0.2126 * r + 0.7152 * gg + 0.0722 * b;
+        luma += y;
+        if (y >= 250) clipped++;
+        if (y <= 6) crushed++;
+        const mx = Math.max(r, gg, b), mn = Math.min(r, gg, b);
+        sat += mx ? (mx - mn) / mx : 0;
+      }
+      const pct = (v: number) => Number(((v / n) * 100).toFixed(1));
+      return { luma: Math.round(luma / n), clipped: pct(clipped), crushed: pct(crushed), sat: Number((sat / n).toFixed(2)) };
+    },
+    /** Shoot + measure every reference view (lighting reviews compare like with like). */
+    async survey(prefix: string) {
+      const out: Record<string, ReturnType<typeof pt.stats>> = {};
+      for (const [name, v] of Object.entries(VIEWS)) {
+        pt.tp(v.player[0], v.player[1], 0);
+        pt.sim(0.4);
+        out[name] = pt.stats(v);
+        await pt.shot(`${prefix}-${name}`, v);
+      }
+      return out;
     },
     /** Median full-pipeline frame time (ms), synchronised with gl.finish() like the existing audit. */
     frameTime(frames = 60): { medianMs: number; calls: number; triangles: number } {

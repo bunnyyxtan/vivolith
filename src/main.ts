@@ -7,12 +7,16 @@ import { buildWorld, SUN_DIR } from "./world";
 import { createGameplay } from "./gameplay";
 import { createCrowd, marketStallStops, type Crowd } from "./crowd";
 import { createPipeline, createPortraitStudio, createRenderer, loadEnvironment } from "./render";
+import { installAtmosphere } from "./atmosphere";
 import { loadCharacter, showPlaceholderNotice } from "./character";
 import type { Box } from "./physics/collision";
 
 // Poly Haven "venice_sunset": the sun sits at u=0.600 of the equirect (measured in Blender).
 const HDRI_URL = "/hdri/venice_sunset_2k.hdr";
 const HDRI_SUN_U = 0.5999;
+
+// Height fog with sun in-scattering for every material (before any shader compiles).
+installAtmosphere({ sunDir: SUN_DIR, sunColor: [1.15, 0.62, 0.32], sunPower: 6, heightFalloff: 0.03, baseHaze: 0.0006 });
 
 const canvas = document.querySelector<HTMLCanvasElement>("#game")!;
 const renderer = createRenderer(canvas);

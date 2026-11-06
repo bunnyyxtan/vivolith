@@ -126,7 +126,8 @@ export function buildWorld(scene: THREE.Scene): World {
   const sunDir = SUN_DIR;
   scene.background = new THREE.Color(0xc79a83);
   scene.environmentIntensity = 0.75;
-  scene.fog = new THREE.FogExp2(0xb7917c, 0.0048);
+  // Colour away from the sun (cool evening haze); the warm sun-side tint comes from src/atmosphere.ts.
+  scene.fog = new THREE.FogExp2(0x9c8f9a, 0.0055);
 
   const sun = new THREE.DirectionalLight(0xffb27a, 3.2);
   sun.castShadow = true;
