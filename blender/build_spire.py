@@ -536,11 +536,110 @@ def labs(M):
 
 
 # ================================================================ plaza ====
+def tree_materials():
+    """Bark and leaf-card materials from the CC0 Poly Haven jacaranda textures (leaf cut-out from its alpha map)."""
+    T = PH / "jacaranda_tree" / "textures"
+    bark = bpy.data.materials.get("spire_tree_bark") or bpy.data.materials.new("spire_tree_bark")
+    leaves = bpy.data.materials.get("spire_tree_leaves") or bpy.data.materials.new("spire_tree_leaves")
+    for m, part, alpha in ((bark, "trunk", False), (leaves, "leaves", True)):
+        m.use_nodes = True
+        nt = m.node_tree
+        for n in [n for n in nt.nodes if n.type != "OUTPUT_MATERIAL"]:
+            nt.nodes.remove(n)
+        bsdf = nt.nodes.new("ShaderNodeBsdfPrincipled")
+        nt.links.new(bsdf.outputs[0], next(n for n in nt.nodes if n.type == "OUTPUT_MATERIAL").inputs["Surface"])
+        d = nt.nodes.new("ShaderNodeTexImage"); d.image = image(T / f"jacaranda_tree_{part}_diff_1k.jpg")
+        nt.links.new(d.outputs["Color"], bsdf.inputs["Base Color"])
+        n = nt.nodes.new("ShaderNodeTexImage"); n.image = image(T / f"jacaranda_tree_{part}_nor_gl_1k.jpg", True)
+        nm = nt.nodes.new("ShaderNodeNormalMap")
+        nt.links.new(n.outputs["Color"], nm.inputs["Color"]); nt.links.new(nm.outputs["Normal"], bsdf.inputs["Normal"])
+        bsdf.inputs["Roughness"].default_value = 0.85 if not alpha else 0.6
+        if alpha:
+            a = nt.nodes.new("ShaderNodeTexImage"); a.image = image(T / "jacaranda_tree_leaves_alpha_1k.png", True)
+            nt.links.new(a.outputs["Color"], bsdf.inputs["Alpha"])
+            m.surface_render_method = "DITHERED"
+    return bark, leaves
+
+
+def procedural_tree(seed, height=7.0):
+    """Original game tree (~5k tris): curved tapered trunk, two levels of limbs, leaf-card clusters at the tips.
+    Returns a bmesh with material 0 = bark, 1 = leaves; origin at the trunk base."""
+    rnd = random.Random(seed)
+    bm = bmesh.new()
+    uvl = bm.loops.layers.uv.verify()
+
+    def tube(p0, p1, r0, r1, sides=7):
+        axis = (p1 - p0)
+        L = axis.length
+        z = axis.normalized()
+        x = z.orthogonal().normalized()
+        y = z.cross(x)
+        rings = []
+        for t, r in ((0.0, r0), (1.0, r1)):
+            c = p0 + axis * t
+            rings.append([bm.verts.new(c + (x * math.cos(a) + y * math.sin(a)) * r)
+                          for a in (2 * math.pi * k / sides for k in range(sides))])
+        for k in range(sides):
+            f = bm.faces.new((rings[0][k], rings[0][(k + 1) % sides], rings[1][(k + 1) % sides], rings[1][k]))
+            f.material_index = 0
+            for l, (u, v) in zip(f.loops, ((k / sides, 0), ((k + 1) / sides, 0), ((k + 1) / sides, L / 1.5), (k / sides, L / 1.5))):
+                l[uvl].uv = (u, v)
+
+    def card(c, size):
+        n = Vector((rnd.uniform(-1, 1), rnd.uniform(-1, 1), rnd.uniform(-0.3, 1))).normalized()
+        x = n.orthogonal().normalized()
+        y = n.cross(x)
+        q = [bm.verts.new(c + (x * sx + y * sy) * size / 2) for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+        f = bm.faces.new(q)
+        f.material_index = 1
+        for l, uv in zip(f.loops, ((0, 0), (1, 0), (1, 1), (0, 1))):
+            l[uvl].uv = uv
+
+    def branch(p0, direction, length, radius, depth):
+        segs = 3
+        p = p0
+        d = direction.normalized()
+        for i in range(segs):
+            d = (d + Vector((rnd.uniform(-0.25, 0.25), rnd.uniform(-0.25, 0.25), rnd.uniform(-0.05, 0.2)))).normalized()
+            q = p + d * (length / segs)
+            r_a = radius * (1 - i / segs * 0.6)
+            r_b = radius * (1 - (i + 1) / segs * 0.6)
+            tube(p, q, r_a, r_b, 6 if depth else 7)
+            p = q
+        if depth < 2:
+            for k in range(3 if depth else rnd.randint(5, 7)):
+                az = rnd.uniform(0, 2 * math.pi)
+                tilt = rnd.uniform(0.45, 0.9) if depth == 0 else rnd.uniform(0.3, 0.8)
+                nd = Vector((math.cos(az) * math.sin(tilt), math.sin(az) * math.sin(tilt), math.cos(tilt)))
+                start = p0 + (p - p0) * rnd.uniform(0.55, 1.0) if depth == 0 else p
+                branch(start, nd * 0.6 + d * 0.4, length * rnd.uniform(0.45, 0.62), radius * 0.45, depth + 1)
+        else:
+            for k in range(20):  # leaf cluster around the tip
+                card(p + Vector((rnd.gauss(0, 0.6), rnd.gauss(0, 0.6), rnd.gauss(0.15, 0.45))), rnd.uniform(0.8, 1.2))
+
+    branch(Vector((0, 0, 0)), Vector((0.05, 0.03, 1)), height * 0.5, 0.17, 0)
+    return bm
+
+
+def promenade_trees(M):
+    """Four original procedural trees in granite pits frame the promenade off the view axis."""
+    bark, leaves = tree_materials()
+    soil = flat_material("spire_soil", "3b2d22", 0.95)
+    for i, (x, y) in enumerate(((-12.4, 33.5), (12.4, 33.5), (-12.4, 46.0), (12.4, 46.0))):
+        bm = procedural_tree(100 + i, 7.0 + (i % 2) * 0.6)
+        bmesh.ops.rotate(bm, verts=bm.verts, cent=(0, 0, 0), matrix=Matrix.Rotation(i * 1.3, 3, "Z"))
+        bmesh.ops.translate(bm, verts=bm.verts, vec=(x, y, 0.12))
+        mesh_obj(f"SPIRE_tree{i}", bm, [bark, leaves])
+        box_mesh(f"SPIRE_pit{i}", x - 1.3, y - 1.3, 0.0, x + 1.3, y + 1.3, 0.12, M["stone"], 1.0, None, 0.02)
+        box_mesh(f"SPIRE_soil{i}", x - 1.15, y - 1.15, 0.0, x + 1.15, y + 1.15, 0.14, soil, 1.0)
+        collider(f"trunk{i}", x - 0.3, y - 0.3, x + 0.3, y + 0.3, 0, 4.0)
+
+
 def plaza(M):
     box_mesh("SPIRE_plaza", -32.0, 39.0, -0.2, 32.0, 84.0, 0.02, M["plaza"], 2.0)
     box_mesh("SPIRE_gap_paving", -15.0, 29.8, -0.2, 15.0, 39.0, 0.02, M["plaza"], 2.0)  # the promenade
-    # Planting: deliberately none yet. Poly Haven's scanned jacaranda (312k tris) cannot be decimated to a
-    # game budget without breaking (trunk -> stick, leaf cards -> shards); needs an alpha-carded game tree.
+    # Planting: original procedural trees (the scanned Poly Haven jacaranda, 312k tris, broke under decimation).
+    promenade_trees(M)
     box_mesh("SPIRE_pool_rim", -6.0, 44.0, 0.0, 6.0, 51.0, 0.45, M["stone"], 1.0, None, 0.03)
     box_mesh("SPIRE_pool_water", -5.6, 44.4, 0.0, 5.6, 50.6, 0.4, M["water"], 2.0)
     collider("pool", -6.0, 44.0, 6.0, 51.0, 0, 0.45)
@@ -610,7 +709,7 @@ def export():
     with quiet():
         bpy.ops.export_scene.gltf(
             filepath=str(OUT), export_format="GLB", use_active_scene=True,
-            export_apply=True, export_image_format="JPEG", export_jpeg_quality=85,  # use "AUTO" once cut-out foliage needs PNG alpha
+            export_apply=True, export_image_format="AUTO", export_jpeg_quality=85,  # AUTO: leaf cut-out keeps PNG alpha
             export_draco_mesh_compression_enable=True, export_draco_mesh_compression_level=6,
             export_lights=False, export_cameras=False,
         )
