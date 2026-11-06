@@ -31,6 +31,51 @@ function dressGlass(m: THREE.MeshStandardMaterial, lit: boolean): void {
   m.needsUpdate = true;
 }
 
+/** Materials that get weathering: plaster, trim and stone of the historic Row (not glass, metal or emitters). */
+const WEATHERED = /^(facade_plaster|modular_urban_apartments_facade_(plaster|trim)|tower_stone|beige_wall|curb_stone)/;
+
+/**
+ * Weathering in world space, so every copy of a kit piece ages differently: rising damp and street grime
+ * near the ground, rain streaks running down the walls, broad tonal variation (no two bays share a tone)
+ * and matching roughness changes (damp and dirty plaster is less rough). Cost: two value-noise lookups.
+ */
+function weather(m: THREE.MeshStandardMaterial): void {
+  m.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nvarying vec3 vWeatherPos;")
+      .replace("#include <worldpos_vertex>", "#include <worldpos_vertex>\nvWeatherPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;");
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+varying vec3 vWeatherPos;
+float wHash( vec2 p ) { return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453 ); }
+float wNoise( vec2 p ) {
+  vec2 i = floor( p ), f = fract( p ); vec2 u = f * f * ( 3.0 - 2.0 * f );
+  return mix( mix( wHash( i ), wHash( i + vec2( 1, 0 ) ), u.x ), mix( wHash( i + vec2( 0, 1 ) ), wHash( i + vec2( 1, 1 ) ), u.x ), u.y );
+}`,
+      )
+      .replace(
+        "#include <map_fragment>",
+        `#include <map_fragment>
+  float wAlong = vWeatherPos.x + vWeatherPos.z;            // runs along any wall facing x or z
+  float wTone = wNoise( vec2( wAlong, vWeatherPos.y ) * 0.09 );                 // broad patches
+  float wStreak = wNoise( vec2( wAlong * 2.6, vWeatherPos.y * 0.12 ) );         // long vertical drips
+  float wDamp = 1.0 - smoothstep( 0.0, 1.5 + wNoise( vec2( wAlong * 0.7, 3.1 ) ) * 0.9, vWeatherPos.y ); // rising damp
+  float wDirt = clamp( wDamp * 0.55 + smoothstep( 0.62, 0.95, wStreak ) * 0.22, 0.0, 0.7 );
+  vec3 wGrime = vec3( 0.42, 0.38, 0.33 );
+  diffuseColor.rgb *= mix( vec3( 1.0 ), wGrime, wDirt ) * ( 0.92 + wTone * 0.16 );
+  float wRough = wDirt;`,
+      )
+      .replace(
+        "#include <roughnessmap_fragment>",
+        "#include <roughnessmap_fragment>\n  roughnessFactor = clamp( roughnessFactor - wRough * 0.18, 0.04, 1.0 );",
+      );
+  };
+  m.customProgramCacheKey = () => "weathered";
+  m.needsUpdate = true;
+}
+
 export interface PreparedModel {
   readonly colliders: Box[];
   readonly blockers: THREE.Mesh[];
@@ -69,6 +114,10 @@ export function prepareModel(root: THREE.Object3D): PreparedModel {
       if (tint) m.color.set(`#${tint[1]}`); // hex is sRGB; three converts
       if (m.name.startsWith("modular_urban_apartments_facade_glass")) dressGlass(m, false);
       if (m.name.startsWith("facade_glass_lit")) dressGlass(m, true);
+      if (WEATHERED.test(m.name) && !m.userData.weathered) {
+        m.userData.weathered = true;
+        weather(m);
+      }
       if (/leaves/i.test(m.name)) {
         // Foliage cards: alpha-tested cut-out (sorted blending flickers and turns canopies see-through).
         m.transparent = false;

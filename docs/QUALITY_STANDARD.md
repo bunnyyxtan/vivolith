@@ -57,11 +57,12 @@ Never ship a known-broken asset to fill space. Remove it and track the gap inste
 |---|---|---|
 | Spire view corridor | Fixed today | Ledger Tower moved to the plaza corner as a campanile; two axis-blocking blocks removed; 30 m promenade framed by P0/P3 (`docs/evidence/layout-plaza-axis.jpg`) |
 | Conversation UI | Rebuilt today | Solid panels and readable type (`ui-dialogue-labs.jpg`). Open: camera framing in tight rooms can sit the NPC behind the response card |
-| Facades (Saltlight Row) | Below bar | Clean kit plaster with no weathering, dirt or variation; tinted copies read flat. Add grime/AO masks, base staining, sill streaks |
+| Facades (Saltlight Row) | Improved (2026-11-06) | World-space weathering shader (`src/assets.ts` `weather()`): rising damp/street grime at the base, rain streaks, bay-to-bay tonal and roughness variation (`weather-facade-close.jpg`). Tried a Cycles AO bake to vertex colours in Blender first: rejected, overlapping kit pieces put most vertices inside geometry (median AO 0). Open: sill-specific streaks, window-reveal AO via a UV2 lightmap bake |
 | District surroundings | Below bar | From elevated views the district ends in flat fallback ground. Needs terrain, a coastline and distant blocks |
 | Spire glass | Partial | Reflective and correct, but the office floors are opaque (no interior depth). Add interior-mapped glass |
 | Vegetation | Missing | The Poly Haven jacaranda (312k tris, scanned) broke under decimation and was removed. Source an alpha-carded game tree with LODs |
-| Lighting into the sun | Below bar | Facing west at golden hour, haze and bloom wash out half the frame. Tune fog colour/density by view angle and the bloom threshold |
+| Lighting into the sun | Fixed (2026-11-06) | Height fog with sun in-scattering (`src/atmosphere.ts`), tamed sky, emitter-only bloom. Clipped pixels facing the sun: lane 22.3% -> 1.8%, Spire 21% -> 3.1%, pier 34.6% -> 7.9%; saturation up 0.10-0.16 -> 0.15-0.18 (`light0-*` vs `light2-*`). Open: day / night presets, the flat sea plane |
 | Interiors | Partial | Lobby and Labs furnished and lit; monitors are flat emissive; no stairs or elevator travel |
-| Characters | Partial | 11 distinct Mixamo characters; foot sliding and clothing intersections not yet checked per clip |
+| Characters | Partial | 21 distinct Mixamo characters (player, 4 named, 10 stall vendors, 8 walkers); foot sliding and clothing intersections not yet checked per clip |
+| Performance | Over budget | 720p lane 9.2-10.5 ms (budget 8). Vendors ~1 ms (49 skinned sub-meshes); next: merge Mixamo sub-meshes per character, skinning LOD, measure the weathering shader |
 | Physics props | Missing | Nothing reacts to touch (crates, chairs, doors). Needs a rigid-body layer |
