@@ -19,13 +19,14 @@ rngp = random.Random(21)
 
 def v2_materials():
     M = mats()
-    M["glass"] = flat_material("v2_glass", "3d8fe0", 0.08, 0.55)
+    # NEAR Protocol brand green #00EC97 (PMS 7479c): emerald glass built around it, pure green on the LEDs.
+    M["glass"] = flat_material("v2_glass_green", "16b884", 0.08, 0.55)
     M["glass_lit"] = flat_material("v2_glass_lit", "f6d79a", 0.4, 0.0, emit="ffd99a", emit_strength=2.2)
-    M["glass_cool"] = flat_material("v2_glass_cool", "7cc4f2", 0.1, 0.4)
+    M["glass_cool"] = flat_material("v2_glass_green_light", "6ff0c4", 0.1, 0.4)
     M["fin"] = flat_material("v2_white", "f4f6f8", 0.35, 0.1)
     M["band"] = M["fin"]
     M["steel"] = flat_material("v2_frame", "e8ecf0", 0.3, 0.2)
-    M["led"] = flat_material("v2_led", "6ff3ff", 0.2, emit="6ff3ff", emit_strength=6.0)
+    M["led"] = flat_material("v2_led_near_green", "00ec97", 0.2, emit="00ec97", emit_strength=6.0)
     M["panel"] = flat_material("v2_lobby_light", "ffe3b0", 0.4, emit="ffd99a", emit_strength=3.0)
     M["dark"] = flat_material("v2_feature", "1f2a36", 0.5)
     M["plaza"] = pbr_material("v2_pavers", "concrete_pavement", "f6eee6")  # light warm pavers (reference)

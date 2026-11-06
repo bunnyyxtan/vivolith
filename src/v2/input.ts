@@ -12,7 +12,7 @@ export interface Input {
 export function createInput(canvas: HTMLCanvasElement): Input {
   const held = new Set<string>();
   const pressed = new Set<string>();
-  let dx = 0, dy = 0, wheel = 0, rightDrag = false;
+  let dx = 0, dy = 0, wheel = 0, drag = false;
   const isLocked = () => document.pointerLockElement === canvas;
 
   window.addEventListener("keydown", (e) => {
@@ -21,13 +21,15 @@ export function createInput(canvas: HTMLCanvasElement): Input {
     if (e.code === "Space") e.preventDefault();
   });
   window.addEventListener("keyup", (e) => held.delete(e.code));
-  window.addEventListener("blur", () => { held.clear(); rightDrag = false; });
+  window.addEventListener("blur", () => { held.clear(); drag = false; });
   canvas.addEventListener("click", () => { if (!isLocked()) void canvas.requestPointerLock?.(); });
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-  canvas.addEventListener("pointerdown", (e) => { if (e.button === 2) rightDrag = true; });
-  window.addEventListener("pointerup", (e) => { if (e.button === 2) rightDrag = false; });
+  // Look: pointer lock when the browser grants it; otherwise any held mouse button drags the view
+  // (embedded panes often refuse pointer lock, which made the camera feel stuck).
+  canvas.addEventListener("pointerdown", (e) => { drag = true; canvas.setPointerCapture?.(e.pointerId); });
+  window.addEventListener("pointerup", () => { drag = false; });
   window.addEventListener("mousemove", (e) => {
-    if (isLocked() || rightDrag) { dx += e.movementX; dy += e.movementY; }
+    if (isLocked() || drag) { dx += e.movementX; dy += e.movementY; }
   });
   canvas.addEventListener("wheel", (e) => { wheel += e.deltaY; e.preventDefault(); }, { passive: false });
 

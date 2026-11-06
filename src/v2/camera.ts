@@ -4,6 +4,8 @@ import { groundHeightAt, type Box } from "../physics/collision";
 import type { Input } from "./input";
 
 const SENS = 0.0022;
+const KEY_RATE = 2.2; // rad/s for Q/E and arrow-key orbit
+const MIN_PITCH = -0.85, MAX_PITCH = 1.3;
 const MIN_DIST = 2.2, MAX_DIST = 9;
 const SHOULDER = 0.65; // metres to the right of the character
 const GROUND_CLEARANCE = 0.35;
@@ -62,8 +64,12 @@ export function createCameraRig(aspect: number, yaw: number): CameraRig {
     snap(focus, colliders) { first = true; rig.update(0, NO_INPUT, focus, colliders); },
     update(dt, input, focus, colliders) {
       const { dx, dy } = input.takeLook();
-      rig.yaw += dx * SENS;
-      rig.pitch = THREE.MathUtils.clamp(rig.pitch + dy * SENS, -0.12, 1.25);
+      // Keyboard orbit too (Q/E or arrows), so the view never depends on the mouse alone.
+      const keyYaw = (input.down("KeyE") || input.down("ArrowRight") ? 1 : 0) - (input.down("KeyQ") || input.down("ArrowLeft") ? 1 : 0);
+      const keyPitch = (input.down("ArrowDown") ? 1 : 0) - (input.down("ArrowUp") ? 1 : 0);
+      rig.yaw += dx * SENS + keyYaw * KEY_RATE * dt;
+      // Full 360 yaw; pitch from looking up at the sky (camera low) to looking down from above.
+      rig.pitch = THREE.MathUtils.clamp(rig.pitch + dy * SENS + keyPitch * KEY_RATE * 0.6 * dt, MIN_PITCH, MAX_PITCH);
       rig.dist = THREE.MathUtils.clamp(rig.dist + input.takeWheel() * 0.004, MIN_DIST, MAX_DIST);
 
       if (first) smooth.copy(focus); else smooth.lerp(focus, 1 - Math.exp(-12 * dt));
@@ -77,7 +83,13 @@ export function createCameraRig(aspect: number, yaw: number): CameraRig {
       toCam.divideScalar(len);
 
       // cut in instantly when a wall is in the way, ease back out
-      const free = Math.max(0.6, clipRay(smooth, toCam, len, colliders, WALL_PAD));
+      let free = Math.max(0.6, clipRay(smooth, toCam, len, colliders, WALL_PAD));
+      // Never below the ground: when the arm points downward, shorten it so the camera stops at the floor
+      // (it slides in toward Kavi, like ZZZ/Genshin) instead of sinking under the world.
+      if (toCam.y < -1e-3) {
+        const floorAt = groundHeightAt(colliders, smooth.x, smooth.z, smooth.y) + GROUND_CLEARANCE;
+        free = Math.max(0.6, Math.min(free, (smooth.y - floorAt) / -toCam.y));
+      }
       curDist = first || free < curDist ? free : curDist + (free - curDist) * (1 - Math.exp(-5 * dt));
       first = false;
       pos.copy(smooth).addScaledVector(toCam, Math.min(curDist, len));
