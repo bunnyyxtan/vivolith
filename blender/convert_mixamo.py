@@ -141,6 +141,17 @@ CAST = {
     "ped_pete": ("Pete", 512, ("Idle", "Walk")),
     "ped_porter": ("Peasant Man", 512, ("Idle", "Walk")),
     "ped_abe": ("Abe", 512, ("Idle", "Walk")),
+    # Stall vendors (one per Market Lane stall that has no named merchant)
+    "vendor_kate": ("Kate", 512, ("Idle", "Talking")),
+    "vendor_louise": ("Louise", 512, ("Idle", "Talking")),
+    "vendor_jennifer": ("Jennifer", 512, ("Idle", "Talking")),
+    "vendor_jody": ("Jody", 512, ("Idle", "Talking")),
+    "vendor_lewis": ("Lewis", 512, ("Idle", "Talking")),
+    "vendor_david": ("David", 512, ("Idle", "Talking")),
+    "vendor_steve": ("Steve", 512, ("Idle", "Talking")),
+    "vendor_adam": ("Adam", 512, ("Idle", "Talking")),
+    "vendor_brian": ("Brian", 512, ("Idle", "Talking")),
+    "vendor_michelle": ("Michelle", 512, ("Idle", "Talking")),
 }
 MIXAMO = REPO / "Mixamo"
 

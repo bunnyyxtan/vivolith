@@ -36,6 +36,20 @@ const PEDESTRIAN_ROWS = [
   ["ped_abe", "Abe", "Resident · purple shirt", 1.74],
 ] as const;
 
+/** Stall vendors: [id, display name, Mixamo source, stall title, stall x, north side?, height, look]. */
+export const VENDOR_ROWS = [
+  ["vendor_lewis", "Dev Anand", "Lewis", "Chunk & Shard", 38, true, 1.78, "Grey hoodie, rolled sleeves"],
+  ["vendor_kate", "Kate Morrow", "Kate", "Yocto Citrus", 47.5, true, 1.66, "Denim jacket, ponytail"],
+  ["vendor_david", "David Mensah", "David", "Epoch Roots", 57, true, 1.8, "Dark shirt, short beard"],
+  ["vendor_jennifer", "Jen Alvarez", "Jennifer", "Nightshade Orchard", 66.5, true, 1.66, "Red top, dark hair"],
+  ["vendor_steve", "Steve Rourke", "Steve", "Finality Fruit", 23.5, false, 1.8, "Olive field jacket"],
+  ["vendor_louise", "Louise Tan", "Louise", "Sharded Citrus", 33, false, 1.66, "Navy blazer, jeans"],
+  ["vendor_adam", "Adam Petrov", "Adam", "Rainbow Bridge Market", 42.5, false, 1.8, "White tee, work trousers"],
+  ["vendor_jody", "Jody Nakamura", "Jody", "Validator Veg", 52, false, 1.66, "Pink cardigan"],
+  ["vendor_brian", "Brian Kowalski", "Brian", "Blocktime Orchard", 61.5, false, 1.78, "Sweater over collar"],
+  ["vendor_michelle", "Michelle Diallo", "Michelle", "Intents Grocer", 71, false, 1.66, "Yellow trousers, braids"],
+] as const;
+
 export const CAST: readonly CastMember[] = [
   {
     id: "player", name: "Remy", role: "Player · newcomer with a handcart", source: "Remy",
@@ -71,6 +85,13 @@ export const CAST: readonly CastMember[] = [
     post: { x: -18.9, y: 0.05, z: -66.6, yaw: -Math.PI / 2 }, talk: { x: -19.8, z: -65.4, radius: 2.2, focusY: 1.6 },
     schedule: "NEAR Labs, by the agent-feed wall", radius: 0.3, tier: "named",
   },
+  ...VENDOR_ROWS.map(([id, name, source, shop, x, north, height, appearance]): CastMember => ({
+    id, name, role: `Stall vendor · ${shop}`, source, url: `/models/${id}.glb`, height, clips: ["Idle", "Talking"], appearance,
+    // Behind the table, facing the lane (north row faces +z, south row faces -z).
+    post: { x, y: 0.15, z: north ? -6.9 : 6.9, yaw: north ? 0 : Math.PI },
+    talk: { x, z: north ? -4.3 : 4.3, radius: 2.2, focusY: height - 0.1 },
+    schedule: "At the stall during market hours", radius: 0.3, tier: "named",
+  })),
   ...PEDESTRIAN_ROWS.map(([id, source, appearance, height]): CastMember => ({
     id, name: source, role: "Pedestrian", source, url: `/models/${id}.glb`, height, clips: ["Idle", "Walk"],
     appearance, schedule: "Walks the lane / plaza / Spire routes, browses open stalls", radius: 0.3, tier: "crowd",

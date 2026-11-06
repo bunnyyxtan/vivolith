@@ -476,7 +476,7 @@ def fruit_pile(parent, cx, cy, z, w, d, kinds, count=26, layers=2):
               (rng.uniform(0, 0.6), rng.uniform(0, 0.6), rng.uniform(0, 6.28)), rng.uniform(0.95, 1.1))
 
 
-def market_stall(name, x, y, facing, colors, goods, sign_id=None):
+def market_stall(name, x, y, facing, colors, goods, sign_id=None, title=None):
     """Wooden stall at Blender (x, y). facing=+1 means the customer side is +Y (south row), -1 means -Y."""
     rot = 0.0 if facing < 0 else math.pi
     root = empty(name + "_root", (x, y, CURB_H), rot)
@@ -495,6 +495,25 @@ def market_stall(name, x, y, facing, colors, goods, sign_id=None):
             box_mesh(name + "_post", px - 0.035, py - 0.035, 0, px + 0.035, py + 0.035, 2.55 if py < 0 else 2.75, dark, 1.0, root)
     aw = awning(name + "_awning", root, W + 0.5, D + 0.9, 2.5, colors)
     aw.location = (-(W + 0.5) / 2, -D / 2 - 0.45, 0)
+    if title:  # painted name board on the awning's front beam, raised gilt letters (faces the customer)
+        board = flat_material("stall_nameboard", "1c2024", 0.55)
+        gilt = flat_material("stall_gilt", "e6d3a0", 0.35, 0.6)
+        by = -D / 2 - 0.47
+        box_mesh(name + "_nameboard", -1.45, by - 0.04, 2.24, 1.45, by, 2.5, board, 1.0, root, 0.012)
+        cu = bpy.data.curves.new(name + "_title", "FONT")
+        cu.body = title
+        cu.size = 0.15 if len(title) <= 16 else 0.125
+        cu.extrude = 0.008
+        cu.align_x = "CENTER"
+        cu.align_y = "CENTER"
+        cu.materials.append(gilt)
+        t = bpy.data.objects.new(name + "_title", cu)
+        bpy.context.scene.collection.objects.link(t)
+        t.parent = root
+        t.location = (0, by - 0.05, 2.37)
+        t.rotation_euler = (math.pi / 2, 0, 0)
+        bpy.context.view_layer.update()
+        realize(t, root)
     # Goods (own object GOODS_<name>, so the game can empty a sold-out table): crates/baskets of fruit.
     stock = empty(name + "_goods", (x, y, CURB_H), rot)
     crate = load_asset("plastic_crate_01", 400)["plastic_crate_01"]
@@ -616,6 +635,7 @@ def props_group(name, items):
 def shop_sign(name, x, y, z, rot_z, text, board_hex, text_hex, glow=0.0, width=2.6):
     """Painted fascia sign with raised letters, mounted flat on a facade (local -Y is the street)."""
     root = empty(name, (x, y, z), rot_z)
+    width = max(width, len(text) * 0.2 + 0.5)  # board grows with the lettering
     board = flat_material(f"sign_board_{board_hex}", board_hex, 0.6)
     letters = flat_material(f"sign_text_{text_hex}_{int(glow)}", text_hex, 0.4,
                             emit=text_hex if glow else None, emit_strength=glow)
@@ -824,14 +844,18 @@ def build_buildings():
 
 
 def build_stalls():
-    north = [(19.0, AWNINGS[0], ["food_apple_01", "lemon"], "pema"), (28.5, AWNINGS[1], ["food_pomegranate_01", "food_apple_01"], None),
-             (38.0, AWNINGS[2], "bananas", None), (47.5, AWNINGS[3], ["lemon", "food_lime_01"], None),
-             (57.0, AWNINGS[4], ["yellow_onion"], None), (66.5, AWNINGS[5], ["food_lime_01", "food_apple_01"], None)]
-    for i, (x, colors, goods, sign) in enumerate(north):
-        market_stall(f"n{i}", x, 5.75, -1, colors, goods, sign)
+    # Stall names riff on NEAR protocol ideas (sharding, Nightshade, Doomslug, yoctoNEAR, epochs, finality),
+    # never on other companies' brands.
+    north = [(19.0, AWNINGS[0], ["food_apple_01", "lemon"], "pema", "PEMA'S FRUIT"),
+             (28.5, AWNINGS[1], ["food_pomegranate_01", "food_apple_01"], None, "VELL'S FINE PRODUCE"),
+             (38.0, AWNINGS[2], "bananas", None, "CHUNK & SHARD"), (47.5, AWNINGS[3], ["lemon", "food_lime_01"], None, "YOCTO CITRUS"),
+             (57.0, AWNINGS[4], ["yellow_onion"], None, "EPOCH ROOTS"), (66.5, AWNINGS[5], ["food_lime_01", "food_apple_01"], None, "NIGHTSHADE ORCHARD")]
+    for i, (x, colors, goods, sign, title) in enumerate(north):
+        market_stall(f"n{i}", x, 5.75, -1, colors, goods, sign, title)
+    south = ["FINALITY FRUIT", "SHARDED CITRUS", "RAINBOW BRIDGE MARKET", "VALIDATOR VEG", "BLOCKTIME ORCHARD", "INTENTS GROCER"]
     for i in range(6):
         x = 23.5 + i * 9.5
-        market_stall(f"s{i}", x, -5.75, +1, AWNINGS[(i + 3) % 6], [rng.choice(FRUIT), rng.choice(FRUIT)], None)
+        market_stall(f"s{i}", x, -5.75, +1, AWNINGS[(i + 3) % 6], [rng.choice(FRUIT), rng.choice(FRUIT)], None, south[i])
 
 
 def build_props():
@@ -877,8 +901,12 @@ def build_props():
     join_under(root, "PROPS_fire_escape")
     # Shop signs on the lane, one NEAR-branded exchange facing the plaza corner.
     shop_sign("tea", 33.0, LANE_HALF - 0.02, 3.55, 0.0, "SALTLIGHT TEA HOUSE", "2b3a33", "e8d7a8")
-    shop_sign("fish", 41.0, -(LANE_HALF - 0.02), 3.55, math.pi, "PIER FRESH FISH", "1e3a52", "f2e6d0")
-    shop_sign("tools", 60.0, LANE_HALF - 0.02, 3.55, 0.0, "RAVI TOOLS & ROPE", "5a2b23", "f4e1c2")
+    shop_sign("fish", 41.0, -(LANE_HALF - 0.02), 3.55, math.pi, "FINALITY FISH CO.", "1e3a52", "f2e6d0")
+    shop_sign("tools", 60.0, LANE_HALF - 0.02, 3.55, 0.0, "RELAYER TOOLS & ROPE", "5a2b23", "f4e1c2")
+    shop_sign("noodles", 47.0, LANE_HALF - 0.02, 3.55, 0.0, "NIGHTSHADE NOODLES", "2a1f2e", "f0d9a8")
+    shop_sign("books", 70.0, LANE_HALF - 0.02, 3.55, 0.0, "PROTOCOL BOOKS", "233127", "efe4c8")
+    shop_sign("locks", 30.0, -(LANE_HALF - 0.02), 3.55, math.pi, "CHAIN SIGNATURE LOCKS", "2b2b2f", "e8dcc0")
+    shop_sign("coffee", 52.0, -(LANE_HALF - 0.02), 3.55, math.pi, "DOOMSLUG COFFEE", "3a2418", "f2dfc0")
     near_sign("ledger", 22.5, -(LANE_HALF - 0.02), 3.6, math.pi, "LEDGER EXCHANGE")
 
 
