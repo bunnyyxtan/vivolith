@@ -24,23 +24,28 @@ export function createInput(canvas: HTMLCanvasElement): Input {
   });
   window.addEventListener("keyup", (e) => keys.delete(e.code));
   window.addEventListener("blur", () => keys.clear());
-  // Orbit with the mouse: free look when pointer-locked, or hold any button and drag
-  // (pointer lock is unavailable in some embedded browsers).
+  // Camera orbit only while the RIGHT mouse button is held; the cursor stays free for clicking UI.
+  const RIGHT_BUTTON = 2;
   let dragging = false;
   let zoom = 0;
   canvas.addEventListener("pointerdown", (e) => {
+    if (e.button !== RIGHT_BUTTON) return;
     dragging = true;
+    canvas.classList.add("orbiting");
     try { canvas.setPointerCapture(e.pointerId); } catch { /* capture is best-effort */ }
   });
   const endDrag = (e: PointerEvent) => {
+    if (!dragging) return;
     dragging = false;
+    canvas.classList.remove("orbiting");
     try { canvas.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
   };
   canvas.addEventListener("pointerup", endDrag);
   canvas.addEventListener("pointercancel", endDrag);
+  window.addEventListener("blur", () => { dragging = false; canvas.classList.remove("orbiting"); });
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   document.addEventListener("pointermove", (e) => {
-    if (document.pointerLockElement !== canvas && !dragging) return;
+    if (!dragging) return;
     dx += e.movementX;
     dy += e.movementY;
   });

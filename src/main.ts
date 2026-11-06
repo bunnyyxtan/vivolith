@@ -39,15 +39,11 @@ const gameplay = createGameplay(
 );
 
 let started = false;
-const lock = () => {
-  canvas.requestPointerLock()?.catch?.(() => { /* user gesture race: next click retries */ });
-};
+// No pointer lock: the cursor stays visible for UI; hold right mouse to orbit (see input.ts).
 playButton.addEventListener("click", () => {
   started = true;
   titleCard.classList.add("hidden");
-  lock();
 });
-canvas.addEventListener("click", () => { if (started && !input.locked()) lock(); });
 
 // ---------- Loop ----------
 const clock = new THREE.Clock();

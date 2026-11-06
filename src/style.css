@@ -29,6 +29,16 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d12; col
 }
 #title-card button:hover { background: #fff; }
 
+/* ---------- Cursor: always visible (no pointer lock); hidden only while right-drag orbiting ---------- */
+html, body, #game {
+  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'><path d='M4 3 L4 22 L9 17.6 L12.4 25 L16 23.4 L12.6 16.2 L19.5 16.2 Z' fill='%23f4ecda' stroke='%232b2119' stroke-width='1.8' stroke-linejoin='round'/><path d='M5.6 6.6 L5.6 18.4' stroke='%230091fd' stroke-width='1.6' stroke-linecap='round'/></svg>") 4 3, default;
+}
+#game.orbiting { cursor: none; }
+.dlg-tag, .dlg-paper, .dlg-letterbox, button, a, .hud-receipt a {
+  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'><path d='M4 3 L4 22 L9 17.6 L12.4 25 L16 23.4 L12.6 16.2 L19.5 16.2 Z' fill='%230091fd' stroke='%230b2340' stroke-width='1.8' stroke-linejoin='round'/><circle cx='21.5' cy='6.5' r='3' fill='%23f2d48a' stroke='%230b2340' stroke-width='1.2'/></svg>") 4 3, pointer;
+}
+.dlg-tag.disabled { cursor: not-allowed; }
+
 /* ---------- HUD ---------- */
 :root { --glass: rgba(16, 18, 22, 0.74); --line: rgba(238, 238, 235, 0.14); --serif: "Iowan Old Style", "Palatino Linotype", Georgia, serif; }
 .hud-top { position: absolute; top: 16px; left: 18px; display: flex; gap: 8px; font-family: var(--mono); font-size: 13px; }
