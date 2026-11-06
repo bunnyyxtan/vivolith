@@ -69,6 +69,13 @@ Economy rules: `src/economy/pricing.ts` (one readable file). Self-check: `node s
 3. Restart `npm run dev`. Paying the harbor fee now writes a receipt with `add_message` to the public testnet contract
    `guestbook.near-examples.testnet`; the in-game card links the tx on testnet.nearblocks.io.
 
+### Verified testnet evidence
+
+- Dev account: `bunnyy-nearworld.testnet`
+- In-game harbor-fee receipt: [`uKV8uHTnwiWbDUj1yYpRxucK2H41cHQb9do4AQpM3co`](https://testnet.nearblocks.io/txns/uKV8uHTnwiWbDUj1yYpRxucK2H41cHQb9do4AQpM3co)
+  (`add_message` on `guestbook.near-examples.testnet`, status `SuccessValue`, final). The same payment released
+  Pema's shipment in the simulation, which restocked her stall and let her pay rent.
+
 ## NEAR integration
 
 Planned, not implemented: an NEP-245 multi-token contract on testnet, merchant accounts with real

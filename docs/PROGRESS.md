@@ -37,7 +37,8 @@ Deadline: 2026-11-14 23:59 UTC. Feature freeze target: 2026-11-13 12:00 UTC (res
 | 1 | Save / reload | VERIFIED | Reload restored flag, rep, receipts, clock (localStorage `nearworld.save.v1`) |
 | 1 | Economy inspector + fast-forward | VERIFIED | Tab panel; "1 day" ran ~6 s: delivery -> Pema paid rent -> Tea House bought from Pema (cheaper than Tomas) |
 | 1 | Harbor fee decision (stand-in board) | VERIFIED | Coins 25->10, shipment held->transit (arrives 90 min later); real harbor is Gate 4 |
-| 1 | First NEAR testnet transaction | BLOCKED (user step) | Relay `server/near-relay.ts` + receipt UI work; `/api/near/status` = `configured:false`. Fee payment produced receipt with status `local` and the message "No NEAR testnet account configured" (no fake tx). Needs a testnet account: README "NEAR setup" |
+| 1 | First NEAR testnet transaction | VERIFIED | Account `bunnyy-nearworld.testnet` (10 NEAR, 1 full-access key matching local keychain; created by faucet tx `Ao2w4zL97MryDVWp5LBoFGYnbtfQPkkowttsMekVqSK`). In game (2026-11-06): Pema choice 1 -> harbor fee paid (coins 25->10, shipment held->transit) -> relay sent tx **`uKV8uHTnwiWbDUj1yYpRxucK2H41cHQb9do4AQpM3co`**. RPC check: `SuccessValue`, `FINAL`, signer bunnyy-nearworld.testnet -> `guestbook.near-examples.testnet.add_message`, 1.91 TGas; message #857 stored with that sender. After 1-day fast-forward: 30 mangoes delivered, Pema paid rent, Tea House bought 6 from her at 3 c; inspector shows "✔ onchain". https://testnet.nearblocks.io/txns/uKV8uHTnwiWbDUj1yYpRxucK2H41cHQb9do4AQpM3co |
+| 1 | Own game contract (NEP-245 items) | BLOCKED | No Rust/cargo on this machine; installing rustup + cargo-near needs approval. Receipts use the public guestbook contract meanwhile (not ours; honest label) |
 | 2 | Premium dialogue UI | IN PROGRESS | Market-object design (enamel plank, torn paper subtitle strip, live 3D postage-stamp portrait, kraft tag choices in a side column). Compact pass after user feedback; centre of frame stays clear. Typing speed only checked under a throttled pane |
 | 2 | Merchants + pedestrians + nav | NOT STARTED | |
 | 2 | Clouds / sky / grading | NOT STARTED | |
@@ -51,7 +52,7 @@ Deadline: 2026-11-14 23:59 UTC. Feature freeze target: 2026-11-13 12:00 UTC (res
 | Thing | Where it lives |
 |---|---|
 | Prices, stock, cash, rent, closures, fast-forward | Local deterministic simulation (`src/economy/`), saved in localStorage |
-| Deal receipts | Planned: NEAR testnet tx via local dev relay (key never in the bundle). Not live until the account exists |
+| Deal receipts | **Live on NEAR testnet**: harbor-fee receipt sent by the dev relay (key read server-side from the legacy keychain, never bundled/logged) as `add_message` on `guestbook.near-examples.testnet`. Without an account the UI says "kept locally" |
 | NEP-245 items | ROADMAP (needs Rust toolchain approval) |
 | NEAR Intents | Not used: no testnet (HACKATHON.md Q-007) |
 
