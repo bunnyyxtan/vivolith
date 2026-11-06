@@ -1,6 +1,6 @@
 # Asset sources and attribution
 
-Every third-party asset used in NEAR WORLD is listed here with its source and license.
+Every third-party asset used in VIVOLITH is listed here with its source and license.
 Assets we created ourselves (Blender scripts in `blender/`, code-built geometry in `src/`) are MIT with the code.
 
 ## NEAR brand assets (provided by the team, downloaded from official NEAR brand resources)

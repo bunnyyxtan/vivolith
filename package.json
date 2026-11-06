@@ -1,9 +1,9 @@
 {
-  "name": "near-world",
+  "name": "vivolith",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "NEAR WORLD: Saltlight Row. A browser 3D market-town game where every merchant has a wallet and the street remembers your deals.",
+  "description": "VIVOLITH: Saltlight Row. A browser 3D market-town game where every merchant has a wallet and the street remembers your deals.",
   "license": "MIT",
   "scripts": {
     "dev": "vite",

@@ -1,4 +1,4 @@
-// Character registry: every person in NEAR World, its model, clips, role, look, where/when it appears,
+// Character registry: every person in VIVOLITH, its model, clips, role, look, where/when it appears,
 // what it can do, its collision and its performance tier. Models are Mixamo characters converted by
 // blender/convert_mixamo.py (CAST table there). Positions are three.js coordinates.
 

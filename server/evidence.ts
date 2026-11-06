@@ -11,7 +11,7 @@ const MAX_BYTES = 8 * 1024 * 1024;
 export function evidenceWriter(root: string): Plugin {
   const dir = path.join(root, "docs", "evidence");
   return {
-    name: "nearworld-evidence",
+    name: "vivolith-evidence",
     apply: "serve",
     configureServer(server) {
       server.middlewares.use("/__evidence", (req, res) => {

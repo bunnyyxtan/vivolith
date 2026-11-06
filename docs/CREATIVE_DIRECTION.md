@@ -1,4 +1,4 @@
-# NEAR WORLD: Creative Direction (v0.1, 2026-11-06)
+# VIVOLITH: Creative Direction (v0.1, 2026-11-06)
 
 Track: **Games With Real Economies** (`games`). Its brief says judges score the game loop first,
 and give a bonus when players never notice the chain. The track prompt also suggests:
@@ -7,7 +7,7 @@ file with the reasoning shown in a tooltip, and a fast-forward mode (one week in
 
 ## 1. Concept
 
-**NEAR WORLD: Saltlight Row.** This is a coastal market district at dusk, made of stalls, cafes,
+**VIVOLITH: Saltlight Row.** This is a coastal market district at dusk, made of stalls, cafes,
 a pier, rickshaws and a clock tower. Every merchant is an agent with a real wallet, real stock and
 a memory. You arrive with a few coins and a rented handcart. You leave owning part of the street.
 

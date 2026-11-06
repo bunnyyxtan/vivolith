@@ -1,7 +1,7 @@
 // Save/load of the economy + quest state (localStorage). Corrupt or old saves fall back to a new game.
 import { initialEconomy, type EconomyState } from "./state.ts";
 
-const KEY = "nearworld.save.v1";
+const KEY = "nearworld.save.v1"; // pre-rename key, kept so existing saves still load
 
 export function loadGame(): { state: EconomyState; restored: boolean } {
   try {

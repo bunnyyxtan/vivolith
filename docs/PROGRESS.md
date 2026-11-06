@@ -1,4 +1,7 @@
-# NEAR World: Progress Tracker
+# VIVOLITH: Progress Tracker
+
+The game was renamed from NEAR World to **VIVOLITH** on 2026-11-06 (identifiers such as the testnet account
+`bunnyy-nearworld.testnet` and the save key `nearworld.save.v1` keep their old names for compatibility).
 
 Status keys: NOT STARTED · IN PROGRESS · VERIFIED (evidence given) · BLOCKED (reason given) · ROADMAP.
 Deadline: 2026-11-14 23:59 UTC. Feature freeze target: 2026-11-13 12:00 UTC (rest = QA, recording, submission).

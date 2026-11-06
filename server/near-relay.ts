@@ -88,7 +88,7 @@ export function nearRelay(env: Record<string, string>): Plugin {
   };
 
   return {
-    name: "near-world-relay",
+    name: "vivolith-near-relay",
     configureServer(server) {
       server.middlewares.use("/api/near/status", (_req, res) => {
         send(res, 200, {
@@ -112,7 +112,7 @@ export function nearRelay(env: Record<string, string>): Plugin {
           const summary = typeof body.summary === "string" ? body.summary.replace(/[^\x20-\x7E]/g, "").slice(0, 140) : "";
           if (!KIND.test(kind) || summary.length < 3) return send(res, 400, { status: "error", message: "Invalid receipt." });
           last = now;
-          const text = `NEARWorld|${kind}|${summary}`;
+          const text = `Vivolith|${kind}|${summary}`;
           const outcome = await getAccount().signAndSendTransaction({
             receiverId: cfg.contractId,
             actions: [actions.functionCall("add_message", { text }, teraToGas("30"), nearToYocto("0"))],

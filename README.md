@@ -1,4 +1,4 @@
-# NEAR WORLD: Saltlight Row
+# VIVOLITH: Saltlight Row
 
 A browser 3D market-town game for NEAR HACKATHON 2026, track **Games With Real Economies** (`games`).
 Every merchant is an agent with a wallet and stock, prices react to what players do, and the whole

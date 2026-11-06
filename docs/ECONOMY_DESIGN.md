@@ -1,4 +1,4 @@
-# NEAR WORLD: Economy Design (v0.1, 2026-11-06)
+# VIVOLITH: Economy Design (v0.1, 2026-11-06)
 
 This extends [CREATIVE_DIRECTION.md](CREATIVE_DIRECTION.md). The concept, district, art direction
 and engine stay the same. This file defines how the economy reacts.
