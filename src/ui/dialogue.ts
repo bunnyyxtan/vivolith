@@ -1,6 +1,5 @@
-// Conversation UI: a cinematic band across the bottom of the frame, a live 3D portrait bust in a cut-corner
-// frame, an upright serif line that types in, and right-aligned choice lines; the selected one sits on a
-// brush stroke with its consequences underneath. Keyboard (1-4, arrows/W/S, Space/Enter/E, Esc) and mouse.
+// Conversation UI: a solid dialogue panel at the bottom (live 3D portrait, name, role, typed line) and a solid
+// response card at the right; the selected response is an ivory row with an accent bar and consequence chips. Keyboard (1-4, arrows/W/S, Space/Enter/E, Esc) and mouse.
 import type { Choice, Conversation, DialogueContext } from "../quests/dialogue.ts";
 
 const CHARS_PER_SECOND = 55;
@@ -44,8 +43,10 @@ export function createDialogueUI(root: HTMLElement): DialogueUI {
   const more = el("span", "dlg-more", body);
   more.innerHTML = `<svg viewBox="0 0 28 14" aria-hidden="true"><path d="M2 2l6 5-6 5M14 2l6 5-6 5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
   const keys = el("footer", "dlg-keys", band);
-  // Choices stack at the right, above the band, so the centre of the frame stays on the characters.
-  const list = el("ol", "dlg-choices", root);
+  // Responses: a solid card at the right, above the dialogue panel, so the centre stays on the characters.
+  const card = el("aside", "dlg-responses", root);
+  el("header", "dlg-responses-head", card).textContent = "Respond";
+  const list = el("ol", "dlg-choices", card);
 
   let conv: Conversation | null = null;
   let ctx: DialogueContext | null = null;
@@ -72,13 +73,14 @@ export function createDialogueUI(root: HTMLElement): DialogueUI {
       const detail = c.detail?.(ctx!.econ);
       if (detail || !enabled(c)) {
         const d = el("span", "dlg-choice-detail", li);
-        d.textContent = enabled(c) ? detail!.split(/\s+·\s+|\s+—\s+/).filter(Boolean).slice(0, 3).join("   ·   ") : "Not available right now";
+        const parts = enabled(c) ? detail!.split(/\s+·\s+|\s+—\s+/).filter(Boolean).slice(0, 3) : ["Not available right now"];
+        for (const part of parts) el("span", "dlg-chip", d).textContent = part;
       }
       li.addEventListener("mouseenter", () => { selected = i; refreshSelection(); });
       li.addEventListener("click", (e) => { e.stopPropagation(); choose(i); });
     });
     refreshSelection();
-    list.classList.toggle("shown", choices.length > 0 && !typing());
+    card.classList.toggle("shown", choices.length > 0 && !typing());
     more.classList.toggle("shown", !typing() && choices.length === 0);
     if (typing()) hints(keys, [["Space", "Skip"], ["Esc", "Leave"]]);
     else if (choices.length) hints(keys, [[`1–${choices.length}`, "Choose"], ["W / S", "Select"], ["Space", "Confirm"], ["Esc", "Leave"]]);

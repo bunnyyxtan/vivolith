@@ -23,6 +23,8 @@ MODELS_1K = [
     # NEAR Spire lobby + Labs (Gate 3)
     "metal_office_desk", "desk_lamp_arm_01", "modern_arm_chair_01", "potted_plant_01", "potted_plant_04",
     "modern_ceiling_lamp_01", "sofa_03", "modern_coffee_table_01", "office_notepads", "planter_box_02",
+    # Protocol Promenade planting
+    "jacaranda_tree", "shrub_03",
 ]
 TEXTURES_1K = ["cobblestone_floor_08", "concrete_pavement", "patterned_paving", "beige_wall_001", "brown_planks_05",
                "marble_01", "granite_tile", "metal_plate", "brushed_concrete", "terrazzo_tiles"]
