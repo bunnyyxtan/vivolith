@@ -3,13 +3,13 @@
 // echo key material or stack traces.
 //
 // Routes: GET status | POST guest {publicKey} | POST relay {signedDelegate: base64} | POST settle
-import { createHash } from "node:crypto";
+import { createHash, createPublicKey, verify as verifySignature, type JsonWebKey } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { deserialize } from "borsh";
 import { Account, JsonRpcProvider, KeyPairSigner, PublicKey, SCHEMA, actions, nearToYocto, teraToGas, type KeyPairString } from "near-api-js";
-import { MERCHANTS, merchantKey, type MerchantId } from "./keys.ts";
+import { MERCHANTS, keyPairFromSeed, merchantKey, type MerchantId } from "./keys.ts";
 import { bidFor, planMerchantTrades, quote } from "../../src/economy/pricing.ts";
 import { shopperWant } from "../../src/economy/sim.ts";
 import { initialEconomy, type EconomyState } from "../../src/economy/state.ts";
@@ -25,6 +25,9 @@ interface Config {
   rpcUrl: string;
   redisUrl: string | null;
   redisToken: string | null;
+  /** Our Auth0 tenant (public values). Social login is offered only when both are set. */
+  auth0Domain: string | null;
+  auth0ClientId: string | null;
 }
 
 const MAX_BODY = 4096;
@@ -45,6 +48,7 @@ const LIMITS = {
   relayIp: { max: 60, windowSec: 60 }, // per IP
   settle: { max: 6, windowSec: 60 }, // global
   deal: { max: 20, windowSec: 60 }, // per player account
+  social: { max: 10, windowSec: 3600 }, // per IP
 } as const;
 
 export function readConfig(env: RelayEnv): Config {
@@ -65,6 +69,8 @@ export function readConfig(env: RelayEnv): Config {
     rpcUrl: (env.NEAR_RPC_URL ?? "https://rpc.testnet.fastnear.com").trim(),
     redisUrl: (env.UPSTASH_REDIS_REST_URL ?? env.KV_REST_API_URL ?? "").trim() || null,
     redisToken: (env.UPSTASH_REDIS_REST_TOKEN ?? env.KV_REST_API_TOKEN ?? "").trim() || null,
+    auth0Domain: (env.NEAR_AUTH0_DOMAIN ?? "").trim().replace(/^https?:\/\//, "").replace(/\/+$/, "") || null,
+    auth0ClientId: (env.NEAR_AUTH0_CLIENT_ID ?? "").trim() || null,
   };
 }
 
@@ -164,6 +170,7 @@ async function status(cfg: Config): Promise<Response> {
     merchants: MERCHANTS.map((m) => `${m}.${cfg.relayerId}`),
     rateLimit: cfg.redisUrl ? "persistent" : "memory",
     marketDayMs: MARKET_DAY_MS,
+    auth: cfg.auth0Domain && cfg.auth0ClientId ? { domain: cfg.auth0Domain, clientId: cfg.auth0ClientId } : null,
   });
 }
 
@@ -289,6 +296,120 @@ async function deal(cfg: Config, req: Request, env: RelayEnv): Promise<Response>
     status: "signed",
     args: { merchant, side, token_id: token, qty: String(qty), unit_price: String(unit), nonce: String(nonce), expires_ms: String(expiresMs), signature: Buffer.from(signature).toString("base64") },
   });
+}
+
+// ---------- Google / email login (our Auth0 tenant) ----------
+
+const jwksCache = new Map<string, { keys: (JsonWebKey & { kid?: string })[]; at: number }>();
+
+interface IdClaims {
+  sub: string;
+  email?: string;
+  email_verified?: boolean;
+  name?: string;
+}
+
+/** Verifies an RS256 ID token from our Auth0 tenant (signature, issuer, audience, expiry); throws otherwise. */
+export async function verifyIdToken(token: string, cfg: Config): Promise<IdClaims> {
+  const issuer = `https://${cfg.auth0Domain}/`;
+  const parts = token.split(".");
+  if (parts.length !== 3) throw new HttpError(400, "bad id token");
+  const [h, p, sig] = parts;
+  let header: { alg?: string; kid?: string };
+  let c: { iss?: string; aud?: string | string[]; exp?: number; sub?: string; email?: string; email_verified?: boolean; name?: string };
+  try {
+    header = JSON.parse(Buffer.from(h, "base64url").toString()) as typeof header;
+    c = JSON.parse(Buffer.from(p, "base64url").toString()) as typeof c;
+  } catch {
+    throw new HttpError(400, "bad id token");
+  }
+  if (header.alg !== "RS256") throw new HttpError(401, "unsupported token algorithm");
+  let set = jwksCache.get(issuer);
+  if (!set || Date.now() - set.at > 3600_000 || !set.keys.some((k) => k.kid === header.kid)) {
+    const r = await fetch(`${issuer}.well-known/jwks.json`);
+    if (!r.ok) throw new HttpError(502, "login provider unavailable");
+    set = { ...((await r.json()) as { keys: (JsonWebKey & { kid?: string })[] }), at: Date.now() };
+    jwksCache.set(issuer, set);
+  }
+  const jwk = set.keys.find((k) => k.kid === header.kid);
+  if (!jwk) throw new HttpError(401, "unknown signing key");
+  const ok = verifySignature("RSA-SHA256", Buffer.from(`${h}.${p}`), createPublicKey({ key: jwk, format: "jwk" }), Buffer.from(sig, "base64url"));
+  if (!ok) throw new HttpError(401, "invalid token signature");
+  const aud = Array.isArray(c.aud) ? c.aud : [c.aud];
+  if (c.iss !== issuer || !aud.includes(cfg.auth0ClientId ?? "")) throw new HttpError(401, "token not issued for this game");
+  if (!c.exp || c.exp * 1000 < Date.now()) throw new HttpError(401, "token expired, sign in again");
+  if (!c.sub || c.sub.length > 200) throw new HttpError(401, "token has no subject");
+  return { sub: c.sub, email: c.email, email_verified: c.email_verified, name: c.name };
+}
+
+/** Which game account a verified login owns. A verified email is the identity, so Google and an email code for
+ *  the same address reach the same account; otherwise the login's own subject is. */
+export function identityOf(claims: IdClaims): string {
+  return claims.email && claims.email_verified === true ? `email:${claims.email.trim().toLowerCase()}` : `sub:${claims.sub}`;
+}
+
+interface GuestLink {
+  accountId: string;
+  publicKey: string;
+  signature: string; // base64 ed25519 over `vivolith-link|<guest account>|<sha256 hex of the id token>`
+}
+
+/** Checks that the caller holds this browser's guest key: the guest id derives from the key, and the key signed a
+ *  message bound to this very login token (a proof cannot be replayed for another login). */
+function guestFromProof(link: GuestLink, idToken: string, cfg: Config): string | null {
+  if (!link || typeof link.accountId !== "string" || typeof link.publicKey !== "string" || typeof link.signature !== "string") return null;
+  if (guestIdFor(link.publicKey, cfg.relayerId) !== link.accountId) return null;
+  const msg = `vivolith-link|${link.accountId}|${createHash("sha256").update(idToken).digest("hex")}`;
+  try {
+    return PublicKey.fromString(link.publicKey).verify(new TextEncoder().encode(msg), Buffer.from(link.signature, "base64")) ? link.accountId : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Signs a player in with Google or email. The verified identity always maps to the same game account, created on
+ *  first sign-in with a function-call session key for buy/sell/deal (derived per identity, so every device gets the
+ *  same key). If the browser proves it owns a guest account, the guest's coins, goods and shares move into it. */
+async function social(cfg: Config, req: Request, env: RelayEnv): Promise<Response> {
+  if (!cfg.auth0Domain || !cfg.auth0ClientId) throw new HttpError(503, "sign-in is not configured");
+  if (!(await hit(cfg, `social:${clientIp(req)}`, LIMITS.social.max, LIMITS.social.windowSec))) throw new HttpError(429, "too many sign-ins from this address, try later");
+  const body = await readJson(req);
+  if (typeof body.idToken !== "string" || body.idToken.length > 4000) throw new HttpError(400, "idToken required");
+  const claims = await verifyIdToken(body.idToken, cfg);
+  const identity = identityOf(claims);
+  const secret = (env.NEAR_MERCHANT_SECRET ?? "").trim();
+  if (!secret) throw new HttpError(503, "session keys not configured");
+  const { provider, relayer } = account(cfg);
+  const session = keyPairFromSeed(createHash("sha256").update(`vivolith-session:${identity}:${secret}`).digest());
+  const accountId = `s${createHash("sha256").update(`vivolith-account:${identity}`).digest("hex").slice(0, 16)}.${cfg.relayerId}`;
+  const exists = await provider.viewAccount({ accountId, finality: "final" }).then(() => true, () => false);
+  const txs: string[] = [];
+  if (!exists) {
+    const r = outcome(await relayer.signAndSendTransaction({
+      receiverId: accountId,
+      actions: [actions.createAccount(), actions.transfer(nearToYocto(GUEST_FUNDING)), actions.addFunctionCallAccessKey(session.getPublicKey(), cfg.contractId, [...PLAYER_METHODS])],
+      throwOnFailure: false,
+    }));
+    if (!r.ok) return json(502, { status: "failed", message: r.error });
+    txs.push(r.txHash);
+  }
+  if (!(await view<boolean>(provider, cfg.contractId, "is_registered", { account_id: accountId }))) {
+    const r = outcome(await relayer.callFunctionRaw({ contractId: cfg.contractId, methodName: "register_player", args: { account_id: accountId }, gas: MAX_GAS }));
+    if (!r.ok) return json(502, { status: "failed", message: r.error });
+    txs.push(r.txHash);
+  }
+  let merged: string | null = null;
+  const guest = guestFromProof(body.guest as GuestLink, body.idToken, cfg);
+  if (guest && guest !== accountId && (await view<boolean>(provider, cfg.contractId, "is_registered", { account_id: guest }))) {
+    const r = outcome(await relayer.signAndSendTransaction({
+      receiverId: cfg.contractId,
+      actions: [actions.functionCall("migrate_player", { from: guest, to: accountId }, MAX_GAS, 0n)],
+      throwOnFailure: false,
+    }));
+    if (r.ok) { merged = guest; txs.push(r.txHash); }
+  }
+  const label = (claims.email ?? claims.name ?? "").slice(0, 80);
+  return json(200, { status: "onchain", accountId, sessionKey: session.toString(), label, merged, txHashes: txs });
 }
 
 // ---------- the merchants' autonomous turn ----------
@@ -426,6 +547,7 @@ export async function handle(route: string, req: Request, env: RelayEnv): Promis
     if (route === "settle") return await settle(cfg);
     if (route === "deal") return await deal(cfg, req, env);
     if (route === "tick") return await tick(cfg, env);
+    if (route === "social") return await social(cfg, req, env);
     return json(404, { status: "error", message: "unknown route" });
   } catch (e) {
     if (e instanceof HttpError) return json(e.status, { status: "error", message: e.message });

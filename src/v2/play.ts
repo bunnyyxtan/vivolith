@@ -15,7 +15,7 @@ import {
 } from "../economy/haggle";
 import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
-import { EXPLORER_ACCOUNT, EXPLORER_TX, balances, buyPosted, connectGuest, haggleDeal, marketTick, playerId, receipts as chainReceipts, settleDay, type TxOutcome } from "../near/chain";
+import { EXPLORER_ACCOUNT, EXPLORER_TX, balances, buyPosted, connectGuest, haggleDeal, marketTick, playerId, playerLabel, receipts as chainReceipts, settleDay, socialAvailable, finishSocialRedirect, signInSocial, signOutSocial, type TxOutcome } from "../near/chain";
 
 const GAME_MIN_PER_SEC = 2.4; // 09:00 -> 21:00 in five real minutes
 const FF_MIN_PER_SEC = (7 * MINUTES_PER_DAY) / 60; // a week in a minute
@@ -339,7 +339,8 @@ export async function createPlay(game: Game): Promise<Play> {
       const total = unit * h.qty;
       const s = screenOf(mode.npc.head);
       hud.coins(s.x, s.y, Math.max(4, total));
-      const verb = h.mode === "buy" ? `Bought ${h.qty} mangoes from` : `Sold ${h.qty} mangoes to`;
+      const units = `${h.qty} ${h.qty === 1 ? "mango" : "mangoes"}`;
+      const verb = h.mode === "buy" ? `Bought ${units} from` : `Sold ${units} to`;
       record("haggle", `${verb} ${pname} for ${total} c`, haggleDeal(h.merchant, h.mode, h.good, h.qty, unit), undo);
       mode = { ...mode, line: `${out.message.replace(/\d+ c/, `${total} c`)}${out.gain > 0 ? ` · ${out.gain} c better than the opening` : ""} · rep ${out.repDelta >= 0 ? "+" : ""}${out.repDelta}`, tone: "good", done: RESULT_HOLD };
     } else {
@@ -477,6 +478,7 @@ export async function createPlay(game: Game): Promise<Play> {
     if (input.consumePress("KeyF")) play.interact();
     if (input.consumePress("KeyT")) play.fastForward();
     if (input.consumePress("KeyN") && mode.kind === "walk") void showProof();
+    if (input.consumePress("KeyL") && mode.kind === "walk" && !playerLabel() && socialAvailable()) void signIn();
     if (input.consumePress("KeyI") && mode.kind === "walk" && !ff) {
       const n = market.nearest(player.root.position);
       if (n && TRADERS.includes(n.id as MerchantId)) investIn(n.id as MerchantId);
@@ -551,9 +553,65 @@ export async function createPlay(game: Game): Promise<Play> {
     hud.card.append(f);
   };
 
+  // ---------------------------------------------------------------- account: guest or social/email ----
+  /** The chain is the truth for what the player owns: their purse, bag and shares follow the active account. */
+  const syncPlayer = async (id: string): Promise<void> => {
+    const b = await balances(id).catch(() => null);
+    if (!b || playerId() !== id) return;
+    state.player.coins = b.coin ?? 0;
+    state.player.inventory = { mango: b.mango ?? 0, lemon: b.lemon ?? 0, lassi: b.lassi ?? 0 };
+    for (const m of TRADERS) state.player.shares[m] = b[`share:${m}`] ?? 0;
+    state.flags.account = id;
+    drawBoards(); renderTop(); save();
+  };
+  let signingIn = false;
+  const renderAcct = (): void => {
+    const id = playerId(), label = playerLabel();
+    hud.acct.innerHTML = "";
+    const who = el("div");
+    who.append(el("b", "", !id ? "Offline" : label || "Guest"), el("span", "", id ? `${id.split(".")[0]} · NEAR testnet` : "moves stay in this game"));
+    hud.acct.append(who);
+    if (!id || (!label && !socialAvailable())) return; // sign-in appears once Google/email login is configured
+    const b = el("button", label ? "" : "primary");
+    if (!label) b.append(el("kbd", "", "L"));
+    b.append(document.createTextNode(signingIn ? "Signing in..." : label ? "Sign out" : "Sign in with email or Google"));
+    b.onclick = () => { void (label ? signOut() : signIn()); };
+    hud.acct.append(b);
+  };
+  const signIn = async (): Promise<void> => {
+    if (signingIn || playerLabel()) return;
+    signingIn = true; renderAcct();
+    save(); // a popup-blocked browser redirects to NEAR Auth and back: keep the market as it is
+    try {
+      const r = await signInSocial();
+      hud.toast(`Signed in as ${r.label || r.accountId.split(".")[0]}${r.merged ? " · your guest progress moved with you" : ""}`);
+      await syncPlayer(r.accountId);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "cancelled";
+      if (!/redirecting/.test(msg)) hud.toast(`Sign-in did not finish: ${msg.slice(0, 80)} · still playing as guest`);
+    } finally {
+      signingIn = false; renderAcct();
+    }
+  };
+  const signOut = async (): Promise<void> => {
+    const id = await signOutSocial();
+    renderAcct();
+    if (id) { hud.toast("Signed out · back to this browser's guest account"); await syncPlayer(id); }
+  };
+
   let tickIn = 5;
-  void connectGuest().then((id) => {
-    if (id) hud.toast(`Signed in as guest · ${id.split(".")[0]} on NEAR testnet`);
+  renderAcct();
+  void finishSocialRedirect().then((r) => {
+    if (r) hud.toast(`Signed in as ${r.label || r.accountId.split(".")[0]}${r.merged ? " · your guest progress moved with you" : ""}`);
+    return r;
+  }).catch((e: unknown) => {
+    hud.toast(`Sign-in did not finish: ${e instanceof Error ? e.message.slice(0, 80) : "error"} · still playing as guest`);
+    return null;
+  }).then(() => connectGuest()).then(async (id) => {
+    renderAcct();
+    if (!id) return;
+    hud.toast(playerLabel() ? `Welcome back, ${playerLabel()}` : `Playing as guest · ${id.split(".")[0]} on NEAR testnet`);
+    if (state.flags.account !== id) await syncPlayer(id); // a different account than this save last played
   });
 
   const play: Play = {

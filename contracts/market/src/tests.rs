@@ -255,3 +255,34 @@ fn expired_deal_fails() {
     let (n, e, s) = signed_deal("buy", 1, 6, 1, &signer(1));
     m.deal("pema".into(), "buy".into(), "mango".into(), U128(1), U128(6), n, e, s);
 }
+
+#[test]
+fn migrate_moves_everything_once() {
+    let mut m = market();
+    as_caller("kavi");
+    m.buy(acc("pema.t"), "mango".into(), U128(2), U128(8));
+    as_caller("op");
+    m.register_player(acc("kavi.social"));
+    assert_eq!(m.migrate_player(acc("kavi"), acc("kavi.social")), 2);
+    assert_eq!(bal(&m, "kavi", "coin"), 0);
+    assert_eq!(bal(&m, "kavi", "mango"), 0);
+    assert_eq!(bal(&m, "kavi.social", "coin"), 25 + 9);
+    assert_eq!(bal(&m, "kavi.social", "mango"), 2);
+    assert_eq!(m.migrate_player(acc("kavi"), acc("kavi.social")), 0, "nothing left to move");
+}
+
+#[test]
+#[should_panic(expected = "operator only")]
+fn player_cannot_migrate_others() {
+    let mut m = market();
+    as_caller("kavi");
+    m.migrate_player(acc("pema.t"), acc("kavi"));
+}
+
+#[test]
+#[should_panic(expected = "merchant accounts cannot migrate")]
+fn merchants_cannot_be_migrated() {
+    let mut m = market();
+    as_caller("op");
+    m.migrate_player(acc("pema.t"), acc("kavi"));
+}

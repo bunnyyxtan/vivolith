@@ -53,6 +53,9 @@ const CSS = /* css */ `
 .hud-card ul { margin:0; padding:10px 24px 4px 42px; color:var(--mute); font-size:13px; line-height:1.6; }
 .hud-card footer { padding:14px 24px 20px; }
 .hud-card a, .hud-rc a { color:var(--near); }
+.hud-acct { left:16px; bottom:16px; background:var(--ink); border-left:3px solid var(--near); padding:8px 8px 8px 12px; display:flex; gap:12px; align-items:center; pointer-events:auto; }
+.hud-acct b { display:block; font-size:13px; font-weight:600; } .hud-acct span { display:block; font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--mute); margin-top:2px; }
+.hud-acct button { padding:7px 10px; font-size:13px; }
 .hud-rc { right:16px; top:16px; width:300px; display:flex; flex-direction:column; gap:4px; pointer-events:auto; }
 .hud-rc div { background:var(--ink); padding:8px 12px; font-size:12px; color:var(--mute); border-left:3px solid var(--line); animation:slide .3s ease-out; }
 .hud-rc div b { color:var(--fg); font-weight:600; display:block; font-size:13px; }
@@ -77,6 +80,8 @@ export interface Hud {
   readonly panel: HTMLDivElement;
   readonly card: HTMLDivElement;
   readonly receipts: HTMLDivElement;
+  /** Bottom-left account chip: who is playing (guest or signed in) and the sign-in button. */
+  readonly acct: HTMLDivElement;
   toast(text: string): void;
   coins(fromX: number, fromY: number, n: number): void;
 }
@@ -86,10 +91,10 @@ export function createHud(): Hud {
   style.textContent = CSS;
   document.head.appendChild(style);
   const mk = (cls: string): HTMLDivElement => { const d = el("div", `hud ${cls}`); document.body.appendChild(d); return d; };
-  const top = mk("hud-top"), prompt = mk("hud-prompt"), tip = mk("hud-tip"), panel = mk("hud-panel"), card = mk("hud-card"), receipts = mk("hud-rc"), toastEl = mk("hud-toast");
+  const top = mk("hud-top"), prompt = mk("hud-prompt"), tip = mk("hud-tip"), panel = mk("hud-panel"), card = mk("hud-card"), receipts = mk("hud-rc"), acct = mk("hud-acct"), toastEl = mk("hud-toast");
   let toastTimer = 0;
   return {
-    top, prompt, tip, panel, card, receipts,
+    top, prompt, tip, panel, card, receipts, acct,
     toast(text) {
       toastEl.textContent = text;
       toastEl.style.display = "block";

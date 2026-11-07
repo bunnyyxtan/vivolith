@@ -184,6 +184,26 @@ impl Market {
         }
     }
 
+    /// Moves everything a player owns (coin, goods, stall shares) to another registered account, e.g. a guest's
+    /// progress into the account they signed in with. The relayer calls it only after the guest proved it holds the
+    /// guest key. Returns how many token balances moved.
+    pub fn migrate_player(&mut self, from: AccountId, to: AccountId) -> u32 {
+        self.only_operator();
+        require!(from != to, "same account");
+        require!(self.players.contains(&from) && self.players.contains(&to), "both accounts must be registered");
+        require!(self.merchant_of(&from).is_none() && self.merchant_of(&to).is_none(), "merchant accounts cannot migrate");
+        let mut moved = 0u32;
+        for t in self.all_tokens() {
+            let b = self.bal(&t, &from);
+            if b > 0 {
+                self.move_token(&from, &to, &t, b, "account link");
+                self.push_receipt(&to, "linked", &t, b, 0, &from);
+                moved += 1;
+            }
+        }
+        moved
+    }
+
     /// Spoilage and fees leave the economy.
     pub fn operator_burn(&mut self, account_id: AccountId, token_id: String, amount: U128, reason: String) {
         self.only_operator();

@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@auth0/auth0-spa-js": "2.11.3",
     "near-api-js": "7.4.0",
     "three": "0.187.0"
   },

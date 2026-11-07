@@ -2,6 +2,9 @@
 // (kept in localStorage), the relayer creates a guest account whose only key is a function-call key limited to
 // the game contract's player methods, and every move is a meta-transaction the relayer pays gas for.
 // A move counts as "onchain" only when the relayer returns a tx hash whose outcome succeeded.
+// Social/email login (NEAR Auth): one Auth0 sign-in; the relayer verifies it and opens an account owned by the
+// player's NEAR Auth MPC key, with a game session key for moves, so play continues with no further popups.
+import { Auth0Client } from "@auth0/auth0-spa-js";
 import { Account, JsonRpcProvider, KeyPair, KeyPairSigner, actions, encodeSignedDelegate, teraToGas, type KeyPairString } from "near-api-js";
 
 export const EXPLORER_TX = "https://testnet.nearblocks.io/txns/";
@@ -9,12 +12,18 @@ export const EXPLORER_ACCOUNT = "https://testnet.nearblocks.io/address/";
 const RPC = "https://rpc.testnet.fastnear.com";
 const KEY_STORE = "vivolith.near.key";
 const ACCOUNT_STORE = "vivolith.near.account";
+const LABEL_STORE = "vivolith.near.label";
+const GUEST_KEY_STORE = "vivolith.near.guestKey";
+const GUEST_ACCOUNT_STORE = "vivolith.near.guestAccount";
+
 
 export interface ChainStatus {
   readonly configured: boolean;
   readonly contractId: string;
   readonly relayer: string | null;
   readonly merchants: readonly string[];
+  /** Our Auth0 tenant for Google/email sign-in; null until configured (the sign-in button stays hidden). */
+  readonly auth: { readonly domain: string; readonly clientId: string } | null;
 }
 
 export interface TxOutcome {
@@ -54,13 +63,86 @@ export async function chainStatus(): Promise<ChainStatus> {
     if (!r.ok) throw new Error(String(r.status));
     status = (await r.json()) as ChainStatus;
   } catch {
-    status = { configured: false, contractId: "", relayer: null, merchants: [] };
+    status = { configured: false, contractId: "", relayer: null, merchants: [], auth: null };
   }
   return status;
 }
 
 export const merchantAccount = (id: string): string => `${id}.${status?.relayer ?? ""}`;
 export const playerId = (): string | null => player?.accountId ?? null;
+/** True when Google/email sign-in is available (the relayer has our Auth0 tenant configured). */
+export const socialAvailable = (): boolean => Boolean(status?.auth);
+/** Email or name of a signed-in player; null for guests. */
+export const playerLabel = (): string | null => store.get(LABEL_STORE);
+
+let auth: Auth0Client | null = null;
+const authClient = (): Auth0Client => {
+  if (!status?.auth) throw new Error("sign-in is not available yet");
+  return (auth ??= new Auth0Client({ domain: status.auth.domain, clientId: status.auth.clientId, authorizationParams: { redirect_uri: `${location.origin}/`, scope: "openid profile email" } }));
+};
+
+/** Social/email sign-in: one Auth0 popup (from a click or key press). If the browser blocks popups, the page
+ *  redirects to NEAR Auth instead and finishSocialRedirect() completes it on return. The guest account is parked
+ *  and restored on sign-out. */
+export async function signInSocial(): Promise<{ accountId: string; label: string; merged: boolean }> {
+  try {
+    await authClient().loginWithPopup({ authorizationParams: { prompt: "login" } });
+  } catch (e) {
+    if (!/popup/i.test(e instanceof Error ? e.message : "") || /closed|cancel/i.test(e instanceof Error ? e.message : "")) throw e;
+    await authClient().loginWithRedirect({ authorizationParams: { prompt: "login" } }); // leaves the page
+    throw new Error("redirecting to sign in");
+  }
+  return finishSignIn();
+}
+
+/** Completes a redirect sign-in when the page loads with Auth0's ?code&state. Returns null if not returning. */
+export async function finishSocialRedirect(): Promise<{ accountId: string; label: string; merged: boolean } | null> {
+  const q = new URLSearchParams(location.search);
+  if (!q.has("code") || !q.has("state")) return null;
+  await chainStatus();
+  try {
+    await authClient().handleRedirectCallback();
+  } finally {
+    history.replaceState(null, "", location.pathname); // drop the one-time code from the address bar
+  }
+  return finishSignIn();
+}
+
+/** Proof that this browser owns its guest account, bound to this login token, so its progress can move over. */
+async function guestProof(idToken: string): Promise<{ accountId: string; publicKey: string; signature: string } | null> {
+  const secret = store.get(KEY_STORE), accountId = store.get(ACCOUNT_STORE);
+  if (!secret || !accountId || store.get(LABEL_STORE)) return null; // not a guest right now
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(idToken)));
+  const hex = Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
+  const key = KeyPair.fromString(secret as KeyPairString);
+  const { signature } = key.sign(new TextEncoder().encode(`vivolith-link|${accountId}|${hex}`));
+  return { accountId, publicKey: key.getPublicKey().toString(), signature: btoa(String.fromCharCode(...signature)) };
+}
+
+async function finishSignIn(): Promise<{ accountId: string; label: string; merged: boolean }> {
+  const claims = await authClient().getIdTokenClaims();
+  if (!claims?.__raw) throw new Error("sign-in was cancelled");
+  const r = await post("social", { idToken: claims.__raw, guest: await guestProof(claims.__raw) });
+  if (r.status !== "onchain" || typeof r.accountId !== "string" || typeof r.sessionKey !== "string") throw new Error(String(r.message ?? "sign-in failed"));
+  if (!store.get(GUEST_KEY_STORE) && store.get(KEY_STORE) && !store.get(LABEL_STORE)) { // park the guest
+    store.set(GUEST_KEY_STORE, store.get(KEY_STORE)!);
+    store.set(GUEST_ACCOUNT_STORE, store.get(ACCOUNT_STORE) ?? "");
+  }
+  store.set(KEY_STORE, r.sessionKey);
+  store.set(ACCOUNT_STORE, r.accountId);
+  store.set(LABEL_STORE, String(r.label ?? ""));
+  player = new Account(r.accountId, provider, new KeyPairSigner(KeyPair.fromString(r.sessionKey as KeyPairString)));
+  return { accountId: r.accountId, label: String(r.label ?? ""), merged: Boolean(r.merged) };
+}
+
+/** Back to the guest account this browser had before signing in (its key never left the browser). */
+export async function signOutSocial(): Promise<string | null> {
+  const guestKey = store.get(GUEST_KEY_STORE), guestAccount = store.get(GUEST_ACCOUNT_STORE);
+  for (const k of [LABEL_STORE, KEY_STORE, ACCOUNT_STORE]) { try { localStorage.removeItem(k); } catch { /* ignore */ } }
+  if (guestKey && guestAccount) { store.set(KEY_STORE, guestKey); store.set(ACCOUNT_STORE, guestAccount); }
+  player = null;
+  return connectGuest();
+}
 
 /** Silent guest login. Returns the account id, or null when the relayer is unavailable (game stays local). */
 export async function connectGuest(): Promise<string | null> {
