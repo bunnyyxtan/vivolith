@@ -105,5 +105,5 @@ export function createCameraRig(aspect: number, yaw: number): CameraRig {
 }
 
 const NO_INPUT: Input = {
-  down: () => false, consumePress: () => false, takeLook: () => ({ dx: 0, dy: 0 }), takeWheel: () => 0, locked: false,
+  down: () => false, consumePress: () => false, takeLook: () => ({ dx: 0, dy: 0 }), takeWheel: () => 0, flush: () => undefined, locked: false,
 };

@@ -6,6 +6,8 @@ export interface Input {
   /** accumulated mouse delta since last call */
   takeLook(): { dx: number; dy: number };
   takeWheel(): number;
+  /** Drops queued presses and mouse motion (e.g. keys used in the menu must not act in the game). */
+  flush(): void;
   readonly locked: boolean;
 }
 
@@ -38,6 +40,7 @@ export function createInput(canvas: HTMLCanvasElement): Input {
     consumePress: (c) => pressed.delete(c),
     takeLook() { const r = { dx, dy }; dx = dy = 0; return r; },
     takeWheel() { const w = wheel; wheel = 0; return w; },
+    flush() { pressed.clear(); dx = dy = 0; wheel = 0; },
     get locked() { return isLocked(); },
   };
 }

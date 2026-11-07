@@ -69,6 +69,15 @@ export interface Play {
   fastForward(on?: boolean): void;
   reset(): void;
   readonly mode: string;
+  /** True on a restored save (the menu offers Continue). */
+  readonly restored: boolean;
+  /** While paused (main menu) the market clock and prompts stop; townsfolk keep living. */
+  paused: boolean;
+  /** Leaves the menu: Kavi starts at the south gate (first time) or where he was. */
+  enterWorld(): void;
+  signIn(): Promise<void>;
+  signOut(): Promise<void>;
+  account(): { id: string | null; label: string | null; canSignIn: boolean };
 }
 
 export async function createPlay(game: Game): Promise<Play> {
@@ -76,11 +85,15 @@ export async function createPlay(game: Game): Promise<Play> {
   const market = await createMarket(game.look.scene, game.colliders);
   const hud = createHud();
   market.bind(game.player.body, game.rig.camera);
-  if (market.townSpawn) { // start at the south gate and walk up Market Avenue toward the Spire
+  let entered = false;
+  const enterTown = (): void => {
+    if (!market.townSpawn) return; // start at the south gate and walk up Market Avenue toward the Spire
     game.player.setSpawn(market.townSpawn.clone().setY(market.townSpawn.y + 1), Math.PI);
     game.rig.yaw = Math.PI;
+    game.rig.pitch = 0.26;
+    game.rig.dist = 5.2;
     game.rig.snap(game.player.focus, game.colliders);
-  }
+  };
   const { rig, player, input } = game;
   let mode: Mode = { kind: "walk" };
   let mark = snap(state);
@@ -449,6 +462,7 @@ export async function createPlay(game: Game): Promise<Play> {
 
   const update = (dt: number): void => {
     market.update(dt, player.root.position);
+    if (play.paused) return;
     if (mode.kind === "walk") runClock(dt * (ff ? FF_MIN_PER_SEC : GAME_MIN_PER_SEC));
     const hour = Math.floor(state.minute / 60);
     if (hour !== lastHour) { lastHour = hour; drawBoards(); save(); }
@@ -615,8 +629,17 @@ export async function createPlay(game: Game): Promise<Play> {
   });
 
   const play: Play = {
-    state, market, hud,
+    state, market, hud, restored, paused: true,
     get mode() { return mode.kind; },
+    enterWorld() {
+      if (!entered) { enterTown(); entered = true; }
+      play.paused = false;
+      player.frozen = mode.kind !== "walk";
+      renderAcct();
+    },
+    signIn: () => signIn(),
+    signOut: () => signOut(),
+    account: () => ({ id: playerId(), label: playerLabel(), canSignIn: socialAvailable() }),
     interact() {
       if (mode.kind !== "walk" || ff) return;
       const npc = market.nearest(player.root.position);
@@ -647,7 +670,7 @@ export async function createPlay(game: Game): Promise<Play> {
   drawBoards();
   renderReceipts();
   renderTop();
-  if (restored) hud.toast(`Welcome back · ${clockOf(state.minute)}`);
+
 
   return play;
 }

@@ -11,24 +11,13 @@
     <style>
       html, body { margin: 0; height: 100%; overflow: hidden; background: #8cc4ff; font-family: "Inter Tight", system-ui, sans-serif; }
       canvas#game { display: block; width: 100vw; height: 100vh; }
-      #title { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
-        background: linear-gradient(#5fa8ff, #bfe0ff); color: #fff; transition: opacity .6s; user-select: none; }
-      #title.gone { opacity: 0; pointer-events: none; }
-      #title h1 { margin: 0; font-weight: 700; font-size: clamp(40px, 9vw, 120px); letter-spacing: .28em; padding-left: .28em; text-shadow: 0 4px 30px rgba(20,60,140,.35); }
-      #bar { width: min(280px, 60vw); height: 3px; background: rgba(255,255,255,.35); }
-      #fill { height: 100%; width: 0; background: #fff; transition: width .2s; }
-      #play { font: 600 15px "Inter Tight", system-ui, sans-serif; letter-spacing: .3em; text-transform: uppercase; color: #fff; background: none; border: 0; cursor: pointer; opacity: 0; transition: opacity .4s; padding: 10px 20px; }
-      #play.ready { opacity: 1; }
       #hint { position: fixed; left: 0; right: 0; bottom: 16px; text-align: center; color: rgba(255,255,255,.85); font-size: 13px; letter-spacing: .08em; text-shadow: 0 1px 6px rgba(0,40,100,.6); pointer-events: none; }
     </style>
   </head>
   <body>
     <canvas id="game"></canvas>
-    <div id="title">
-      <h1>VIVOLITH</h1>
-      <div id="bar"><div id="fill"></div></div>
-      <button id="play">Click to play</button>
-    </div>
+    <div id="boot"><h1>VIVOLITH</h1><p></p><div class="rule"><i></i></div></div>
+    <div id="menu"></div>
     <div id="hint">WASD move &middot; F haggle / talk &middot; 1-5 tactics &middot; T fast-forward &middot; Shift run &middot; Space jump &middot; Mouse look &middot; Wheel zoom &middot; Esc release mouse</div>
     <script type="module" src="/src/v2/main.ts"></script>
   </body>

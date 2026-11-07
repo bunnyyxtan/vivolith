@@ -1,20 +1,22 @@
 import { createGame } from "./game";
 import { createPlay } from "./play";
+import { createBoot, createMenu } from "./menu";
 
 const canvas = document.getElementById("game") as HTMLCanvasElement;
-const title = document.getElementById("title")!;
-const fill = document.getElementById("fill") as HTMLElement;
-const play = document.getElementById("play") as HTMLButtonElement;
+const loader = createBoot();
 
 async function boot(): Promise<void> {
-  const game = await createGame(canvas, (p) => { fill.style.width = `${Math.round(p * 100)}%`; });
+  const game = await createGame(canvas, (p) => loader.progress(p * 0.5));
+  // The market (town, merchants, townsfolk) has no progress events: ease the rule toward 95% meanwhile.
+  let eased = 0.5;
+  const ease = window.setInterval(() => { eased += (0.95 - eased) * 0.06; loader.progress(eased); }, 120);
   const gameplay = await createPlay(game);
+  window.clearInterval(ease);
+  const menu = createMenu(game, gameplay);
+  menu.open();
   game.start();
-  play.classList.add("ready");
-  play.addEventListener("click", () => {
-    title.classList.add("gone");
-    void canvas.requestPointerLock?.();
-  });
+  loader.progress(1);
+  window.setTimeout(() => loader.hide(), 350); // the first frames render behind the fading loader
 
   const { look, player, rig, step } = game;
   const post = async (name: string): Promise<string> => {
@@ -45,6 +47,6 @@ async function boot(): Promise<void> {
 }
 
 boot().catch((e: unknown) => {
-  fill.style.background = "#ff6b6b";
+  loader.fail("the city could not load. Reload to try again");
   throw e;
 });
