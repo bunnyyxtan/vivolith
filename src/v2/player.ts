@@ -48,6 +48,7 @@ export async function createPlayer(): Promise<Player> {
   const diff = new THREE.Vector2();
   const focus = new THREE.Vector3();
   let speedNow = 0;
+  let wasGrounded = true;
 
   const player: Player = {
     root, body, heading: Math.PI, frozen: false, focus,
@@ -82,6 +83,11 @@ export async function createPlayer(): Promise<Player> {
         stepBody(colliders, body, vel.x * h, vel.y * h, h);
       }
       speedNow = vel.length();
+      if (body.grounded !== wasGrounded) {
+        // airborne (jump or step off a ledge): one hop clip held at its end; landing hands back to locomotion
+        character.setAction(body.grounded ? null : "Jump", true);
+        wasGrounded = body.grounded;
+      }
 
       if (speedNow > 0.4) {
         let d = Math.atan2(vel.x, vel.y) - player.heading;

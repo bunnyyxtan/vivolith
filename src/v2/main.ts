@@ -1,4 +1,5 @@
 import { createGame } from "./game";
+import { createPlay } from "./play";
 
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 const title = document.getElementById("title")!;
@@ -7,6 +8,7 @@ const play = document.getElementById("play") as HTMLButtonElement;
 
 async function boot(): Promise<void> {
   const game = await createGame(canvas, (p) => { fill.style.width = `${Math.round(p * 100)}%`; });
+  const gameplay = await createPlay(game);
   game.start();
   play.classList.add("ready");
   play.addEventListener("click", () => {
@@ -36,7 +38,7 @@ async function boot(): Promise<void> {
     return Number(t[frames >> 1].toFixed(2));
   };
   (window as unknown as Record<string, unknown>).__v2 = {
-    renderer: look.renderer, scene: look.scene, camera: rig.camera, player, pipeline: look.pipeline, game,
+    renderer: look.renderer, scene: look.scene, camera: rig.camera, player, pipeline: look.pipeline, game, play: gameplay,
     sim: (sec: number) => { for (let i = 0; i < sec * 60; i++) step(1 / 60); },
     shot: post, frameTime,
   };

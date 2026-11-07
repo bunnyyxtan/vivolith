@@ -134,7 +134,9 @@ def v2_plaza(M):
     for a in range(0, 360, 9):
         rad = rngp.uniform(85, 110)
         x, y = math.cos(math.radians(a)) * rad, 40 + math.sin(math.radians(a)) * rad
-        trees += stylised_tree(f"tree_r{k}", x, y, rngp.uniform(7, 12), M, 500 + k)
+        h = rngp.uniform(7, 12)
+        if y > -8 or abs(x) > 62:  # south arc is the town district (build_v2_town.py)
+            trees += stylised_tree(f"tree_r{k}", x, y, h, M, 500 + k)
         k += 1
     # NEAR sign pylon at the promenade entrance (wayfinding, as in the reference).
     box_mesh("V2_pylon", -9.2, 0.0, 0.0, -8.0, 0.35, 3.0, M["fin"], 1.0, None, 0.06)
@@ -142,7 +144,7 @@ def v2_plaza(M):
     box_mesh("V2_pylon_arrow", -8.95, -0.02, 1.35, -8.25, 0.0, 1.45, M["led"], 1.0)
     collider("pylon", -9.2, 0.0, -8.0, 0.35, 0, 3.0)
     # World edge: hedges + low walls far out (believable boundary, never visible as a wall).
-    for name, a, b, c, d in (("edge_s", -60, -20, 60, -19), ("edge_n", -60, 95, 60, 96), ("edge_w", -60, -20, -59, 96), ("edge_e", 59, -20, 60, 96)):
+    for name, a, b, c, d in (("edge_n", -60, 95, 60, 96), ("edge_w", -60, -6, -59, 96), ("edge_e", 59, -6, 60, 96)):
         collider(name, a, b, c, d, 0, 6.0)
     gold_glass = flat_material("v2_lobby_glass", "f5d9a0", 0.25, 0.0, emit="ffcf80", emit_strength=1.6)
     box_mesh("V2_entry_hall", -7.5, 53.0, 0.6, 7.5, 58.0, 5.6, gold_glass, 2.0)

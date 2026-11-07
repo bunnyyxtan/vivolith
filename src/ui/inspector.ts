@@ -66,7 +66,7 @@ export function createInspector(root: HTMLElement, act: InspectorActions): Inspe
           : `<li class="${r.status}">${r.status} · ${esc(r.summary)}${r.message ? ` · ${esc(r.message)}` : ""}</li>`).join("") || "<li>none yet</li>";
       const log = s.log.slice(-6).reverse().map((e) => `<li><time>${clockOf(e.minute)}</time> ${esc(e.text)}</li>`).join("");
       body.innerHTML = `<div class="insp-clock">${clockOf(s.minute)} · you: ${Math.floor(s.player.coins)} c</div>
-        ${merchantRow(s, "pema")}${merchantRow(s, "tomas")}${merchantRow(s, "teahouse")}
+        ${merchantRow(s, "pema")}${merchantRow(s, "tomas")}${merchantRow(s, "arin")}
         <h5>Shipments</h5><p>${ship}</p>
         <h5>Daily close · Pema mango / Tomas mango / lassi</h5><table><tr>${hist || "<td>no full day yet</td>"}</tr></table>
         <h5>Receipts</h5><ul class="insp-receipts">${receipts}</ul>

@@ -8,3 +8,13 @@ Mixamo/
 .env.*
 !.env.example
 *.local
+assets-src/tripo/out/
+assets-src/tripo/library/
+
+.vercel
+.env*
+
+# local tooling, scratch files and third-party reference images (not redistributable)
+.codex/
+blender/Untitled.blend
+assets-src/tripo/ref/

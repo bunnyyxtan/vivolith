@@ -6,13 +6,15 @@ import { createLook, type Look } from "./look";
 import { createPlayer, type Player } from "./player";
 import { createCameraRig, type CameraRig } from "./camera";
 import { createInput, type Input } from "./input";
+import { installBrand } from "./brand";
+import { installTraffic } from "./traffic";
 
 export interface Game {
   readonly look: Look;
   readonly player: Player;
   readonly rig: CameraRig;
   readonly input: Input;
-  readonly colliders: readonly Box[];
+  readonly colliders: Box[];
   /** Per-frame callbacks for later gameplay wiring (dt in seconds). */
   readonly onUpdate: Array<(dt: number) => void>;
   start(): void;
@@ -58,6 +60,8 @@ export async function createGame(canvas: HTMLCanvasElement, progress: (p: number
   look.pipeline.setCamera(rig.camera);
   player.setSpawn(level.spawn, level.facing);
   const onUpdate: Array<(dt: number) => void> = [];
+  installBrand(look.scene, level.colliders, onUpdate); // NEAR City signage, placed once the town has loaded
+  void installTraffic(look.scene, level.colliders, player, onUpdate).catch((e: unknown) => console.warn("traffic", e));
   let time = 0;
 
   const step = (dt: number): void => {

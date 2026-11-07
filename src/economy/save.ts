@@ -8,7 +8,7 @@ export function loadGame(): { state: EconomyState; restored: boolean } {
     const raw = localStorage.getItem(KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as EconomyState;
-      if (parsed && parsed.version === 1 && parsed.merchants?.pema) {
+      if (parsed && parsed.version === 1 && parsed.merchants?.mira && parsed.player?.shares) {
         parsed.receipts ??= []; // saves from before receipts existed
         return { state: parsed, restored: true };
       }

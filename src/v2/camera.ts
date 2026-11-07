@@ -7,7 +7,7 @@ const SENS = 0.0022;
 const KEY_RATE = 2.2; // rad/s for Q/E and arrow-key orbit
 const MIN_PITCH = -0.85, MAX_PITCH = 1.3;
 const MIN_DIST = 2.2, MAX_DIST = 9;
-const SHOULDER = 0.65; // metres to the right of the character
+const SHOULDER = 0; // character centred on screen (was 0.65 m over-the-shoulder)
 const GROUND_CLEARANCE = 0.35;
 const WALL_PAD = 0.3;
 

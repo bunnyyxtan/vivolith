@@ -60,7 +60,7 @@ export const engineer: Conversation = {
             if (r.ok) {
               ctx.econ.flags.labs = "forward";
               adjustRep(ctx.econ, "pema", 3);
-              adjustRep(ctx.econ, "teahouse", 4);
+              adjustRep(ctx.econ, "arin", 4);
               note(ctx.econ, "NEAR Labs matched the Tea House's mango order to Pema's held crates.");
             }
           },
@@ -150,29 +150,29 @@ export const tomas: Conversation = {
   },
 };
 
-export const teahouse: Conversation = {
-  npcId: "teahouse",
-  name: "Marta Okoye",
+export const arin: Conversation = {
+  npcId: "arin",
+  name: "Arin Okoye",
   role: "Saltlight Tea House",
   accent: "#2f8f6b",
-  entry: (s) => (s.merchants.teahouse.status === "closed" ? "closed" : "door"),
+  entry: (s) => (s.merchants.arin.status === "closed" ? "closed" : "door"),
   nodes: {
     door: {
-      speaker: "Marta Okoye",
+      speaker: "Arin Okoye",
       text: (s) =>
-        `Mango lassi, ${quote(s, "teahouse", "lassi").price} coins for you. I buy my mangoes from whoever is cheapest at seven.` +
+        `Mango lassi, ${quote(s, "arin", "lassi").price} coins for you. I buy my mangoes from whoever is cheapest at seven.` +
         (Number(s.flags.forwardQty ?? 0) > 0 ? " This week I pre-paid Pema for her held crates. Don't tell Tomas." : ""),
       choices: [
         {
           label: "One lassi, please.",
-          detail: (s) => `${quote(s, "teahouse", "lassi").price} c`,
-          available: (s) => s.merchants.teahouse.stock.lassi > 0,
-          effect: (ctx) => ctx.toast(playerBuy(ctx.econ, "teahouse", "lassi", 1).message),
+          detail: (s) => `${quote(s, "arin", "lassi").price} c`,
+          available: (s) => s.merchants.arin.stock.lassi > 0,
+          effect: (ctx) => ctx.toast(playerBuy(ctx.econ, "arin", "lassi", 1).message),
           next: "door",
         },
         { label: "Another time.", next: null },
       ],
     },
-    closed: { speaker: "Marta Okoye", text: () => "We're closed tonight. No mangoes, no lassi.", next: null },
+    closed: { speaker: "Arin Okoye", text: () => "We're closed tonight. No mangoes, no lassi.", next: null },
   },
 };

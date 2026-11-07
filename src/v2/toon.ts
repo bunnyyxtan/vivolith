@@ -1,5 +1,6 @@
 // Anime character shading: toon material + inverted-hull ink outline that follows skinning.
 import * as THREE from "three";
+import { mergeVertices } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
 function gradient(steps: number[]): THREE.DataTexture {
   const data = new Uint8Array(steps.length * 4);
@@ -52,8 +53,20 @@ function toToon(src: THREE.Material): THREE.MeshToonMaterial {
   return m;
 }
 
-/** Converts every mesh under root to toon + outline. `thickness` is world metres. */
-export function applyToon(root: THREE.Object3D, thickness = 0.012, ink = "#1a2238"): void {
+/** Outline hull geometry with one averaged normal per position, so hard-edged props (split normals)
+ *  get a closed ink line instead of cracks at every sharp edge. */
+function smoothHull(src: THREE.BufferGeometry): THREE.BufferGeometry {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", src.getAttribute("position"));
+  if (src.index) g.setIndex(src.index);
+  const merged = mergeVertices(g, 1e-4);
+  merged.computeVertexNormals();
+  return merged;
+}
+
+/** Converts every mesh under root to toon + outline. `thickness` is world metres.
+ *  `hardSurface`: static props with split normals (smooth outline hull). */
+export function applyToon(root: THREE.Object3D, thickness = 0.012, ink = "#1a2238", hardSurface = false): void {
   const worldScale = new THREE.Vector3();
   root.updateWorldMatrix(true, true);
   const meshes: THREE.Mesh[] = [];
@@ -76,7 +89,7 @@ export function applyToon(root: THREE.Object3D, thickness = 0.012, ink = "#1a223
       sk.bind(mesh.skeleton, mesh.bindMatrix);
       hull = sk;
     } else {
-      hull = new THREE.Mesh(mesh.geometry, mat);
+      hull = new THREE.Mesh(hardSurface ? smoothHull(mesh.geometry) : mesh.geometry, mat);
     }
     hull.name = `${mesh.name}_outline`;
     hull.frustumCulled = false;

@@ -1,8 +1,8 @@
 // Deterministic market simulation (no randomness): the same choices always give the same city.
 // Time advances in game minutes; rules fire on hour boundaries. Called every frame with real dt,
 // and by fast-forward with large spans. ponytail: mutates state in place (one owner, hot loop).
-import { clockOf, dayOf, MINUTES_PER_DAY, type EconomyState, type Good, type MerchantId } from "./state.ts";
-import { cheapestMango, lassiPrice, quote } from "./pricing.ts";
+import { clockOf, dayOf, MERCHANT_IDS, MINUTES_PER_DAY, type EconomyState, type Good, type MerchantId } from "./state.ts";
+import { DIVIDEND_SHARE, SHARES_PER_STALL, lassiPrice, planMerchantTrades, quote, type MerchantTrade } from "./pricing.ts";
 
 /** Shoppers per open hour wanting each good across the whole market, at a fair price. */
 const HOURLY_DEMAND: Record<Good, number> = { mango: 1.6, lemon: 1.2, lassi: 2.4 };
@@ -11,6 +11,8 @@ const OPEN_FROM = 8;
 const OPEN_UNTIL = 20;
 const RENT_HOUR = 21;
 const LOG_LIMIT = 60;
+/** Tomas's harbor contract lands 140% of his normal stock each morning: the surplus Mira buys up. */
+const TOMAS_CONTRACT_FILL = 1.4;
 
 function log(state: EconomyState, kind: EconomyState["log"][number]["kind"], text: string): void {
   state.log.push({ minute: state.minute, kind, text });
@@ -30,36 +32,54 @@ function sell(state: EconomyState, id: MerchantId, good: Good, wanted: number, p
   const units = Math.min(wanted, m.stock[good]);
   m.stock[good] -= units;
   m.cash += units * price;
+  if (good !== "lassi" || id === "arin") state.flags[`rev.${id}`] = Number(state.flags[`rev.${id}`] ?? 0) + units * price;
   return units;
 }
 
+/** Applies merchant-to-merchant trades (the same plan the merchants' NEAR agents execute on chain). */
+export function applyMerchantTrades(state: EconomyState, trades: readonly MerchantTrade[]): void {
+  for (const t of trades) {
+    const units = sell(state, t.seller, t.good, t.qty, t.price);
+    state.merchants[t.buyer].stock[t.good] += units;
+    state.merchants[t.buyer].cash -= units * t.price;
+    if (units > 0) log(state, "trade", `${state.merchants[t.buyer].name} bought ${units} ${t.good === "mango" ? (units > 1 ? "mangoes" : "mango") : `${t.good}${units > 1 ? "s" : ""}`} from ${state.merchants[t.seller].name} at ${t.price} c (${t.reason.toLowerCase()}).`);
+  }
+}
+
+const FRUIT_SELLERS = MERCHANT_IDS.filter((id) => id !== "arin");
+
+/** Street shoppers per open hour wanting `good` from stall `id` at its current price (fractional units).
+ *  The cheaper a stall is against a fair price, the more of them it draws. Also used by the merchants' NEAR agents. */
+export function shopperWant(state: EconomyState, id: MerchantId, good: Good): number {
+  const m = state.merchants[id];
+  if (m.status !== "open" || !m.sells.includes(good)) return 0;
+  const price = quote(state, id, good, false).price;
+  if (good === "lassi") return HOURLY_DEMAND.lassi * Math.pow((m.baseCost.lassi * 1.5) / price, ELASTICITY);
+  return (HOURLY_DEMAND[good] / FRUIT_SELLERS.length) * Math.pow((m.baseCost[good] * 1.2) / price, ELASTICITY);
+}
+
 function shoppers(state: EconomyState): void {
-  const sold: Record<MerchantId, Record<Good, number>> = {
-    pema: { mango: 0, lemon: 0, lassi: 0 }, tomas: { mango: 0, lemon: 0, lassi: 0 }, teahouse: { mango: 0, lemon: 0, lassi: 0 },
-  };
+  const sold = Object.fromEntries(MERCHANT_IDS.map((id) => [id, { mango: 0, lemon: 0, lassi: 0 }])) as Record<MerchantId, Record<Good, number>>;
   for (const good of ["mango", "lemon"] as const) {
-    for (const id of ["pema", "tomas"] as const) {
+    for (const id of FRUIT_SELLERS) {
       const m = state.merchants[id];
       if (m.status !== "open") continue;
       const price = quote(state, id, good, false).price;
-      const fair = m.baseCost[good] * 1.2;
-      // Shoppers split between the two fruit sellers; the cheaper one draws more of them.
-      const want = (HOURLY_DEMAND[good] / 2) * Math.pow(fair / price, ELASTICITY);
-      sold[id][good] = sell(state, id, good, take(state, `${id}.${good}`, want), price);
+      sold[id][good] = sell(state, id, good, take(state, `${id}.${good}`, shopperWant(state, id, good)), price);
     }
   }
-  const t = state.merchants.teahouse;
+  const t = state.merchants.arin;
   if (t.status === "open") {
     const price = lassiPrice(state).price;
-    const want = HOURLY_DEMAND.lassi * Math.pow((t.baseCost.lassi * 1.5) / price, ELASTICITY);
-    sold.teahouse.lassi = sell(state, "teahouse", "lassi", take(state, "teahouse.lassi", want), price);
+    const want = shopperWant(state, "arin", "lassi");
+    sold.arin.lassi = sell(state, "arin", "lassi", take(state, "arin.lassi", want), price);
     // The kitchen turns mangoes into lassi as glasses run out.
     while (t.stock.lassi < 8 && t.stock.mango > 0) {
       t.stock.mango -= 1;
       t.stock.lassi += 4;
     }
   }
-  for (const id of ["pema", "tomas", "teahouse"] as const) {
+  for (const id of MERCHANT_IDS) {
     const m = state.merchants[id];
     for (const g of ["mango", "lemon", "lassi"] as const) m.recentSales[g] = m.recentSales[g] * 0.7 + sold[id][g] * 0.3;
   }
@@ -80,7 +100,7 @@ function shipments(state: EconomyState): void {
       if (forward > 0 && s.good === "mango") { // pre-paid crates (NEAR Labs forward order) go straight on
         const units = Math.min(forward, state.merchants[s.to].stock.mango);
         state.merchants[s.to].stock.mango -= units;
-        state.merchants.teahouse.stock.mango += units;
+        state.merchants.arin.stock.mango += units;
         state.flags.forwardQty = 0;
         log(state, "trade", `${units} pre-paid crates went from ${state.merchants[s.to].name} to the Tea House.`);
       }
@@ -92,24 +112,13 @@ function hourTick(state: EconomyState, hour: number): void {
   const day = dayOf(state.minute);
   shipments(state);
   if (hour === 6 && state.flags.contract !== "challenged") {
-    // Tomas holds the harbor's standing supply contract: he restocks every morning.
+    // Tomas holds the harbor's standing supply contract: every morning it lands more than he can sell.
     const t = state.merchants.tomas;
-    const need = Math.max(0, t.target.mango - t.stock.mango);
+    const need = Math.max(0, Math.round(t.target.mango * TOMAS_CONTRACT_FILL) - t.stock.mango);
     t.stock.mango += need;
     t.cash -= need * 2;
   }
-  if (hour === 7) {
-    const tea = state.merchants.teahouse;
-    const need = Math.max(0, tea.target.mango - tea.stock.mango);
-    const best = cheapestMango(state);
-    if (need > 0 && best) {
-      const qty = Math.min(need, state.merchants[best.seller].stock.mango, Math.floor(tea.cash / best.price));
-      sell(state, best.seller, "mango", qty, best.price);
-      tea.stock.mango += qty;
-      tea.cash -= qty * best.price;
-      if (qty > 0) log(state, "trade", `Tea House bought ${qty} mangoes from ${state.merchants[best.seller].name} at ${best.price} c.`);
-    }
-  }
+  if (hour === 7 || hour === 14) applyMerchantTrades(state, planMerchantTrades(state));
   if (hour === OPEN_FROM) {
     for (const m of Object.values(state.merchants)) {
       const stockValue = m.sells.reduce((v, g) => v + m.stock[g] * m.baseCost[g], 0);
@@ -133,6 +142,7 @@ function hourTick(state: EconomyState, hour: number): void {
     }
   }
   if (hour === 0) {
+    payDividends(state, day - 1);
     state.history.push({
       day: day - 1,
       pemaMango: quote(state, "pema", "mango", false).price,
@@ -142,6 +152,23 @@ function hourTick(state: EconomyState, hour: number): void {
       pemaOpen: state.merchants.pema.status === "open",
     });
     if (state.history.length > 30) state.history.shift();
+  }
+}
+
+/** Midnight: each stall pays DIVIDEND_SHARE of the day's revenue to its shareholders, pro rata and rounded
+ *  down (the same integer rule as the contract's settle_day); the player's cut lands in their purse. */
+function payDividends(state: EconomyState, day: number): void {
+  for (const id of MERCHANT_IDS) {
+    const m = state.merchants[id];
+    const revenue = Math.floor(Number(state.flags[`rev.${id}`] ?? 0));
+    state.flags[`rev.${id}`] = 0;
+    const pool = Math.min(Math.floor(revenue * DIVIDEND_SHARE), Math.floor(m.cash));
+    const paid = Math.floor((pool * state.player.shares[id]) / SHARES_PER_STALL);
+    if (paid <= 0) continue;
+    m.cash -= paid;
+    state.player.coins += paid;
+    state.flags[`div.${id}`] = Number(state.flags[`div.${id}`] ?? 0) + paid;
+    log(state, "player", `+${paid} c dividend from ${m.shop} (day ${day}: ${revenue} c sales, ${state.player.shares[id]}/${SHARES_PER_STALL} shares).`);
   }
 }
 
@@ -227,7 +254,7 @@ export function challengeStandingContract(state: EconomyState): ActionResult {
 /** Labs insight B: the agent matches the Tea House's mango need to Pema's held crates. The Tea House
  *  pre-pays at cost now; the crates go to it when the shipment lands. */
 export function teahouseForwardBuy(state: EconomyState, qty: number): ActionResult {
-  const tea = state.merchants.teahouse;
+  const tea = state.merchants.arin;
   const price = state.merchants.pema.baseCost.mango;
   const s = state.shipments.find((x) => x.id === "pema-mangoes");
   if (!s || s.status === "delivered") return { ok: false, message: "The shipment already landed." };
@@ -264,4 +291,24 @@ export function addCoins(state: EconomyState, amount: number, why: string): void
 
 export function note(state: EconomyState, text: string): void {
   log(state, "quest", text);
+}
+
+/** The posted price of one stall share (each stall floats 100; the contract's opening asks use the same numbers). */
+export const SHARE_PRICE: Record<MerchantId, number> = { pema: 5, tomas: 9, mira: 7, arin: 6 };
+/** Shares at which a stall is upgraded (awning, lights, fuller shelves). */
+export const UPGRADE_AT = 4;
+
+/** The player buys stall shares: coins go to the merchant (capital, not revenue). */
+export function invest(state: EconomyState, id: MerchantId, shares: number): ActionResult {
+  const m = state.merchants[id];
+  const cost = SHARE_PRICE[id] * shares;
+  if (shares <= 0) return { ok: false, message: "Pick how many shares." };
+  if (state.player.coins < cost) return { ok: false, message: `${shares} shares cost ${cost} c.` };
+  state.player.coins -= cost;
+  m.cash += cost;
+  const before = state.player.shares[id];
+  state.player.shares[id] += shares;
+  log(state, "player", `You bought ${shares} shares of ${m.shop} for ${cost} c.`);
+  if (before < UPGRADE_AT && state.player.shares[id] >= UPGRADE_AT) log(state, "trade", `${m.shop} used the investment to upgrade the stall.`);
+  return { ok: true, message: `Bought ${shares} shares for ${cost} c.` };
 }

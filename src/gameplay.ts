@@ -142,7 +142,7 @@ export function createGameplay(
           `pema-mangoes  30 crates  ${sh.status.toUpperCase()}`,
           sh.status === "held" ? `  queued behind contract cargo` : "",
           sh.status === "held" ? `  auto-release ${clockOf(sh.autoReleaseAt)}` : "",
-          `tea house mango ${econ.merchants.teahouse.stock.mango} · forward order ${econ.flags.forwardQty ?? 0}`,
+          `tea house mango ${econ.merchants.arin.stock.mango} · forward order ${econ.flags.forwardQty ?? 0}`,
           `pema cash ${Math.round(econ.merchants.pema.cash)} c · rent ${econ.merchants.pema.rent} c at 21:00`,
           `vell restock 06:00 ${econ.flags.contract === "challenged" ? "BLOCKED" : "ok"}`,
         ],

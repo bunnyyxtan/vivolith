@@ -1,0 +1,17 @@
+# Never upload secrets, source art, raw downloads or build caches.
+.env
+.env.*
+*.local
+.codex/
+.claude/
+.near-credentials/
+AGENTS.md
+Mixamo/
+assets-src/
+blender/
+contracts/market/target/
+docs/evidence/
+tools/
+New folder/
+*.blend
+*.blend1

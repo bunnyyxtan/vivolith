@@ -5,7 +5,7 @@ import { quote } from "../economy/pricing.ts";
 import { addCoins, adjustRep, note, payReleaseFee, pemaBuysFromTomas, playerBuy } from "../economy/sim.ts";
 import { clockOf } from "../economy/state.ts";
 import type { Choice, Conversation, DialogueContext } from "./dialogue.ts";
-import { engineer, teahouse, tomas } from "./labs.ts";
+import { engineer, arin, tomas } from "./labs.ts";
 import { VENDOR_CONVERSATIONS } from "./vendors.ts";
 
 type Stage = "accepted" | "accepted_hard" | "rival" | "refused" | "rewarded";
@@ -210,4 +210,4 @@ export const harbor: Conversation = {
   },
 };
 
-export const CONVERSATIONS: Record<string, Conversation> = { pema, harbor, tomas, teahouse, engineer, ...VENDOR_CONVERSATIONS };
+export const CONVERSATIONS: Record<string, Conversation> = { pema, harbor, tomas, arin, engineer, ...VENDOR_CONVERSATIONS };

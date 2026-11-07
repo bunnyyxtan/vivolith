@@ -4,12 +4,17 @@ export type Good = "mango" | "lemon" | "lassi";
 export const GOODS: readonly Good[] = ["mango", "lemon", "lassi"];
 export type Stock = Record<Good, number>;
 
-export type MerchantId = "pema" | "tomas" | "teahouse";
+export type MerchantId = "pema" | "tomas" | "mira" | "arin";
+export const MERCHANT_IDS: readonly MerchantId[] = ["pema", "tomas", "mira", "arin"];
+
+/** Trading personality; the rules for each live in pricing.ts. */
+export type Style = "loyal" | "gouger" | "arbitrage" | "steady";
 
 export interface Merchant {
   readonly id: MerchantId;
   readonly name: string;
   readonly shop: string;
+  readonly style: Style;
   /** Goods this merchant sells to shoppers. */
   readonly sells: readonly Good[];
   readonly baseCost: Stock;
@@ -76,7 +81,7 @@ export interface EconomyState {
   minute: number;
   merchants: Record<MerchantId, Merchant>;
   shipments: Shipment[];
-  player: { coins: number; inventory: Stock; rep: Record<MerchantId, number> };
+  player: { coins: number; inventory: Stock; rep: Record<MerchantId, number>; shares: Record<MerchantId, number> };
   /** Fractional shopper demand carried between ticks (keeps the sim deterministic and smooth). */
   carry: Record<string, number>;
   flags: Record<string, string | number | boolean>;
@@ -95,19 +100,25 @@ export function initialEconomy(): EconomyState {
     minute: START_MINUTE,
     merchants: {
       pema: {
-        id: "pema", name: "Auntie Pema", shop: "Pema's Fruit",
+        id: "pema", name: "Auntie Pema", shop: "Pema's Fruit", style: "loyal",
         sells: ["mango", "lemon"], baseCost: stock(3, 1, 0), target: stock(24, 30, 0),
-        greed: 0.15, rent: 40, rentEveryDays: 2,
+        greed: 0.1, rent: 40, rentEveryDays: 2,
         cash: 12, stock: stock(3, 16, 0), recentSales: stock(0, 0, 0), status: "open",
       },
       tomas: {
-        id: "tomas", name: "Tomas Vell", shop: "Vell's Fine Produce",
+        id: "tomas", name: "Tomas Vell", shop: "Vell's Fine Produce", style: "gouger",
         sells: ["mango", "lemon"], baseCost: stock(3, 1, 0), target: stock(30, 30, 0),
-        greed: 0.75, rent: 40, rentEveryDays: 2,
-        cash: 260, stock: stock(28, 30, 0), recentSales: stock(0, 0, 0), status: "open",
+        greed: 0.8, rent: 40, rentEveryDays: 2,
+        cash: 260, stock: stock(40, 30, 0), recentSales: stock(0, 0, 0), status: "open",
       },
-      teahouse: {
-        id: "teahouse", name: "Saltlight Tea House", shop: "Saltlight Tea House",
+      mira: {
+        id: "mira", name: "Mira Sol", shop: "Mira's Exchange", style: "arbitrage",
+        sells: ["mango", "lemon"], baseCost: stock(3, 1, 0), target: stock(12, 12, 0),
+        greed: 0.45, rent: 30, rentEveryDays: 2,
+        cash: 150, stock: stock(0, 4, 0), recentSales: stock(0, 0, 0), status: "open",
+      },
+      arin: {
+        id: "arin", name: "Arin Okoye", shop: "Saltlight Tea House", style: "steady",
         sells: ["lassi"], baseCost: stock(3, 1, 2), target: stock(6, 0, 16),
         greed: 0.3, rent: 30, rentEveryDays: 2,
         cash: 90, stock: stock(2, 0, 8), recentSales: stock(0, 0, 0), status: "open",
@@ -120,7 +131,7 @@ export function initialEconomy(): EconomyState {
         status: "held", arriveAt: null,
       },
     ],
-    player: { coins: 25, inventory: stock(0, 0, 0), rep: { pema: 0, tomas: 0, teahouse: 0 } },
+    player: { coins: 25, inventory: stock(0, 0, 0), rep: { pema: 0, tomas: 0, mira: 0, arin: 0 }, shares: { pema: 0, tomas: 0, mira: 0, arin: 0 } },
     carry: {},
     flags: {},
     log: [{ minute: START_MINUTE, kind: "shipment", text: "Pema's mango shipment is held at the harbor." }],

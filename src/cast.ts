@@ -72,7 +72,7 @@ export const CAST: readonly CastMember[] = [
     schedule: "At his stall all day; restocks from the harbor at 06:00 under his standing contract", radius: 0.3, tier: "named",
   },
   {
-    id: "teahouse", name: "Marta Okoye", role: "Owner · Saltlight Tea House", source: "Martha",
+    id: "arin", name: "Arin Okoye", role: "Owner · Saltlight Tea House", source: "Martha",
     url: "/models/npc_teahouse.glb", height: 1.66, clips: ["Idle", "Talking"],
     appearance: "Woman in a soft blouse and slacks, hair tied back: front-of-house host",
     post: { x: 33.6, y: 0.15, z: -7.3, yaw: 0 }, talk: { x: 33.6, z: -5.2, radius: 2.0, focusY: 1.55 },
