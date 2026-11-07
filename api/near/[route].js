@@ -11796,7 +11796,7 @@ const GUEST_FUNDING = "0.01";
 const MARKET_DAY_MS = 6e5;
 const LIMITS = {
 	guest: {
-		max: 3,
+		max: 5,
 		windowSec: 3600
 	},
 	relay: {

@@ -43,7 +43,7 @@ const GUEST_FUNDING = "0.01"; // account + key storage; guests never pay gas (me
 export const MARKET_DAY_MS = 10 * 60 * 1000;
 
 const LIMITS = {
-  guest: { max: 3, windowSec: 3600 }, // per IP
+  guest: { max: 5, windowSec: 3600 }, // per IP
   relay: { max: 30, windowSec: 60 }, // per player account
   relayIp: { max: 60, windowSec: 60 }, // per IP
   settle: { max: 6, windowSec: 60 }, // global
