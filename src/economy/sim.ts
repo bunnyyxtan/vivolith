@@ -94,7 +94,7 @@ function shipments(state: EconomyState): void {
     }
     if (s.status === "transit" && s.arriveAt !== null && state.minute >= s.arriveAt) {
       s.status = "delivered";
-      state.merchants[s.to].stock[s.good] += s.qty;
+      if (!chainLive(state)) state.merchants[s.to].stock[s.good] += s.qty;
       log(state, "shipment", `${s.qty} ${s.good === "mango" ? "mangoes" : `${s.good}s`} delivered to ${state.merchants[s.to].shop}.`);
       const forward = Number(state.flags.forwardQty ?? 0);
       if (forward > 0 && s.good === "mango") { // pre-paid crates (NEAR Labs forward order) go straight on
@@ -119,6 +119,7 @@ export function reopenGap(state: EconomyState, id: MerchantId): number {
   const m = state.merchants[id];
   if (m.status === "open") return 0;
   const left = state.flags[`reopenNeed.${id}`];
+  if (chainLive(state)) return typeof left === "number" ? Math.max(0, left) : shelfGap(m); // the contract's count
   return typeof left === "number" ? Math.max(0, Math.min(left, shelfGap(m))) : shelfGap(m);
 }
 /** Counts mangoes delivered to a closed stall toward its reopening. Call after the delivery landed. */
@@ -128,6 +129,8 @@ export function recordRestock(state: EconomyState, id: MerchantId, qty: number):
   const left = state.flags[`reopenNeed.${id}`];
   state.flags[`reopenNeed.${id}`] = (typeof left === "number" ? left : shelfGap(m) + qty) - qty;
 }
+/** Mangoes a stall that closes right now must be brought before it reopens (the relayer passes it to charge_rent). */
+export const closingNeed = (state: EconomyState, id: MerchantId): number => Math.max(1, shelfGap(state.merchants[id]));
 /** Reopens a closed stall whose shelves are stocked again; true if it just reopened. */
 export function tryReopen(state: EconomyState, id: MerchantId): boolean {
   const m = state.merchants[id];
@@ -138,9 +141,14 @@ export function tryReopen(state: EconomyState, id: MerchantId): boolean {
   return true;
 }
 
+/** Connected to NEAR: the market's own rules (rent, closures, dividends, merchant trades, shoppers) run on chain and
+ *  arrive by sync; the local model only keeps the clock and the quests. Offline, it runs the whole city itself. */
+export const chainLive = (state: EconomyState): boolean => state.flags.onchain === true;
+
 function hourTick(state: EconomyState, hour: number): void {
   const day = dayOf(state.minute);
   shipments(state);
+  if (chainLive(state)) return;
   if (hour === 6 && state.flags.contract !== "challenged") {
     // Tomas holds the harbor's standing supply contract: every morning it lands more than he can sell.
     const t = state.merchants.tomas;
@@ -178,15 +186,17 @@ function hourTick(state: EconomyState, hour: number): void {
   }
 }
 
-/** Midnight: each stall pays DIVIDEND_SHARE of the day's revenue to its shareholders, pro rata and rounded
- *  down (the same integer rule as the contract's settle_day); the player's cut lands in their purse. */
+/** Midnight: each stall pays DIVIDEND_SHARE of the day's revenue to its shareholders, exactly pro rata: whole coins
+ *  now, the fraction carried to the next day (the same rule as the contract's settle_day). */
 function payDividends(state: EconomyState, day: number): void {
   for (const id of MERCHANT_IDS) {
     const m = state.merchants[id];
     const revenue = Math.floor(Number(state.flags[`rev.${id}`] ?? 0));
     state.flags[`rev.${id}`] = 0;
     const pool = Math.min(Math.floor(revenue * DIVIDEND_SHARE), Math.floor(m.cash));
-    const paid = Math.floor((pool * state.player.shares[id]) / SHARES_PER_STALL);
+    const units = pool * state.player.shares[id] + Number(state.flags[`divDust.${id}`] ?? 0);
+    const paid = Math.floor(units / SHARES_PER_STALL);
+    state.flags[`divDust.${id}`] = units - paid * SHARES_PER_STALL;
     if (paid <= 0) continue;
     m.cash -= paid;
     state.player.coins += paid;
@@ -319,16 +329,22 @@ export function note(state: EconomyState, text: string): void {
   log(state, "quest", text);
 }
 
-/** The posted price of one stall share (each stall floats 100; the contract's opening asks use the same numbers). */
-export const SHARE_PRICE: Record<MerchantId, number> = { pema: 5, tomas: 9, mira: 7, arin: 6 };
-/** Shares at which a stall is upgraded (awning, lights, fuller shelves). */
-export const UPGRADE_AT = 4;
+/** Each stall's share price, exact: `price` coins buy a pack of `per` shares (shares move in whole packs, so no coin
+ *  is rounded). These are the v1 prices per share after the 15-for-1 split (5 c per 15 shares = 1 c per 3), so a
+ *  share is worth what it was; the relayer posts the same packs on chain for sale and for buyback. */
+export const SHARE_PACK: Record<MerchantId, { readonly price: number; readonly per: number }> = {
+  pema: { price: 1, per: 3 }, tomas: { price: 3, per: 5 }, mira: { price: 7, per: 15 }, arin: { price: 2, per: 5 },
+};
+/** Coins for `shares` shares of a stall (`shares` must be whole packs). */
+export const shareCost = (id: MerchantId, shares: number): number => (shares / SHARE_PACK[id].per) * SHARE_PACK[id].price;
+/** Shares at which a stall is upgraded (awning, lights, fuller shelves): a fifth of the stall. */
+export const UPGRADE_AT = 60;
 
 /** The player buys stall shares: coins go to the merchant (capital, not revenue). */
 export function invest(state: EconomyState, id: MerchantId, shares: number): ActionResult {
   const m = state.merchants[id];
-  const cost = SHARE_PRICE[id] * shares;
-  if (shares <= 0) return { ok: false, message: "Pick how many shares." };
+  if (shares <= 0 || shares % SHARE_PACK[id].per !== 0) return { ok: false, message: `Shares come in packs of ${SHARE_PACK[id].per}.` };
+  const cost = shareCost(id, shares);
   if (state.player.coins < cost) return { ok: false, message: `${shares} shares cost ${cost} c.` };
   state.player.coins -= cost;
   m.cash += cost;

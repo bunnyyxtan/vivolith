@@ -4,12 +4,12 @@
 import * as THREE from "three";
 import type { EconomyState, MerchantId } from "../economy/state";
 import { MERCHANT_IDS } from "../economy/state";
-import { reopenGap, SHARE_PRICE } from "../economy/sim";
+import { chainLive, reopenGap, SHARE_PACK } from "../economy/sim";
 import { el, type Hud } from "./hud";
 
 export interface Step {
   readonly id: string;
-  readonly title: string;
+  readonly title: string | ((s: EconomyState) => string);
   readonly detail: (s: EconomyState) => string;
   /** Who to walk to, if anyone. */
   readonly target: MerchantId | null | ((s: EconomyState) => MerchantId);
@@ -26,6 +26,13 @@ export const DELIVERY_PRICE = 6;
 /** The stall the invest lesson points at. Stall shares are a fixed supply on NEAR that earlier players may have
  *  bought, so play.ts writes this from the live order book: Pema while she has shares on sale, else the stall with
  *  the most. With none on sale anywhere it sets `investNone` and the lesson completes without a purchase. */
+/** Who sells the tutorial its mangoes: Tomas, unless the shared market has closed him or emptied his crates. */
+export const tutorSeller = (s: EconomyState): MerchantId => {
+  const ok = (id: MerchantId): boolean => s.merchants[id].status === "open" && s.merchants[id].stock.mango >= 3;
+  return ok("tomas") || !ok("mira") ? "tomas" : "mira";
+};
+export const titleOf = (st: Step, s: EconomyState): string => (typeof st.title === "function" ? st.title(s) : st.title);
+
 export const investTarget = (s: EconomyState): MerchantId => (MERCHANT_IDS as readonly string[]).includes(String(s.flags.investAt)) ? s.flags.investAt as MerchantId : "pema";
 const ownsShares = (s: EconomyState): boolean => MERCHANT_IDS.some((id) => s.player.shares[id] > 0);
 
@@ -41,8 +48,8 @@ export const STEPS: readonly Step[] = [
     done: (s) => f(s, "talkedPema"), reward: "",
   },
   {
-    id: "buy", title: "Buy 3 mangoes from Tomas", target: "tomas",
-    detail: () => "Tomas has more mangoes than he can sell. His stall is across the square.",
+    id: "buy", title: (s) => `Buy 3 mangoes from ${NAMES[tutorSeller(s)]}`, target: tutorSeller,
+    detail: (s) => tutorSeller(s) === "tomas" ? "Tomas has more mangoes than he can sell. His stall is across the square." : "Tomas has none to spare today, but Mira undercuts him anyway. Her stall is up the row.",
     done: (s) => f(s, "boughtTomas"), reward: "The mangoes are in your bag. Press B to look.",
   },
   {
@@ -51,24 +58,26 @@ export const STEPS: readonly Step[] = [
     done: (s) => f(s, "deliveredPema"), reward: "Pema's shelves are full again.",
   },
   {
-    id: "haggle", title: "Haggle with Tomas", target: "tomas",
+    id: "haggle", title: (s) => `Haggle with ${NAMES[tutorSeller(s)]}`, target: tutorSeller,
     detail: () => "Buy again, but press Haggle and try a tactic. Watch his patience.",
     done: (s) => f(s, "haggled"), reward: "You can haggle with every merchant now.",
   },
   {
     id: "invest", title: "Become a stall partner", target: investTarget,
     detail: (s) => {
-      const t = investTarget(s), price = SHARE_PRICE[t];
+      const t = investTarget(s), { price, per } = SHARE_PACK[t];
       return s.player.coins >= price
-        ? `Open the Invest tab at ${NAMES[t]}'s stall and buy at least one share (${price} c each). Every evening you earn part of the stall's sales.`
-        : `A share of ${NAMES[t]}'s stall costs ${price} c and you have ${s.player.coins} c. Trade a little more: buy from Tomas, sell to Pema or Arin.`;
+        ? `Open the Invest tab at ${NAMES[t]}'s stall and buy a pack of shares (${per} for ${price} c). Every evening you earn part of the stall's sales.`
+        : `A pack of ${NAMES[t]}'s shares costs ${price} c and you have ${s.player.coins} c. Trade a little more: buy from Tomas, sell to Pema or Arin.`;
     },
     done: (s) => ownsShares(s) || f(s, "investNone"),
     reward: "You're a partner now: every evening part of that stall's sales comes to you.",
   },
   {
     id: "week", title: "Fast-forward a week", target: null,
-    detail: () => "Press T. Stalls pay rent every second evening. Watch the city trade and see what your shares earn.",
+    detail: (s) => chainLive(s)
+      ? "Press T for a forecast: a week of the city in a minute, run from today's real market. See what your shares could earn."
+      : "Press T. Stalls pay rent every second evening. Watch the city trade and see what your shares earn.",
     done: (s) => f(s, "weekSeen"), reward: "",
   },
 ];
@@ -109,7 +118,7 @@ export function createGuide(hud: Hud): Guide {
     if (i < STEPS.length) {
       const st = STEPS[i];
       const target = typeof st.target === "function" ? st.target(s) : st.target;
-      return { title: st.title, detail: st.detail(s), target, label: `First day · ${i + 1} of ${STEPS.length}` };
+      return { title: titleOf(st, s), detail: st.detail(s), target, label: `First day · ${i + 1} of ${STEPS.length}` };
     }
     // A closed stall comes first: it is the city's most urgent problem and the player can fix it.
     const shut = MERCHANT_IDS.find((id) => s.merchants[id].status !== "open");

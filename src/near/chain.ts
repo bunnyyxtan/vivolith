@@ -218,9 +218,13 @@ export async function haggleDeal(merchant: string, side: "buy" | "sell", token: 
   return act("deal", signed.args as Record<string, unknown>);
 }
 
-/** Buys from a merchant's posted ask (used for stall shares). */
+/** Buys from a merchant's posted ask; for stall shares `maxPrice` caps the total cost. */
 export const buyPosted = (merchant: string, token: string, qty: number, maxPrice: number): Promise<TxOutcome> =>
   act("buy", { seller: merchantAccount(merchant), token_id: token, qty: String(qty), max_price: String(maxPrice) });
+
+/** Sells into a merchant's standing bid; for stall shares `minPrice` is the least total payout. */
+export const sellPosted = (merchant: string, token: string, qty: number, minPrice: number): Promise<TxOutcome> =>
+  act("sell", { buyer: merchantAccount(merchant), token_id: token, qty: String(qty), min_price: String(minPrice) });
 
 export async function balances(accountId: string): Promise<Record<string, number>> {
   const rows = await view<[string, string][]>("get_balances", { account_id: accountId });

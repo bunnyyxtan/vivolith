@@ -11698,6 +11698,15 @@ function cheapestMango(state) {
 /** What a merchant will pay other stalls (and the player) per unit of `good`, or null if not buying. */
 function bidFor(state, id, good) {
 	const m = state.merchants[id];
+	if (m.status !== "open" && good === "mango") {
+		const left = state.flags[`reopenNeed.${id}`];
+		const need = typeof left === "number" ? left : m.target.mango - m.stock.mango;
+		return {
+			price: Math.round(m.baseCost.mango * 1.8),
+			qty: Math.max(1, need),
+			reason: "Restocking to reopen"
+		};
+	}
 	const short = m.target[good] - m.stock[good];
 	if (short <= 0) return null;
 	switch (m.style) {
@@ -11775,12 +11784,32 @@ function shopperWant(state, id, good) {
 	if (good === "lassi") return HOURLY_DEMAND.lassi * Math.pow(m.baseCost.lassi * 1.5 / price, ELASTICITY);
 	return HOURLY_DEMAND[good] / FRUIT_SELLERS.length * Math.pow(m.baseCost[good] * 1.2 / price, ELASTICITY);
 }
-/** The posted price of one stall share (each stall floats 100; the contract's opening asks use the same numbers). */
-const SHARE_PRICE = {
-	pema: 5,
-	tomas: 9,
-	mira: 7,
-	arin: 6
+/** Stock a closed stall needs before it can open again: goods worth three quarters of its rent. */
+const REOPEN_SHARE = .75;
+const stockValue = (m) => m.sells.reduce((v, g) => v + m.stock[g] * m.baseCost[g], 0);
+const shelfGap = (m) => Math.max(0, Math.ceil((m.rent * REOPEN_SHARE - stockValue(m)) / Math.max(1, m.baseCost.mango)));
+/** Mangoes a stall that closes right now must be brought before it reopens (the relayer passes it to charge_rent). */
+const closingNeed = (state, id) => Math.max(1, shelfGap(state.merchants[id]));
+/** Each stall's share price, exact: `price` coins buy a pack of `per` shares (shares move in whole packs, so no coin
+*  is rounded). These are the v1 prices per share after the 15-for-1 split (5 c per 15 shares = 1 c per 3), so a
+*  share is worth what it was; the relayer posts the same packs on chain for sale and for buyback. */
+const SHARE_PACK = {
+	pema: {
+		price: 1,
+		per: 3
+	},
+	tomas: {
+		price: 3,
+		per: 5
+	},
+	mira: {
+		price: 7,
+		per: 15
+	},
+	arin: {
+		price: 2,
+		per: 5
+	}
 };
 // server/near/handlers.ts
 const MAX_BODY = 4096;
@@ -12101,6 +12130,7 @@ async function deal(cfg, req, env) {
 	const id = merchant, good = token, m = st.merchants[id];
 	const posted = offers.find((o) => o.merchant === merchant && o.token_id === token && o.side === (side === "buy" ? "ask" : "bid"));
 	if (side === "buy") {
+		if (m.status !== "open") throw new HttpError(409, "stall is closed");
 		if (!m.sells.includes(good)) throw new HttpError(409, "doesn't sell that");
 		if (m.stock[good] < qty) throw new HttpError(409, m.stock[good] > 0 ? `only ${m.stock[good]} on offer` : "sold out");
 		const p = posted ? Number(posted.price) : quote(st, id, good, false).price;
@@ -12266,12 +12296,28 @@ async function social(cfg, req, env) {
 		txHashes: txs
 	});
 }
+/** Must match IDLE_MS in contracts/market/src/lib.rs: a holder this long without a trade may be bought out. */
+const IDLE_MS = 864e5;
+/** A stall with fewer unsold shares than this (or this many holders, the contract allows 64) redeems idle holders. */
+const IDLE_REDEEM_BELOW = 60;
+const IDLE_REDEEM_HOLDERS = 56;
 /** Game hours of street trade one tick represents (ticks run at most once a minute, globally). */
 const TICK_HOURS = 2;
 const TICK_GAS = teraToGas("30");
-/** Rebuilds the four merchants from their on-chain balances so the shared rules in src/economy run on real state. */
+/** Rebuilds the four merchants from their on-chain balances and stall status so the shared rules in src/economy run
+*  on real state (a closed stall is closed for the planner, the pricing and the Guild alike). */
 async function chainEconomy(provider, cfg) {
 	const st = initialEconomy();
+	st.flags.onchain = true;
+	for (const s of await view(provider, cfg.contractId, "get_stalls", {})) {
+		const id = s.merchant;
+		if (!st.merchants[id]) continue;
+		st.flags[`holders.${id}`] = s.holders;
+		if (!s.open) {
+			st.merchants[id].status = "closed";
+			st.flags[`reopenNeed.${id}`] = Math.max(0, Number(s.need) - Number(s.delivered));
+		}
+	}
 	await Promise.all(MERCHANTS.map(async (id) => {
 		const rows = await view(provider, cfg.contractId, "get_balances", { account_id: `${id}.${cfg.relayerId}` });
 		const b = Object.fromEntries(rows.map(([t, v]) => [t, Number(v)]));
@@ -12320,8 +12366,10 @@ async function guildTurn(cfg, provider, st, day, log) {
 	}
 	for (const id of MERCHANTS) {
 		const m = st.merchants[id], acct = `${id}.${cfg.relayerId}`;
-		if (m.cash < GUILD_FLOAT && fund > 0) {
-			const amount = Math.min(GUILD_FLOAT - m.cash, fund);
+		const rescue = m.status === "open" ? 0 : Number(st.flags[`reopenNeed.${id}`] ?? 0) * (bidFor(st, id, "mango")?.price ?? 0);
+		const float = Math.max(GUILD_FLOAT, rescue);
+		if (m.cash < float && fund > 0) {
+			const amount = Math.min(float - m.cash, fund);
 			if (!await hit(cfg, `guild:${id}:${day}`, 1, Math.ceil(600))) continue;
 			calls.push(...coinMove(guild, acct, amount, "market guild loan"));
 			fund -= amount;
@@ -12351,10 +12399,56 @@ async function tick(cfg, env) {
 	const { provider, relayer } = account(cfg);
 	const st = await chainEconomy(provider, cfg);
 	const posted = new Map((await view(provider, cfg.contractId, "get_offers", {})).map((o) => [orderKey(o), o]));
+	const postedShares = new Map((await view(provider, cfg.contractId, "get_share_offers", {})).map((o) => [`${o.merchant}|${o.side}`, o]));
 	const signerOf = (id) => new Account(`${id}.${cfg.relayerId}`, provider, new KeyPairSigner(merchantKey(id, secret)));
 	const log = [];
 	const txs = [];
 	const day = Math.floor(Date.now() / MARKET_DAY_MS);
+	if (await hit(cfg, `settled:${day - 1}`, 1, Math.ceil(600) * 2)) {
+		const r = outcome(await relayer.signAndSendTransaction({
+			receiverId: cfg.contractId,
+			actions: MERCHANTS.map((merchant) => actions.functionCall("settle_day", {
+				day: day - 1,
+				merchant
+			}, teraToGas("60"), 0n)),
+			throwOnFailure: false
+		}));
+		txs.push(r.txHash);
+		log.push(`dividends for market day ${day - 1} settled${r.ok ? "" : ` FAILED: ${r.error}`}`);
+	}
+	const rentCalls = [];
+	for (const id of MERCHANTS) {
+		const m = st.merchants[id];
+		if (m.status !== "open" || day % m.rentEveryDays !== 0) continue;
+		if (!await hit(cfg, `rent:${id}:${day}`, 1, Math.ceil(600) * 2)) continue;
+		const need = closingNeed(st, id);
+		rentCalls.push(actions.functionCall("charge_rent", {
+			day,
+			merchant: id,
+			rent: String(m.rent),
+			reopen_need: String(need)
+		}, TICK_GAS, 0n));
+		if (m.cash >= m.rent) {
+			m.cash -= m.rent;
+			log.push(`${id} paid ${m.rent} c rent`);
+		} else {
+			m.status = "closed";
+			st.flags[`reopenNeed.${id}`] = Math.max(1, need);
+			log.push(`${id} could not pay ${m.rent} c rent and closed (reopens after ${Math.max(1, need)} mangoes)`);
+		}
+	}
+	if (rentCalls.length) {
+		const r = outcome(await relayer.signAndSendTransaction({
+			receiverId: cfg.contractId,
+			actions: rentCalls,
+			throwOnFailure: false
+		}));
+		txs.push(r.txHash);
+		if (!r.ok) {
+			log.push(`rent FAILED: ${r.error}`);
+			st.merchants = (await chainEconomy(provider, cfg)).merchants;
+		}
+	}
 	const guildCalls = await guildTurn(cfg, provider, st, day, log);
 	if (guildCalls.length) {
 		const r = outcome(await relayer.signAndSendTransaction({
@@ -12388,8 +12482,29 @@ async function tick(cfg, env) {
 				price: String(price)
 			}, TICK_GAS, 0n));
 		};
-		for (const good of m.sells) want("ask", good, m.stock[good], quote(st, id, good, false).price);
-		want("ask", `share:${id}`, Number(st.flags[`treasury.${id}`] ?? 0), SHARE_PRICE[id]);
+		const wantShares = (side, qty) => {
+			const { price, per } = SHARE_PACK[id], cur = postedShares.get(`${id}|${side}`), packs = Math.floor(qty / per) * per;
+			if (packs <= 0) {
+				if (cur) calls.push(actions.functionCall(side === "ask" ? "list" : "bid", {
+					token_id: `share:${id}`,
+					qty: "0",
+					price: "1"
+				}, TICK_GAS, 0n));
+				return;
+			}
+			if (cur && Number(cur.qty) === packs && Number(cur.price) === price && Number(cur.per) === per) return;
+			calls.push(actions.functionCall(side === "ask" ? "list" : "bid", {
+				token_id: `share:${id}`,
+				qty: String(packs),
+				price: String(price),
+				per: String(per)
+			}, TICK_GAS, 0n));
+		};
+		for (const good of m.sells) want("ask", good, m.status === "open" ? m.stock[good] : 0, quote(st, id, good, false).price);
+		const treasury = Number(st.flags[`treasury.${id}`] ?? 0);
+		wantShares("ask", treasury);
+		const spare = Math.max(0, m.cash - m.rent);
+		wantShares("bid", Math.min(300 - treasury, Math.floor(spare / SHARE_PACK[id].price) * SHARE_PACK[id].per));
 		for (const good of ["mango", "lemon"]) {
 			const b = bidFor(st, id, good);
 			want("bid", good, b ? Math.min(b.qty, Math.floor(m.cash / Math.max(1, b.price))) : 0, b?.price ?? 1);
@@ -12404,7 +12519,7 @@ async function tick(cfg, env) {
 			hashes.push(r.txHash);
 			const fc = call.functionCall;
 			const a = JSON.parse(new TextDecoder().decode(fc.args));
-			log.push(`${id} ${fc.methodName === "list" ? "asks" : "bids"} ${a.qty === "0" ? "withdrawn for" : `${a.qty} x ${a.price} c for`} ${a.token_id}${r.ok ? "" : ` FAILED: ${r.error}`}`);
+			log.push(`${id} ${fc.methodName === "list" ? "asks" : "bids"} ${a.qty === "0" ? "withdrawn for" : `${a.qty} x ${a.price} c${a.per ? ` per ${a.per}` : ""} for`} ${a.token_id}${r.ok ? "" : ` FAILED: ${r.error}`}`);
 		}
 		return hashes;
 	}));
@@ -12426,6 +12541,7 @@ async function tick(cfg, env) {
 	const op = [];
 	for (const id of MERCHANTS) {
 		const m = st.merchants[id];
+		if (m.status !== "open") continue;
 		for (const good of m.sells) {
 			const units = Math.min(m.stock[good], Math.floor(shopperWant(st, id, good) * TICK_HOURS));
 			if (units > 0) op.push(actions.functionCall("street_sale", {
@@ -12473,6 +12589,25 @@ async function tick(cfg, env) {
 		}));
 		txs.push(r.txHash);
 		if (!r.ok) log.push(`operator FAILED: ${r.error}`);
+	}
+	const redeem = [];
+	for (const id of MERCHANTS) {
+		const treasury = Number(st.flags[`treasury.${id}`] ?? 0), holders = Number(st.flags[`holders.${id}`] ?? 0);
+		if (treasury >= IDLE_REDEEM_BELOW && holders < IDLE_REDEEM_HOLDERS) continue;
+		const idle = (await view(provider, cfg.contractId, "get_holders", { merchant: id })).filter(([a, , last]) => !MERCHANTS.some((x) => a === `${x}.${cfg.relayerId}`) && Date.now() - Number(last) > IDLE_MS).slice(0, 2);
+		for (const [a] of idle) redeem.push(actions.functionCall("redeem_idle", {
+			merchant: id,
+			holder: a
+		}, TICK_GAS, 0n));
+	}
+	if (redeem.length) {
+		const r = outcome(await relayer.signAndSendTransaction({
+			receiverId: cfg.contractId,
+			actions: redeem,
+			throwOnFailure: false
+		}));
+		txs.push(r.txHash);
+		log.push(`bought back shares from ${redeem.length} idle holder(s)${r.ok ? "" : ` FAILED: ${r.error}`}`);
 	}
 	return json(200, {
 		status: "onchain",

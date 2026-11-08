@@ -24,7 +24,7 @@ export interface Quote {
 
 /** Share of a day's goods revenue a stall pays its shareholders (the contract uses the same 50%). */
 export const DIVIDEND_SHARE = 0.5;
-export const SHARES_PER_STALL = 20;
+export const SHARES_PER_STALL = 300;
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 const pct = (m: number): string => `${m >= 1 ? "+" : ""}${Math.round((m - 1) * 100)}%`;
@@ -138,8 +138,14 @@ export interface Bid {
 /** What a merchant will pay other stalls (and the player) per unit of `good`, or null if not buying. */
 export function bidFor(state: EconomyState, id: MerchantId, good: Good): Bid | null {
   const m = state.merchants[id];
+  if (m.status !== "open" && good === "mango") {
+    // Every closed stall buys mangoes until deliveries reopen it (the contract counts them), whatever its style.
+    const left = state.flags[`reopenNeed.${id}`];
+    const need = typeof left === "number" ? left : m.target.mango - m.stock.mango;
+    return { price: Math.round(m.baseCost.mango * 1.8), qty: Math.max(1, need), reason: "Restocking to reopen" };
+  }
   const short = m.target[good] - m.stock[good];
-  if (short <= 0) return null; // a closed stall keeps buying: restocked shelves are how it reopens
+  if (short <= 0) return null;
   switch (m.style) {
     case "loyal": // restocks once shelves fall under half, pays up to 1.8x cost
       return m.sells.includes(good) && m.stock[good] < m.target[good] * 0.5 ? { price: Math.round(m.baseCost[good] * 1.8), qty: short, reason: "Restocking her shelves" } : null;

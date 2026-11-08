@@ -28,7 +28,7 @@ fn market() -> Market {
     m.register_player(acc("kavi"));
     m.operator_mint(acc("pema.t"), "mango".into(), U128(5), "harbor".into());
     as_caller("pema.t");
-    m.list("mango".into(), U128(5), U128(8));
+    m.list("mango".into(), U128(5), U128(8), None);
     m
 }
 
@@ -73,7 +73,7 @@ fn buy_more_than_offered_fails() {
 fn buy_without_coin_fails() {
     let mut m = market();
     as_caller("pema.t");
-    m.list("mango".into(), U128(5), U128(20));
+    m.list("mango".into(), U128(5), U128(20), None);
     as_caller("kavi");
     m.buy(acc("pema.t"), "mango".into(), U128(2), U128(20));
 }
@@ -91,7 +91,7 @@ fn unregistered_cannot_buy() {
 fn player_cannot_list() {
     let mut m = market();
     as_caller("kavi");
-    m.list("mango".into(), U128(1), U128(1));
+    m.list("mango".into(), U128(1), U128(1), None);
 }
 
 #[test]
@@ -121,13 +121,14 @@ fn register_is_idempotent() {
 #[test]
 fn invest_then_settle_pays_dividend_once() {
     let mut m = market();
-    // Pema floats 20 shares; Kavi buys 5 (25%) at 1 coin, then buys 5 mangoes (40 coin revenue).
+    // Pema floats 300 shares; Kavi buys 75 (25%) at 1 coin per 15, then buys 5 mangoes (40 coin revenue).
     as_caller("pema.t");
-    m.list("share:pema".into(), U128(5), U128(1));
+    m.list("share:pema".into(), U128(75), U128(1), Some(U128(15)));
     as_caller("op");
     m.operator_mint(acc("kavi"), "coin".into(), U128(100), "test".into());
     as_caller("kavi");
-    m.buy(acc("pema.t"), "share:pema".into(), U128(5), U128(1));
+    m.buy(acc("pema.t"), "share:pema".into(), U128(75), U128(5));
+    assert_eq!(bal(&m, "kavi", "share:pema"), 75);
     m.buy(acc("pema.t"), "mango".into(), U128(5), U128(8));
     assert_eq!(m.get_revenue("pema".into()).0, 40, "share sales are capital, not revenue");
     as_caller("op");
@@ -136,15 +137,207 @@ fn invest_then_settle_pays_dividend_once() {
     assert_eq!(m.get_revenue("pema".into()).0, 60);
     let before = bal(&m, "kavi", "coin");
     let s = m.settle_day(1, "pema".into());
-    // pool = 60 * 50% = 30; Kavi's 5/20 = 7 (7.5 rounded down); Pema keeps the rest.
+    // pool = 60 * 50% = 30; Kavi's 75/300 = 7.5: 7 now, the half coin carried (not rounded away).
     assert_eq!(s.pool.0, 30);
     assert_eq!(s.paid.0, 7);
     assert_eq!(bal(&m, "kavi", "coin"), before + 7);
+    assert_eq!(m.get_dust("pema".into(), acc("kavi")).0, 150, "half a coin owed, in 1/300 coin");
     let again = m.settle_day(1, "pema".into());
     assert_eq!(again.paid.0, 7);
     assert_eq!(bal(&m, "kavi", "coin"), before + 7, "settling the same day twice pays once");
     assert_eq!(m.get_revenue("pema".into()).0, 0);
     assert_eq!(m.get_settlements("pema".into(), 1, 5).len(), 1);
+    // Day 2: another 60 revenue: 7.5 + the carried 0.5 = exactly 8.
+    as_caller("op");
+    m.operator_mint(acc("pema.t"), "mango".into(), U128(30), "harbor".into());
+    m.street_sale("pema".into(), "mango".into(), U128(30), U128(2));
+    assert_eq!(m.settle_day(2, "pema".into()).paid.0, 8);
+    assert_eq!(m.get_dust("pema".into(), acc("kavi")).0, 0);
+    assert_eq!(bal(&m, "kavi", "coin"), before + 15, "two days of 25% of 30 = 15 exactly");
+}
+
+/// Writes a v1 (20-share) ledger: pema holds 15 of her shares and asks 10 of them at 5 c; kavi holds 5.
+fn v1_state() {
+    as_caller("op");
+    let mut m = market();
+    let token = "share:pema".to_string();
+    // undo add_merchant's 300 so the ledger looks like v1's 20
+    m.balances.insert((token.clone(), acc("pema.t")), 15);
+    m.balances.insert((token.clone(), acc("kavi")), 5);
+    m.holders.insert(token.clone(), vec![acc("pema.t"), acc("kavi")]);
+    m.supply.insert(token.clone(), 20);
+    m.balances.insert(("share:tomas".to_string(), acc("tomas.t")), 20);
+    m.supply.insert("share:tomas".to_string(), 20);
+    m.asks.insert((acc("pema.t"), token), Order { qty: U128(10), price: U128(5) });
+    m.balances.flush();
+    m.holders.flush();
+    m.supply.flush();
+    m.asks.flush();
+    let v1 = MarketV1 {
+        operator: m.operator,
+        merchants: m.merchants,
+        balances: m.balances,
+        supply: m.supply,
+        players: m.players,
+        asks: m.asks,
+        bids: m.bids,
+        holders: m.holders,
+        revenue: m.revenue,
+        settlements: m.settlements,
+        receipts: m.receipts,
+        used_deals: m.used_deals,
+    };
+    env::state_write(&v1);
+}
+
+#[test]
+fn migrate_splits_15_for_1_and_keeps_ownership() {
+    v1_state();
+    let m = Market::migrate();
+    assert_eq!(bal(&m, "kavi", "share:pema"), 75);
+    assert_eq!(bal(&m, "pema.t", "share:pema"), 225);
+    assert_eq!(m.mt_supply("share:pema".into()).unwrap().0, 300);
+    assert_eq!(bal(&m, "tomas.t", "share:tomas"), 300);
+    assert_eq!(bal(&m, "kavi", "coin"), 25, "coins untouched");
+    assert_eq!(bal(&m, "pema.t", "mango"), 5, "goods untouched");
+    let book = m.get_share_offers();
+    assert_eq!(book.len(), 1);
+    assert_eq!((book[0].qty.0, book[0].price.0, book[0].per.0), (150, 5, 15), "same price: 5 c per 15 = per old share");
+    assert!(m.get_offers().iter().all(|o| !o.token_id.starts_with("share:")));
+    assert!(get_logs().iter().any(|l| l.contains("15-for-1 share split") && l.contains("\"70\"")));
+}
+
+#[test]
+#[should_panic(expected = "ledger does not add up")]
+fn migrate_refuses_an_inconsistent_ledger() {
+    v1_state();
+    let mut v1: MarketV1 = env::state_read().unwrap();
+    v1.balances.insert(("share:pema".to_string(), acc("kavi")), 6); // 21 held of 20
+    v1.balances.flush();
+    env::state_write(&v1);
+    Market::migrate();
+}
+
+/// Pema offers 30 shares at 1 c per 3 and buys back at 1 c per 3; kavi has 25 coin.
+fn share_market() -> Market {
+    let mut m = market();
+    as_caller("pema.t");
+    m.list("share:pema".into(), U128(30), U128(1), Some(U128(3)));
+    m.bid("share:pema".into(), U128(30), U128(1), Some(U128(3)));
+    m
+}
+
+#[test]
+fn shares_trade_in_exact_packs_and_sell_back() {
+    let mut m = share_market();
+    as_caller("kavi");
+    m.buy(acc("pema.t"), "share:pema".into(), U128(9), U128(3));
+    assert_eq!(bal(&m, "kavi", "share:pema"), 9);
+    assert_eq!(bal(&m, "kavi", "coin"), 22);
+    assert_eq!(m.get_revenue("pema".into()).0, 0, "capital, not revenue");
+    m.sell(acc("pema.t"), "share:pema".into(), U128(6), U128(2));
+    assert_eq!(bal(&m, "kavi", "share:pema"), 3);
+    assert_eq!(bal(&m, "kavi", "coin"), 24);
+    assert_eq!(bal(&m, "pema.t", "share:pema"), 297);
+    assert_eq!(m.get_receipts(acc("kavi")).last().unwrap().kind, "cashed out");
+}
+
+#[test]
+#[should_panic(expected = "shares trade in packs of 3")]
+fn shares_cannot_be_split_below_a_pack() {
+    let mut m = share_market();
+    as_caller("kavi");
+    m.buy(acc("pema.t"), "share:pema".into(), U128(4), U128(9));
+}
+
+#[test]
+#[should_panic(expected = "share price moved above your limit")]
+fn share_price_limit_holds() {
+    let mut m = share_market();
+    as_caller("kavi");
+    m.buy(acc("pema.t"), "share:pema".into(), U128(6), U128(1)); // the offer is 2 c for 6 shares
+}
+
+#[test]
+fn rent_is_burned_once_per_day() {
+    let mut m = market();
+    as_caller("op");
+    m.operator_mint(acc("pema.t"), "coin".into(), U128(50), "seed".into());
+    assert!(m.charge_rent(1, "pema".into(), U128(30), U128(6)));
+    assert!(m.charge_rent(1, "pema".into(), U128(30), U128(6)), "idempotent");
+    assert_eq!(bal(&m, "pema.t", "coin"), 20);
+    assert_eq!(m.mt_supply("coin".into()).unwrap().0, 25 + 20, "rent leaves the economy");
+}
+
+#[test]
+fn unpaid_rent_closes_the_stall_until_deliveries_reopen_it() {
+    let mut m = market();
+    as_caller("op");
+    m.operator_mint(acc("pema.t"), "coin".into(), U128(40), "seed".into());
+    m.operator_mint(acc("kavi"), "mango".into(), U128(6), "found".into());
+    assert!(!m.charge_rent(1, "pema".into(), U128(99), U128(5)));
+    assert_eq!(bal(&m, "pema.t", "coin"), 40, "a stall that cannot pay keeps its till");
+    let s = &m.get_stalls()[0];
+    assert!(!s.open);
+    assert_eq!((s.need.0, s.delivered.0), (5, 0));
+    // closed: street shoppers buy nothing (no-op), rent is not charged again
+    m.street_sale("pema".into(), "mango".into(), U128(2), U128(3));
+    assert_eq!(bal(&m, "pema.t", "mango"), 5);
+    assert!(!m.charge_rent(2, "pema".into(), U128(1), U128(5)));
+    // deliveries count up and reopen it
+    as_caller("pema.t");
+    m.bid("mango".into(), U128(10), U128(4), None);
+    as_caller("kavi");
+    m.sell(acc("pema.t"), "mango".into(), U128(3), U128(4));
+    assert_eq!(m.get_stalls()[0].delivered.0, 3);
+    m.sell(acc("pema.t"), "mango".into(), U128(2), U128(4));
+    assert!(m.get_stalls()[0].open, "5 of 5 delivered: open again");
+    m.buy(acc("pema.t"), "mango".into(), U128(1), U128(8));
+}
+
+#[test]
+#[should_panic(expected = "stall is closed")]
+fn a_closed_stall_sells_nothing() {
+    let mut m = market();
+    as_caller("op");
+    m.charge_rent(1, "pema".into(), U128(10), U128(5));
+    as_caller("kavi");
+    m.buy(acc("pema.t"), "mango".into(), U128(1), U128(8));
+}
+
+#[test]
+#[should_panic(expected = "stall is closed")]
+fn a_closed_stall_signs_no_sales() {
+    let mut m = market();
+    as_caller("op");
+    m.charge_rent(1, "pema".into(), U128(10), U128(5));
+    as_caller("kavi");
+    let (n, e, s) = signed_deal("buy", 1, 6, 1, &signer(1));
+    m.deal("pema".into(), "buy".into(), "mango".into(), U128(1), U128(6), n, e, s);
+}
+
+#[test]
+fn idle_holders_are_bought_out_at_the_posted_price() {
+    let mut m = share_market();
+    as_caller("op");
+    m.operator_mint(acc("pema.t"), "coin".into(), U128(10), "seed".into());
+    as_caller("kavi");
+    m.buy(acc("pema.t"), "share:pema".into(), U128(6), U128(2));
+    testing_env!(VMContextBuilder::new().predecessor_account_id(acc("op")).block_timestamp((IDLE_MS + 5) * 1_000_000).build());
+    let r = m.redeem_idle("pema".into(), acc("kavi"));
+    assert_eq!((r.kind.as_str(), r.qty.0, r.price.0), ("redeemed", 6, 2));
+    assert_eq!(bal(&m, "kavi", "share:pema"), 0);
+    assert_eq!(bal(&m, "kavi", "coin"), 25, "paid back what the shares are worth");
+}
+
+#[test]
+#[should_panic(expected = "holder is still active")]
+fn active_holders_are_not_bought_out() {
+    let mut m = share_market();
+    as_caller("kavi");
+    m.buy(acc("pema.t"), "share:pema".into(), U128(3), U128(1));
+    as_caller("op");
+    m.redeem_idle("pema".into(), acc("kavi"));
 }
 
 #[test]
@@ -162,7 +355,7 @@ fn sell_into_bid() {
     m.operator_mint(acc("tomas.t"), "coin".into(), U128(50), "seed".into());
     m.operator_mint(acc("kavi"), "lemon".into(), U128(4), "found".into());
     as_caller("tomas.t");
-    m.bid("lemon".into(), U128(3), U128(4));
+    m.bid("lemon".into(), U128(3), U128(4), None);
     as_caller("kavi");
     m.sell(acc("tomas.t"), "lemon".into(), U128(3), U128(4));
     assert_eq!(bal(&m, "kavi", "lemon"), 1);
