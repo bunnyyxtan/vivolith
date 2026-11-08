@@ -27,7 +27,8 @@ export interface ChainStatus {
 }
 
 export interface TxOutcome {
-  readonly status: "onchain" | "failed" | "local";
+  /** unknown: sent, but no final answer came back; the chain is re-read instead of guessing either way. */
+  readonly status: "onchain" | "failed" | "local" | "unknown";
   readonly txHash?: string;
   readonly message?: string;
 }
@@ -170,29 +171,49 @@ export async function view<T>(method: string, args: Record<string, unknown> = {}
   return (await provider.callFunction({ contractId: s.contractId, method, args, blockQuery: { finality: "optimistic" } })) as unknown as T;
 }
 
-/** Player move as a relayed meta-transaction (retries briefly while a fresh key becomes visible). */
+const SEND_TRIES = 4;
+const RETRY_MS = 1500;
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const errText = (e: unknown, fallback: string): string => (e instanceof Error ? e.message.split("\n")[0].slice(0, 120) : fallback);
+
+/** Player move as a relayed meta-transaction. It is signed once; an attempt with no clear answer resends the same
+ *  bytes, which NEAR accepts at most once (the delegate nonce), so a retry can never pay twice. */
 async function act(method: "buy" | "sell" | "deal", args: Record<string, unknown>): Promise<TxOutcome> {
   if (!player) return { status: "local", message: "offline: not connected to NEAR" };
   const s = await chainStatus();
-  for (let attempt = 0; ; attempt++) {
-    try {
+  let delegate = "";
+  for (let attempt = 0; !delegate; attempt++) {
+    try { // signing sends nothing: retrying it is safe (a fresh guest key can take a moment to become visible)
       const { signedDelegate } = await player.createSignedMetaTransaction({ receiverId: s.contractId, actions: [actions.functionCall(method, args, teraToGas("50"), 0n)], blockHeightTtl: 120 });
-      const bytes = encodeSignedDelegate(signedDelegate);
-      const r = await post("relay", { signedDelegate: btoa(String.fromCharCode(...bytes)) });
-      if (r.status === "onchain" && typeof r.txHash === "string") return { status: "onchain", txHash: r.txHash };
-      return { status: "failed", txHash: typeof r.txHash === "string" && r.txHash ? r.txHash : undefined, message: String(r.message ?? "not recorded") };
+      delegate = btoa(String.fromCharCode(...encodeSignedDelegate(signedDelegate)));
     } catch (e) {
-      if (attempt >= 3) return { status: "failed", message: e instanceof Error ? e.message.split("\n")[0].slice(0, 120) : "relay unreachable" };
-      await new Promise((r) => setTimeout(r, 1200));
+      if (attempt >= SEND_TRIES - 1) return { status: "failed", message: errText(e, "could not sign") };
+      await sleep(RETRY_MS);
     }
   }
+  let sent = false; // an earlier attempt may have reached NEAR
+  for (let attempt = 0; attempt < SEND_TRIES; attempt++) {
+    if (attempt > 0) await sleep(RETRY_MS * attempt);
+    let r: Record<string, unknown>;
+    try { r = await post("relay", { signedDelegate: delegate }); } catch { sent = true; continue; } // network: resend
+    if (r.status === "onchain" && typeof r.txHash === "string") return { status: "onchain", txHash: r.txHash };
+    if (r.status === "duplicate") return sent ? { status: "unknown", message: "sent earlier; checking NEAR" } : { status: "failed", message: "already submitted" };
+    if (r.status === "unknown" || (Number(r.httpStatus) >= 500 && r.status !== "error")) { sent = true; continue; }
+    return { status: "failed", txHash: typeof r.txHash === "string" && r.txHash ? r.txHash : undefined, message: String(r.message ?? "not recorded") };
+  }
+  return sent ? { status: "unknown", message: "no answer from NEAR; checking your balance" } : { status: "failed", message: "relay unreachable" };
 }
 
 /** A haggled deal: the merchant signs the agreed price (server), the player settles it in one tx. */
 export async function haggleDeal(merchant: string, side: "buy" | "sell", token: string, qty: number, unit: number): Promise<TxOutcome> {
   const id = playerId();
   if (!id) return { status: "local", message: "offline: not connected to NEAR" };
-  const signed = await post("deal", { merchant, side, token, qty, unit, player: id }).catch(() => null);
+  let signed: Record<string, unknown> | null = null;
+  for (let attempt = 0; attempt < SEND_TRIES && !signed; attempt++) { // the merchant's signature moves nothing yet
+    if (attempt > 0) await sleep(RETRY_MS);
+    const r = await post("deal", { merchant, side, token, qty, unit, player: id }).catch(() => null);
+    if (r && (r.status === "signed" || Number(r.httpStatus) < 500)) signed = r;
+  }
   if (!signed || signed.status !== "signed") return { status: "failed", message: String(signed?.message ?? "merchant unreachable") };
   return act("deal", signed.args as Record<string, unknown>);
 }

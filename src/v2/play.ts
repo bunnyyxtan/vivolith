@@ -32,14 +32,19 @@ const TICK_EVERY_SEC = 60;
 /** Index of "Haggle with Tomas" in guide.ts STEPS. */
 const HAGGLE_STEP = STEPS.findIndex((s) => s.id === "haggle");
 /** Plain-language reason for a trade the chain refused (raw message stays in the notebook's receipts). */
-const refusal = (msg = ""): string =>
-  /not enough coin/i.test(msg) ? "They couldn't pay that much right now."
-    : /not enough|sold out|only \d+ on offer/i.test(msg) ? "They don't have that many left."
-    : /not buying/i.test(msg) ? "They aren't buying that today."
+/** What a refusal means for the player. The contract says "not enough <token>" for whichever side is short, so
+ *  `side` (the player's) tells whose coins or goods ran out. */
+const refusal = (msg = "", side: "buy" | "sell" = "buy"): string =>
+  /not enough coin/i.test(msg) ? (side === "buy" ? "You don't have enough coins for that." : "They can't pay that much right now.")
+    : /not enough (mango|lemon|lassi)/i.test(msg) ? (side === "buy" ? "They don't have that many left." : "You don't have that many to sell.")
+    : /sold out|only \d+ on offer/i.test(msg) ? "They don't have that many left."
+    : /not buying/i.test(msg) ? "They're fully stocked and not buying right now."
+    : /doesn't sell/i.test(msg) ? "They don't sell that."
+    : /won't go below|won't pay more/i.test(msg) ? `They won't take that price (${msg}).`
     : /slow down|429/i.test(msg) ? "Too many trades at once. Wait a moment."
-    : "The market couldn't confirm that trade.";
-/** Flags a trade can set; undone together with the trade when the chain refuses it. */
-const PROGRESS_FLAGS = ["tut", "boughtTomas", "tutCost", "deliveredPema", "haggled", "soldArin", "reopenedStall"] as const;
+    : /expired/i.test(msg) ? "The handshake took too long. Try again."
+    : /unreachable|offline|could not sign/i.test(msg) ? "Couldn't reach NEAR. Check your connection and try again."
+    : `NEAR refused the trade${msg ? `: ${msg}` : "."}`;
 const MAX_QTY = 10;
 
 const TACTIC_LABEL: Record<"buy" | "sell", Record<Tactic, [string, string]>> = {
@@ -265,22 +270,26 @@ export async function createPlay(game: Game): Promise<Play> {
     nearTimer = window.setTimeout(() => { nearLine.className = "hud-near"; }, 5000);
   };
 
-  /** Records a value move: pending until the chain answers. A refused move is undone in the game too. */
-  const record = (kind: string, summary: string, tx: Promise<TxOutcome>, undo: () => void): void => {
+  /** Sends a value move and changes nothing in the game until NEAR answers: `confirmed` moves the coins and goods
+   *  once the chain has, `refused` explains a refusal (nothing was charged). Either way the wallet is then re-read
+   *  from the chain, and an attempt with no final answer is settled by that re-read instead of a guess. */
+  let inFlight = 0; // value moves sent this session and not yet answered
+  const record = (kind: string, summary: string, tx: Promise<TxOutcome>, confirmed: () => void, refused: (message: string | null) => void): void => {
     const r: Receipt = { id: `${kind}-${state.minute}-${state.receipts.length}`, kind, minute: state.minute, summary, status: "pending" };
     state.receipts.push(r);
-    nearNote((n) => n.append(document.createTextNode("Saving to NEAR…")));
+    inFlight++;
+    nearNote((n) => n.append(document.createTextNode("Processing on NEAR…")));
     void tx.then((o) => {
-      Object.assign(r, { status: o.status, txHash: o.txHash, message: o.message, accountId: playerId() ?? undefined });
+      inFlight--;
+      Object.assign(r, { status: o.status === "unknown" ? "unconfirmed" : o.status, txHash: o.txHash, message: o.message, accountId: playerId() ?? undefined });
+      if (o.status === "onchain" || o.status === "local") confirmed();
       if (o.status === "failed") {
-        undo();
-        hud.toast(`${refusal(o.message)} The trade was undone.`);
-        void syncMerchants();
-        nearNote((n) => n.append(el("i", "", "Not saved · trade undone")), true);
-        drawBoards(); walletKey = "";
+        refused(o.message ?? "");
+        nearNote((n) => n.append(el("i", "", "Not saved · nothing was charged")), true);
+      } else if (o.status === "unknown") {
+        refused(null);
+        nearNote((n) => n.append(el("i", "", "Unconfirmed · wallet re-read from NEAR")), true);
       } else if (o.status === "onchain") {
-        const id = playerId();
-        if (id) void syncPlayer(id); // re-read the account once nothing else is in flight
         nearNote((n) => {
           n.append(el("i", "", "✓ "), document.createTextNode("Saved on NEAR · "));
           const a = el("a", "", "view");
@@ -288,9 +297,20 @@ export async function createPlay(game: Game): Promise<Play> {
           n.append(a);
         });
       }
+      const id = playerId();
+      if (id && o.status !== "local") { void syncPlayer(id); void syncMerchants(); } // the chain is the ledger
+      drawBoards(); walletKey = "";
       save();
     });
   };
+  /** A refusal lands on the merchant's panel if it is still open, else as a toast. null: no final answer came. */
+  const refusedAt = (id: MerchantId, side: "buy" | "sell" = "buy") => (message: string | null): void => {
+    const why = message === null ? "NEAR didn't confirm in time. Your wallet was re-read from the chain." : refusal(message, side);
+    if (mode.kind === "trade" && mode.id === id) { mode = { ...mode, h: null, say: why, tone: "bad", done: RESULT_HOLD }; renderTrade(); }
+    else hud.toast(why);
+  };
+  /** The panel waits on the chain: inputs stay locked (done > 0) until record() answers. */
+  const AWAITING = Number.POSITIVE_INFINITY;
   /** Quest beats are story events, not trades: they stay in the game and say so. */
   const settle = (kind: string, summary: string): void => {
     state.receipts.push({ id: `${kind}-${state.minute}`, kind, minute: state.minute, summary, status: "local", message: "story event" });
@@ -395,6 +415,7 @@ export async function createPlay(game: Game): Promise<Play> {
     mode = { kind: "trade", npc, id, tab, qty: q, say, tone: closed ? "bad" : "", why: false, h: null, done: 0 };
     renderTrade();
     showPanel(npc);
+    if (playerId()) void syncMerchants(); // offers follow the merchant's live wallet (re-renders when it lands)
   };
   const setTab = (tab: Tab): void => {
     if (mode.kind !== "trade" || mode.h) return;
@@ -535,16 +556,6 @@ export async function createPlay(game: Game): Promise<Play> {
     renderTrade();
   };
 
-  /** Snapshot of everything a deal touches, so a deal the chain refuses can be undone exactly. */
-  const keep = (id: MerchantId): (() => void) => {
-    const p = structuredClone(state.player), m = structuredClone(state.merchants[id]);
-    // story progress a deal unlocks rolls back with it: a refused delivery must not finish the step
-    const progress = [...PROGRESS_FLAGS, `reopenNeed.${id}`].map((k) => [k, state.flags[k]] as const);
-    return () => {
-      state.player = p; state.merchants[id] = m;
-      for (const [k, v] of progress) { if (v === undefined) delete state.flags[k]; else state.flags[k] = v; }
-    };
-  };
   const simpleDeal = (): void => {
     if (mode.kind !== "trade" || mode.done > 0) return;
     const { id, tab } = mode;
@@ -554,17 +565,23 @@ export async function createPlay(game: Game): Promise<Play> {
     settleDeal({ merchant: id, good: goodFor(id, tab), mode: tab === "buy" ? "buy" : "sell", qty, unit, open: unit, limit: unit, patience: 100, used: {}, moves: 0, over: "deal" });
   };
 
-  /** Executes a closed deal (simple or haggled) locally, records it on NEAR, and reacts. */
+  /** A closed deal (simple or haggled): checked on a copy, sent to NEAR, and only applied once NEAR confirms it. */
   const settleDeal = (h: HaggleSession): void => {
     if (mode.kind !== "trade") return;
-    const undo = keep(h.merchant);
-    const out = closeDeal(state, h);
-    if (!out.ok) { mode = { ...mode, h: null, say: out.message, tone: "bad", done: RESULT_HOLD }; renderTrade(); return; }
-    const unit = dealUnit(h), total = out.total; // whole coins per unit: exactly what the contract settles
-    const s = screenOf(mode.npc.head);
-    if (h.mode === "sell") hud.coins(s.x, s.y, Math.max(4, total));
-    const name = PERSONALITY[h.merchant].name;
-    record("trade", `${h.mode === "buy" ? "Bought" : "Sold"} ${goodName(h.good, h.qty)} ${h.mode === "buy" ? "from" : "to"} ${name} for ${total} c`, haggleDeal(h.merchant, h.mode, h.good, h.qty, unit), undo);
+    const preview = closeDeal(structuredClone(state), h); // the game's own checks and totals, nothing moved yet
+    if (!preview.ok) { mode = { ...mode, h: null, say: preview.message, tone: "bad", done: RESULT_HOLD }; renderTrade(); return; }
+    const unit = dealUnit(h), total = preview.total; // whole coins per unit: exactly what the contract settles
+    const name = PERSONALITY[h.merchant].name, npc = mode.npc;
+    mode = { ...mode, h: null, say: `Shaking on it: ${total} c. Recording the deal on NEAR…`, tone: "", done: AWAITING };
+    renderTrade();
+    record("trade", `${h.mode === "buy" ? "Bought" : "Sold"} ${goodName(h.good, h.qty)} ${h.mode === "buy" ? "from" : "to"} ${name} for ${total} c`,
+      haggleDeal(h.merchant, h.mode, h.good, h.qty, unit), () => applyDeal(h, npc), refusedAt(h.merchant, h.mode));
+  };
+  /** NEAR settled the deal: move the goods and coins in the game, then react (story beats, reopened stalls). */
+  const applyDeal = (h: HaggleSession, npc: Npc): void => {
+    const out = closeDeal(state, h); // if the local copy was stale this moves nothing; the chain re-read fixes it
+    const total = out.total;
+    if (h.mode === "sell") { const s = screenOf(npc.head); hud.coins(s.x, s.y, Math.max(4, total)); }
     let say = WHO[h.merchant].thanks;
     const i = stepIndex(state);
     if (h.mode === "buy" && h.merchant === "tomas" && i === 2) { state.flags.boughtTomas = true; state.flags.tutCost = total; say = "There you go. Don't tell Pema where you got them."; }
@@ -589,9 +606,8 @@ export async function createPlay(game: Game): Promise<Play> {
       const gap = reopenGap(state, h.merchant);
       say = `Thank you. ${gap} more ${gap === 1 ? "mango" : "mangoes"} and I can open again.`;
     }
-    mode = { ...mode, h: null, say, tone: "good", done: RESULT_HOLD };
+    if (mode.kind === "trade" && mode.id === h.merchant) { mode = { ...mode, h: null, say, tone: "good", done: RESULT_HOLD }; renderTrade(); }
     drawBoards();
-    renderTrade();
     afterProgress();
     save();
   };
@@ -972,11 +988,14 @@ export async function createPlay(game: Game): Promise<Play> {
   // ---------------------------------------------------------------- invest ----
   const investIn = (id: MerchantId): void => {
     if (mode.kind === "trade" && mode.done > 0) return;
-    const undo = keep(id);
-    const r = invest(state, id, SHARE_LOT);
+    const r = invest(structuredClone(state), id, SHARE_LOT); // checks only: shares move once NEAR confirms
     if (!r.ok) { hud.toast(r.message); return; }
     const m = state.merchants[id];
-    record("invest", `Bought ${SHARE_LOT} shares of ${m.shop} for ${SHARE_LOT * SHARE_PRICE[id]} c`, buyPosted(id, `share:${id}`, SHARE_LOT, SHARE_PRICE[id]), undo);
+    if (mode.kind === "trade") { mode = { ...mode, say: "Signing the partnership on NEAR…", tone: "", done: AWAITING }; renderTrade(); }
+    record("invest", `Bought ${SHARE_LOT} shares of ${m.shop} for ${SHARE_LOT * SHARE_PRICE[id]} c`, buyPosted(id, `share:${id}`, SHARE_LOT, SHARE_PRICE[id]), () => applyInvest(id), refusedAt(id));
+  };
+  const applyInvest = (id: MerchantId): void => {
+    invest(state, id, SHARE_LOT);
     // Pema spends part of her partner's money on the harbor's storage fee: her held crates are finally on the way.
     const released = id === "pema" && payReleaseFee(state, "pema-mangoes", "merchant").ok;
     market.say(id, released ? "A partner! I've paid the harbor. My crates are coming!" : id === "pema" ? "A partner! That's tonight's rent, and a new awning." : "Partner! Let's make it worth it.", 4);
@@ -989,7 +1008,7 @@ export async function createPlay(game: Game): Promise<Play> {
   const syncPlayer = async (id: string): Promise<void> => {
     const b = await balances(id).catch(() => null);
     // a trade sent while this read was in flight would be overwritten by the older balances: its own answer wins
-    if (!b || playerId() !== id || state.receipts.some((r) => r.status === "pending")) return;
+    if (!b || playerId() !== id || inFlight > 0) return;
     state.player.coins = b.coin ?? 0;
     state.player.inventory = { mango: b.mango ?? 0, lemon: b.lemon ?? 0, lassi: b.lassi ?? 0 };
     for (const m of TRADERS) state.player.shares[m] = b[`share:${m}`] ?? 0;

@@ -253,13 +253,21 @@ async function relay(cfg: Config, req: Request): Promise<Response> {
   const sender = decoded.delegateAction.senderId;
   if (!(await hit(cfg, `relay:${sender}`, LIMITS.relay.max, LIMITS.relay.windowSec))) throw new HttpError(429, "slow down");
   const { relayer } = account(cfg);
-  const r = outcome(
-    await relayer.signAndSendTransaction({
-      receiverId: sender,
-      actions: [actions.signedDelegate(decoded as never)],
-      throwOnFailure: false,
-    }),
-  );
+  let raw: unknown;
+  try {
+    raw = await relayer.signAndSendTransaction({ receiverId: sender, actions: [actions.signedDelegate(decoded as never)], throwOnFailure: false });
+  } catch (e) {
+    // Sent but unanswered (timeout, dropped connection): it may still land. The client resends these exact bytes,
+    // which the chain accepts at most once (the delegate nonce), so "unknown" is safe to retry and never doubles.
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/DelegateActionInvalidNonce|DelegateActionNonce/i.test(msg)) return json(409, { status: "duplicate", accountId: sender, message: "already submitted" });
+    if (/DelegateActionExpired|InvalidSignature|DelegateActionInvalidSignature|AccessKeyNotFound/i.test(msg)) return json(422, { status: "failed", accountId: sender, message: msg.split("\n")[0].slice(0, 160) });
+    return json(504, { status: "unknown", accountId: sender, message: "no answer from NEAR yet" });
+  }
+  if (/DelegateActionInvalidNonce|DelegateActionNonce/.test(JSON.stringify(raw))) {
+    return json(409, { status: "duplicate", accountId: sender, message: "already submitted" });
+  }
+  const r = outcome(raw);
   return json(r.ok ? 200 : 422, { status: r.ok ? "onchain" : "failed", txHash: r.txHash, accountId: sender, contractId: cfg.contractId, message: r.error });
 }
 
@@ -287,14 +295,28 @@ async function deal(cfg: Config, req: Request, env: RelayEnv): Promise<Response>
   if (!/^[a-z0-9._-]{2,64}$/.test(player)) throw new HttpError(400, "bad account id");
   if (!(await hit(cfg, `deal:${player}`, LIMITS.deal.max, LIMITS.deal.windowSec))) throw new HttpError(429, "slow down");
   const { provider } = account(cfg);
-  if (!(await view<boolean>(provider, cfg.contractId, "is_registered", { account_id: player }))) throw new HttpError(403, "player not registered");
-  const offers = await view<OfferRow[]>(provider, cfg.contractId, "get_offers", {});
+  // Judge the deal on the merchant's live balances with the same rules the game shows (src/economy/pricing.ts).
+  // The posted order book is only a snapshot from the last market turn: Arin's kitchen burns mangoes every turn,
+  // so his bid was withdrawn and re-posted minute by minute while the game still offered the sale.
+  const [registered, offers, st] = await Promise.all([
+    view<boolean>(provider, cfg.contractId, "is_registered", { account_id: player }),
+    view<OfferRow[]>(provider, cfg.contractId, "get_offers", {}),
+    chainEconomy(provider, cfg),
+  ]);
+  if (!registered) throw new HttpError(403, "player not registered");
+  const id = merchant as MerchantId, good = token as "mango" | "lemon" | "lassi", m = st.merchants[id];
   const posted = offers.find((o) => o.merchant === merchant && o.token_id === token && o.side === (side === "buy" ? "ask" : "bid"));
-  if (!posted) throw new HttpError(409, side === "buy" ? "sold out" : "not buying that today");
-  const p = Number(posted.price);
-  if (side === "buy" && unit < Math.floor(p * HAGGLE_FLOOR)) throw new HttpError(409, `won't go below ${Math.floor(p * HAGGLE_FLOOR)} c`);
-  if (side === "sell" && unit > Math.ceil(p * HAGGLE_CEILING)) throw new HttpError(409, `won't pay more than ${Math.ceil(p * HAGGLE_CEILING)} c`);
-  if (side === "buy" && qty > Number(posted.qty)) throw new HttpError(409, `only ${posted.qty} on offer`);
+  if (side === "buy") {
+    if (!m.sells.includes(good)) throw new HttpError(409, "doesn't sell that");
+    if (m.stock[good] < qty) throw new HttpError(409, m.stock[good] > 0 ? `only ${m.stock[good]} on offer` : "sold out");
+    const p = posted ? Number(posted.price) : quote(st, id, good, false).price;
+    if (unit < Math.floor(p * HAGGLE_FLOOR)) throw new HttpError(409, `won't go below ${Math.floor(p * HAGGLE_FLOOR)} c`);
+  } else {
+    const p = bidFor(st, id, good)?.price ?? null;
+    if (p === null) throw new HttpError(409, "not buying that today");
+    if (unit > Math.ceil(p * HAGGLE_CEILING)) throw new HttpError(409, `won't pay more than ${Math.ceil(p * HAGGLE_CEILING)} c`);
+    if (m.cash < qty * unit) throw new HttpError(409, "not enough coin to pay that");
+  }
   const secret = (env.NEAR_MERCHANT_SECRET ?? "").trim();
   if (!secret) throw new HttpError(503, "merchant keys not configured");
   const nonce = Date.now() * 1000 + Math.floor(Math.random() * 1000);
