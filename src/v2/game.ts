@@ -4,7 +4,7 @@ import { loadGLB, prepareModel } from "../assets";
 import type { Box } from "../physics/collision";
 import { createLook, type Look } from "./look";
 import { createPlayer, type Player } from "./player";
-import { createCameraRig, type CameraRig } from "./camera";
+import { createCameraRig, NO_INPUT, type CameraRig } from "./camera";
 import { createInput, type Input } from "./input";
 import { installBrand } from "./brand";
 import { installTraffic } from "./traffic";
@@ -67,10 +67,11 @@ export async function createGame(canvas: HTMLCanvasElement, progress: (p: number
   const step = (dt: number): void => {
     time += dt;
     player.update(dt, input, rig.yaw, level.colliders);
-    rig.update(dt, input, player.focus, level.colliders);
+    rig.update(dt, input.ui ? NO_INPUT : input, player.focus, level.colliders);
     look.followSun(player.root.position);
     look.updateSky(time, rig.camera.position);
     for (const f of onUpdate) f(dt);
+    input.setUi(player.frozen); // any panel or menu freezes Kavi: free the cursor and park the camera controls
   };
   rig.snap(player.focus, level.colliders);
 

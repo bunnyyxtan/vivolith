@@ -186,7 +186,7 @@ export function createMenu(game: Game, play: Play): { open(): void } {
 
   window.addEventListener("keydown", (e) => {
     if (!isOpen) {
-      if (e.code === "Escape" && started && play.mode === "walk" && !document.pointerLockElement) menu.open();
+      if (e.code === "Escape" && started && play.mode === "walk" && !document.pointerLockElement && !game.input.escapeReleasedLock) menu.open();
       return;
     }
     if (sheet === "new") {

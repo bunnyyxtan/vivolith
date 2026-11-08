@@ -630,7 +630,6 @@ export async function createPlay(game: Game): Promise<Play> {
     player.heading = Math.atan2(dx, dz);
     player.frozen = true;
     npc.talking = true;
-    if (document.pointerLockElement) document.exitPointerLock();
   };
   const openTalk = (npc: Npc, convo?: Conversation): void => {
     const c = convo ?? CONVERSATIONS[npc.id];
@@ -655,7 +654,6 @@ export async function createPlay(game: Game): Promise<Play> {
     if (mode.kind === "trade" || mode.kind === "talk") { mode.npc.talking = false; hidePanel(); }
     mode = { kind: "card" };
     player.frozen = true;
-    if (document.pointerLockElement) document.exitPointerLock();
     hud.card.innerHTML = "";
     build(hud.card);
     hud.back.style.display = "block";
