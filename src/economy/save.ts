@@ -10,6 +10,9 @@ export function loadGame(): { state: EconomyState; restored: boolean } {
       const parsed = JSON.parse(raw) as EconomyState;
       if (parsed && parsed.version === 1 && parsed.merchants?.mira && parsed.player?.shares) {
         parsed.receipts ??= []; // saves from before receipts existed
+        // A move still waiting when the page closed is never resent (no duplicates); the chain decides what it did,
+        // since the player's balances are re-read from NEAR on connect.
+        for (const r of parsed.receipts) if (r.status === "pending") Object.assign(r, { status: "unconfirmed", message: "the page closed before NEAR answered" });
         return { state: parsed, restored: true };
       }
     }

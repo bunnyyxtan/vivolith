@@ -32,6 +32,9 @@ const CSS = /* css */ `
 #menu li small { display:block; font-size:13px; font-weight:400; color:rgba(255,255,255,.7); margin-top:2px; letter-spacing:.02em; }
 #menu .sheet { margin-top:26px; max-width:440px; font-size:15px; line-height:1.55; color:rgba(255,255,255,.92); text-shadow:0 1px 8px rgba(0,20,50,.6); }
 #menu .sheet b { color:#fff; } #menu .sheet kbd { font:700 12px "Inter Tight",system-ui,sans-serif; background:#fff; color:#10151f; padding:1px 6px; border-radius:2px; margin-right:6px; }
+#menu .sheet .confirm { display:flex; gap:10px; }
+#menu .sheet button { font:600 14px "Inter Tight",system-ui,sans-serif; color:#fff; background:rgba(10,20,40,.35); border:1px solid rgba(255,255,255,.7); padding:7px 12px 7px 8px; cursor:pointer; }
+#menu .sheet button:hover { background:#fff; color:#10151f; }
 #menu .sheet table { border-collapse:collapse; } #menu .sheet td { padding:3px 18px 3px 0; vertical-align:top; }
 #menu .foot { position:absolute; left:clamp(24px, 7.5vw, 144px); bottom:28px; right:16px; font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:rgba(255,255,255,.7); text-shadow:0 1px 6px rgba(0,20,50,.6); }
 body.in-menu .hud, body.in-menu #hint { display:none !important; }
@@ -151,7 +154,7 @@ export function createMenu(game: Game, play: Play): { open(): void } {
       <p>Look at a chalkboard to see why a price is what it is. Every deal and share is recorded on NEAR testnet, with no wallet popups.</p></div>`;
     if (sheet === "new") return `<div class="sheet">
       <p><b>Start the market over?</b> The city resets to Day 1. Coins, goods and shares you hold on NEAR stay in your account.</p>
-      <p><kbd>Enter</kbd>Start over &nbsp; <kbd>Esc</kbd>Keep playing</p></div>`;
+      <p class="confirm"><button data-act="reset"><kbd>Enter</kbd>Start over</button><button data-act="keep"><kbd>Esc</kbd>Keep playing</button></p></div>`;
     return "";
   };
 
@@ -169,6 +172,8 @@ export function createMenu(game: Game, play: Play): { open(): void } {
       li.onclick = () => it.run();
       ul.append(li);
     });
+    root.querySelector<HTMLButtonElement>("[data-act=reset]")?.addEventListener("click", () => play.reset());
+    root.querySelector<HTMLButtonElement>("[data-act=keep]")?.addEventListener("click", () => { sheet = ""; render(); });
   };
 
   // The guest account connects in the background: refresh the status line and items when it does.

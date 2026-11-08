@@ -164,7 +164,9 @@ export async function createPlay(game: Game): Promise<Play> {
   window.addEventListener("mousemove", (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
   let entered = false;
   /** Saves the market and, once the player is in the world, where Kavi stands and faces. */
+  let resetting = false; // New Game: the reload's pagehide must not write the cleared save back
   const save = (): void => {
+    if (resetting) return;
     if (entered) {
       const b = player.body; // the physics body is authoritative; the visual root lags a frame behind it
       Object.assign(state.flags, { px: Math.round(b.x * 100) / 100, py: Math.round(b.y * 100) / 100, pz: Math.round(b.z * 100) / 100, ph: Math.round(player.heading * 1000) / 1000 });
@@ -257,6 +259,8 @@ export async function createPlay(game: Game): Promise<Play> {
         nearNote((n) => n.append(el("i", "", "Not saved · trade undone")), true);
         drawBoards(); walletKey = "";
       } else if (o.status === "onchain") {
+        const id = playerId();
+        if (id) void syncPlayer(id); // re-read the account once nothing else is in flight
         nearNote((n) => {
           n.append(el("i", "", "✓ "), document.createTextNode("Saved on NEAR · "));
           const a = el("a", "", "view");
@@ -966,7 +970,8 @@ export async function createPlay(game: Game): Promise<Play> {
   /** The chain is the truth for what the player owns: their purse, bag and shares follow the active account. */
   const syncPlayer = async (id: string): Promise<void> => {
     const b = await balances(id).catch(() => null);
-    if (!b || playerId() !== id) return;
+    // a trade sent while this read was in flight would be overwritten by the older balances: its own answer wins
+    if (!b || playerId() !== id || state.receipts.some((r) => r.status === "pending")) return;
     state.player.coins = b.coin ?? 0;
     state.player.inventory = { mango: b.mango ?? 0, lemon: b.lemon ?? 0, lassi: b.lassi ?? 0 };
     for (const m of TRADERS) state.player.shares[m] = b[`share:${m}`] ?? 0;
@@ -1031,7 +1036,7 @@ export async function createPlay(game: Game): Promise<Play> {
     renderAcct();
     if (!id) return;
     void syncMerchants();
-    if (state.flags.account !== id) await syncPlayer(id); // a different account than this save last played
+    await syncPlayer(id); // NEAR is authoritative: the save only mirrors what the account holds
   });
 
   const play: Play = {
@@ -1086,7 +1091,7 @@ export async function createPlay(game: Game): Promise<Play> {
       if (want && !ff && mode.kind === "walk") { ff = { from: snap(state), until: nextRent(state.minute + (FF_MAX_DAYS - 1) * MINUTES_PER_DAY) }; walletKey = ""; }
       else if (!want && ff) { const from = ff.from; ff = null; showReport("Fast-forward stopped", from, true); }
     },
-    reset() { clearSave(); location.reload(); },
+    reset() { resetting = true; clearSave(); location.reload(); },
   };
 
   window.addEventListener("keydown", (e) => {

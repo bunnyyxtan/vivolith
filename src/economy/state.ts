@@ -61,13 +61,14 @@ export interface DaySample {
   readonly pemaOpen: boolean;
 }
 
-/** A deal receipt and its NEAR settlement status. "local" = never sent to the chain (said so in the UI). */
+/** A deal receipt and its NEAR settlement status. "local" = never sent to the chain (said so in the UI).
+ *  "unconfirmed" = the page closed before NEAR answered: never resent, balances are re-read from the chain. */
 export interface Receipt {
   readonly id: string;
   readonly kind: string;
   readonly minute: number;
   readonly summary: string;
-  status: "pending" | "onchain" | "local" | "failed";
+  status: "pending" | "onchain" | "local" | "failed" | "unconfirmed";
   txHash?: string;
   accountId?: string;
   contractId?: string;
