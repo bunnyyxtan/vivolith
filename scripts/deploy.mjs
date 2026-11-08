@@ -12,7 +12,7 @@ if (dirty) {
 }
 const commit = sh("git rev-parse --short HEAD");
 console.log(`Deploying ${commit} (${sh("git log -1 --format=%s")})`);
-const url = sh(`npx vercel deploy --prod --yes --build-env VIVOLITH_COMMIT=${commit}`).split(/\s+/).pop();
+const url = /https:\/\/[\w.-]+\.vercel\.app/.exec(sh(`npx vercel deploy --prod --yes --build-env VIVOLITH_COMMIT=${commit}`))?.[0];
 console.log(`Deployment ${url}`);
 
 const html = await (await fetch(`${LIVE}?v=${Date.now()}`, { headers: { "cache-control": "no-cache" } })).text();
