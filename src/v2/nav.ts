@@ -1,7 +1,10 @@
 // Coarse walkable grid + A* over the collider boxes, for townsfolk path-finding.
 // Cells are blocked by any box that would stop a standing person (same rule as pushOut at ground level).
 // ponytail: static snapshot, rebuilt when the collider count changes; add dynamic obstacles if doors/props move.
-import { STEP_HEIGHT, type Box } from "../physics/collision";
+import type { Box } from "../physics/collision";
+
+/** Townsfolk step up curbs and stairs but walk around anything taller (planters, low walls, bench seats). */
+export const NPC_STEP = 0.2;
 
 const CELL = 1;
 const PAD = 0.5; // body radius + margin
@@ -38,7 +41,7 @@ export function createNav(colliders: readonly Box[]): Nav {
     seen = new Uint32Array(w * h); closed = new Uint32Array(w * h);
     gen = 0;
     for (const b of colliders) {
-      if (b.maxY <= STEP_HEIGHT || b.minY >= 1.8) continue;
+      if (b.maxY <= NPC_STEP || b.minY >= 1.8) continue;
       const i0 = Math.max(0, Math.floor((b.minX - PAD - ox) / CELL)), i1 = Math.min(w - 1, Math.floor((b.maxX + PAD - ox) / CELL));
       const j0 = Math.max(0, Math.floor((b.minZ - PAD - oz) / CELL)), j1 = Math.min(h - 1, Math.floor((b.maxZ + PAD - oz) / CELL));
       for (let j = j0; j <= j1; j++) {

@@ -24,6 +24,8 @@ export interface Player {
   /** camera aim point */
   readonly focus: THREE.Vector3;
   frozen: boolean;
+  /** Visible floor height (sidewalks sit above the collision ground); set once the town has loaded. */
+  floor: ((x: number, z: number, ground: number) => number) | null;
   setSpawn(p: THREE.Vector3, facing: number): void;
   update(dt: number, input: Input, camYaw: number, colliders: readonly Box[]): void;
 }
@@ -51,7 +53,7 @@ export async function createPlayer(): Promise<Player> {
   let wasGrounded = true;
 
   const player: Player = {
-    root, body, heading: Math.PI, frozen: false, focus,
+    root, body, heading: Math.PI, frozen: false, focus, floor: null,
     get speed() { return speedNow; },
     setSpawn(p, facing) {
       body.x = p.x; body.y = p.y; body.z = p.z; body.vy = 0;
@@ -94,7 +96,8 @@ export async function createPlayer(): Promise<Player> {
         d = Math.atan2(Math.sin(d), Math.cos(d));
         player.heading += d * (1 - Math.exp(-TURN_RATE * dt));
       }
-      root.position.set(body.x, body.y, body.z);
+      // On the ground, stand on the visible pavement; in the air, follow the body.
+      root.position.set(body.x, body.grounded && player.floor ? player.floor(body.x, body.z, body.y) : body.y, body.z);
       root.rotation.y = player.heading;
       focus.set(body.x, body.y + 1.45, body.z);
       character.setSpeed(speedNow, WALK_SPEED, RUN_SPEED);

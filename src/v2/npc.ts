@@ -4,9 +4,10 @@
 // stagger + speech bubble when bumped.
 // Faked: shop "entering" (they vanish at the door), NPC purchases are visual only (no economy demand hook).
 import * as THREE from "three";
-import { groundHeightAt, pushOut, type Body, type Box } from "../physics/collision";
+import { STEP_HEIGHT, groundHeightAt, pushOut, type Body, type Box } from "../physics/collision";
+import type { FloorHeight } from "./floor";
 import type { AnimatedCharacter } from "../character";
-import { createNav, type Nav } from "./nav";
+import { NPC_STEP, createNav, type Nav } from "./nav";
 import { createBubbles, installPose, type PoseState } from "./npcfx";
 
 type Kind = "bench" | "shopdoor" | "stallq" | "chat" | "wait" | "crate" | "cafe";
@@ -58,7 +59,7 @@ export interface Life {
   setPull(id: string, pull: number): void;
 }
 
-export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Object3D | null, mers: readonly MerchantRef[], folkChars: readonly FolkChar[]): Life {
+export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Object3D | null, mers: readonly MerchantRef[], folkChars: readonly FolkChar[], floor: FloorHeight = (_x, _z, g) => g): Life {
   const nav: Nav = createNav(colliders);
   const bubbles = createBubbles();
   const spots: Spot[] = [];
@@ -339,13 +340,15 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
 
   const place = (e: Ent): void => {
     const seated = (e.spot?.kind === "bench" || e.spot?.kind === "cafe") && (e.state === "act" || (e.state === "walk" && e.pi + 2 >= e.path.length)); // seat colliders must not lift the sitter
-    e.y = e.fixed ? e.hy : seated ? e.by : groundHeightAt(colliders, e.x, e.z, e.y + 0.3);
+    // groundHeightAt allows STEP_HEIGHT above feetY: offset so townsfolk climb at most NPC_STEP (curbs, stairs).
+    e.y = e.fixed ? e.hy : seated ? e.by : groundHeightAt(colliders, e.x, e.z, e.y + NPC_STEP - STEP_HEIGHT);
     if (!seated) e.by = e.y;
-    e.root.position.set(e.x, e.y, e.z);
+    const vy = e.fixed ? e.y : floor(e.x, e.z, e.y); // stand (or sit) on the visible pavement, not the flat collision ground
+    e.root.position.set(e.x, vy, e.z);
     e.root.rotation.y = e.yaw;
     e.c.root.position.z = seated && e.state === "act" ? -0.1 : 0; // hips slightly back on the seat
     e.pose.yaw = e.yaw;
-    e.head.set(e.x, e.y + HEAD - e.c.lift, e.z);
+    e.head.set(e.x, vy + HEAD - e.c.lift, e.z);
   };
 
   return {

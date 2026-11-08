@@ -15,6 +15,9 @@ export interface AnimatedCharacter {
   post: (() => void) | null;
   /** Extra root-height trim in metres (e.g. sitting lowers the whole body). */
   lift: number;
+  /** Keep the lowest foot on the ground every frame (townsfolk and merchants on borrowed clips, whose per-clip
+   *  trim measured at load can be wrong). Off for Kavi, whose jump must lift his feet. */
+  autoGround: boolean;
 }
 
 const FADE = 0.25;
@@ -116,6 +119,8 @@ export async function loadCharacter(url: string, height: number, clipSource?: st
   let last = { speed: 0, walk: 1, run: 2 };
   let trim = idle0;
   const api: { lift: number } = { lift: 0 };
+  let ground = idle0; // smoothed auto-ground offset
+  const rootPos = new THREE.Vector3();
 
   const setSpeed = (speed: number, walkSpeed: number, runSpeed: number): void => {
     last = { speed, walk: walkSpeed, run: runSpeed };
@@ -135,6 +140,7 @@ export async function loadCharacter(url: string, height: number, clipSource?: st
   const character: AnimatedCharacter = {
     root,
     post: null,
+    autoGround: false,
     get lift() { return api.lift; },
     set lift(v: number) { api.lift = v; },
     bone: (name) => bones.get(name),
@@ -155,7 +161,20 @@ export async function loadCharacter(url: string, height: number, clipSource?: st
     },
     update(dt) {
       mixer.update(dt);
-      model.position.y = baseY + trim - api.lift;
+      if (character.autoGround && !overlay && feet.length) {
+        // Measure where the soles really are this frame and ease the body so they rest on the ground. While seated
+        // (lift > 0) the standing correction is held: the sit drop applies on top of it and the feet may lift.
+        model.position.y = baseY + ground - api.lift;
+        if (api.lift < 0.01) {
+          root.updateMatrixWorld(true);
+          const err = sole - (lowFoot() - root.getWorldPosition(rootPos).y);
+          ground += err * Math.min(1, dt * 12);
+          model.position.y = baseY + ground;
+        }
+      } else {
+        ground = trim;
+        model.position.y = baseY + trim - api.lift;
+      }
       character.post?.();
     },
   };

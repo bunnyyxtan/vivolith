@@ -9,6 +9,7 @@ import { groundHeightAt, type Box } from "../physics/collision";
 import { applyToon } from "./toon";
 import { installProps } from "./props";
 import { createLife, type FolkChar, type Life } from "./npc";
+import { createFloor, type FloorHeight } from "./floor";
 import type { Body } from "../physics/collision";
 
 export type NpcId = "pema" | "tomas" | "mira" | "arin" | "harbor" | "engineer";
@@ -67,6 +68,8 @@ export interface Market {
   update(dt: number, player: THREE.Vector3): void;
   /** Wire Kavi's body (contact pushes) and the camera (speech bubbles). */
   bind(body: Body, camera: THREE.Camera): void;
+  /** Visible walkway height at a point (used to stand Kavi on the pavement). */
+  readonly floor: FloorHeight;
   /** Shows a stall's economic state in the world: crate pile = stock, closed shutter, upgrade, shopper pull. */
   setStall(id: string, s: StallState): void;
 }
@@ -227,6 +230,7 @@ async function loadFolk(scene: THREE.Scene): Promise<FolkChar[]> {
     try {
       const c = await loadCharacter(`/models/v2/cast/folk${(i % 6) + 1}.glb`, CAST_HEIGHT * (0.94 + 0.06 * (i % 3)), FOLK_CLIPS);
       applyToon(c.root, 0.011);
+      c.autoGround = true;
       const root = new THREE.Group();
       root.add(c.root);
       scene.add(root);
@@ -244,14 +248,16 @@ export async function createMarket(scene: THREE.Scene, colliders: Box[]): Promis
   const spawnObj = town?.getObjectByName("SPAWN_TOWN");
   const townSpawn = spawnObj ? spawnObj.getWorldPosition(new THREE.Vector3()) : null;
   const folk = town ? await loadFolk(scene) : [];
+  const floor: FloorHeight = createFloor(scene);
   const dressing = new Map<string, (s: StallState) => void>();
   const npcs = await Promise.all(NPC_IDS.map(async (id): Promise<Npc> => {
     const post = posts[id];
     const character = await loadNpcModel(id);
+    character.autoGround = true;
     applyToon(character.root, 0.011);
     const root = new THREE.Group();
     root.add(character.root);
-    const y = groundHeightAt(colliders, post.npc.x, post.npc.z, post.npc.y + 0.3);
+    const y = floor(post.npc.x, post.npc.z, groundHeightAt(colliders, post.npc.x, post.npc.z, post.npc.y + 0.3));
     root.position.set(post.npc.x, y, post.npc.z);
     root.rotation.y = Math.atan2(post.stall.x - post.npc.x, post.stall.z - post.npc.z);
     scene.add(root);
@@ -269,10 +275,10 @@ export async function createMarket(scene: THREE.Scene, colliders: Box[]): Promis
     return { id, root, character, post, board, head: new THREE.Vector3(), talking: false, serving: false, attend: null };
   }));
 
-  const life: Life = createLife(scene, colliders, town, npcs, folk);
+  const life: Life = createLife(scene, colliders, town, npcs, folk, floor);
   const toP = new THREE.Vector3();
   return {
-    npcs, townSpawn,
+    npcs, townSpawn, floor,
     boards: npcs.flatMap((n) => (n.board ? [n.board.mesh] : [])),
     bind: (body, camera) => life.bind(body, camera),
     setStall(id, st) { dressing.get(id)?.(st); life.setPull(id, st.pull); },

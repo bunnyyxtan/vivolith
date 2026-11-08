@@ -24,6 +24,7 @@ const RENT_MINUTE = 21 * 60;
 const RESULT_HOLD = 1.8; // seconds the deal result stays on the panel
 const TRADERS: readonly MerchantId[] = MERCHANT_IDS;
 const SHARE_LOT = 4;
+const AUTOSAVE_SEC = 10;
 const TICK_EVERY_SEC = 60;
 
 const TACTIC_LABEL: Record<"buy" | "sell", Record<Tactic, string>> = {
@@ -85,7 +86,7 @@ export async function createPlay(game: Game): Promise<Play> {
   const market = await createMarket(game.look.scene, game.colliders);
   const hud = createHud();
   market.bind(game.player.body, game.rig.camera);
-  let entered = false;
+  game.player.floor = market.floor;
   const enterTown = (): void => {
     if (!market.townSpawn) return; // start at the south gate and walk up Market Avenue toward the Spire
     game.player.setSpawn(market.townSpawn.clone().setY(market.townSpawn.y + 1), Math.PI);
@@ -102,7 +103,19 @@ export async function createPlay(game: Game): Promise<Play> {
 
   const mouse = { x: -1, y: -1 };
   window.addEventListener("mousemove", (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
-  const save = (): void => { saveGame(state); };
+  let entered = false;
+  /** Saves the market and, once the player is in the world, where Kavi stands and faces. */
+  const save = (): void => {
+    if (entered) {
+      const b = player.body; // the physics body is authoritative; the visual root lags a frame behind it
+      Object.assign(state.flags, { px: Math.round(b.x * 100) / 100, py: Math.round(b.y * 100) / 100, pz: Math.round(b.z * 100) / 100, ph: Math.round(player.heading * 1000) / 1000 });
+    }
+    saveGame(state);
+  };
+  let autosaveIn = AUTOSAVE_SEC;
+  const saveNow = (): void => { if (entered) save(); };
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveNow(); });
+  window.addEventListener("pagehide", saveNow);
 
   // ---------------------------------------------------------------- world readouts ----
   const buyingSub = (id: MerchantId): string | null => {
@@ -463,6 +476,8 @@ export async function createPlay(game: Game): Promise<Play> {
   const update = (dt: number): void => {
     market.update(dt, player.root.position);
     if (play.paused) return;
+    autosaveIn -= dt;
+    if (autosaveIn <= 0) { autosaveIn = AUTOSAVE_SEC; save(); }
     if (mode.kind === "walk") runClock(dt * (ff ? FF_MIN_PER_SEC : GAME_MIN_PER_SEC));
     const hour = Math.floor(state.minute / 60);
     if (hour !== lastHour) { lastHour = hour; drawBoards(); save(); }
@@ -629,10 +644,23 @@ export async function createPlay(game: Game): Promise<Play> {
   });
 
   const play: Play = {
-    state, market, hud, restored, paused: true,
+    state, market, hud, paused: true,
+    /** Continue is offered only to someone who actually played (entered the world) on this save. */
+    get restored() { return restored && state.flags.played === true; },
     get mode() { return mode.kind; },
     enterWorld() {
-      if (!entered) { enterTown(); entered = true; }
+      if (!entered) {
+        const f = state.flags;
+        if (f.played === true && typeof f.px === "number" && typeof f.pz === "number") {
+          // Continue: back where Kavi stood when the game was last saved.
+          player.setSpawn(new THREE.Vector3(f.px, Number(f.py ?? 0) + 0.5, f.pz), Number(f.ph ?? Math.PI));
+          game.rig.yaw = Number(f.ph ?? Math.PI);
+          game.rig.snap(player.focus, game.colliders);
+        } else enterTown();
+        entered = true;
+        state.flags.played = true;
+        save();
+      }
       play.paused = false;
       player.frozen = mode.kind !== "walk";
       renderAcct();
