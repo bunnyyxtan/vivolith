@@ -90,7 +90,7 @@ export function createMenu(game: Game, play: Play): { open(): void } {
   const root = document.getElementById("menu")!;
   const { player, rig } = game;
   const vantage = game.look.scene.getObjectByName("SPAWN")?.getWorldPosition(new THREE.Vector3()) ?? new THREE.Vector3(0, 0, -30);
-  let isOpen = false, started = false, sel = 0, items: Item[] = [], sheet: "" | "how" | "credits" | "new" = "", t = 0;
+  let isOpen = false, started = false, sel = 0, items: Item[] = [], sheet: "" | "how" | "new" = "", t = 0;
 
   // Cinematic: runs after the rig each frame, so it owns the camera while the menu is open.
   const fwd = new THREE.Vector3(0, 0, -1), right = new THREE.Vector3(1, 0, 0);
@@ -136,7 +136,6 @@ export function createMenu(game: Game, play: Play): { open(): void } {
     if (a.label) items.push({ label: "Sign out", note: a.label, run: () => { void play.signOut().then(render); } });
     else if (a.canSignIn && a.id) items.push({ label: "Sign in with email or Google", note: "Keep your market on any device", run: () => { void play.signIn().then(render); } });
     items.push({ label: "How to play", run: () => { sheet = sheet === "how" ? "" : "how"; render(); } });
-    items.push({ label: "Credits", run: () => { sheet = sheet === "credits" ? "" : "credits"; render(); } });
     sel = Math.min(sel, items.length - 1);
   };
 
@@ -150,10 +149,6 @@ export function createMenu(game: Game, play: Play): { open(): void } {
         <tr><td><kbd>N</kbd>see it on NEAR</td><td><kbd>Esc</kbd>this menu</td></tr>
       </table>
       <p>Look at a chalkboard to see why a price is what it is. Every deal and share is recorded on NEAR testnet, with no wallet popups.</p></div>`;
-    if (sheet === "credits") return `<div class="sheet">
-      <p><b>VIVOLITH</b> by Bunny, for the NEAR Hackathon 2026, Games With Real Economies.</p>
-      <p>Built with three.js, Blender and Tripo. The economy runs on NEAR testnet: one NEP-245 contract holds every coin, crate and stall share.</p>
-      <p>NEAR, NEAR AI and NEAR Intents marks belong to their owners. The businesses in this city are fictional.</p></div>`;
     if (sheet === "new") return `<div class="sheet">
       <p><b>Start the market over?</b> The city resets to Day 1. Coins, goods and shares you hold on NEAR stay in your account.</p>
       <p><kbd>Enter</kbd>Start over &nbsp; <kbd>Esc</kbd>Keep playing</p></div>`;
