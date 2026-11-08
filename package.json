@@ -10,7 +10,8 @@
     "build": "tsc --noEmit && vite build && node scripts/build-api.mjs",
     "build:api": "node scripts/build-api.mjs",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "deploy": "node scripts/deploy.mjs"
   },
   "dependencies": {
     "@auth0/auth0-spa-js": "2.11.3",
