@@ -37,16 +37,17 @@ function findClip(clips: THREE.AnimationClip[], pattern: RegExp): THREE.Animatio
 
 const suffix = (name: string): string => name.replace(/^mixamorig\d*:?/, "");
 const RETARGET_FPS = 30;
-/** Outward swing (radians, about the body's forward axis) added to retargeted arms: the Mixamo run pumps the fists
- *  across a thin chest, which on a bulky hoodie clenches the hands at the sternum with the elbows poking out. */
-const ARM_SPREAD: Record<string, number> = { Arm: 0.12, ForeArm: 0.1 };
+/** Outward swing (radians, about the body's forward axis) added to retargeted limbs: the Mixamo walk and run set
+ *  each foot on the centre line, which on Kavi's wider hips crossed the steps like a catwalk. */
+const LIMB_SPREAD: Record<string, number> = { UpLeg: 0.05 };
 
-/** World-space correction for a bone inside an arm: each Arm/ForeArm ancestor (or itself) swings it away from the body. */
-function armSpread(b: THREE.Object3D): THREE.Quaternion {
+/** World-space correction for a bone inside a spread limb: each spread ancestor (or itself) swings it away from the body. */
+function limbSpread(b: THREE.Object3D): THREE.Quaternion {
   const q = new THREE.Quaternion();
   for (let o: THREE.Object3D | null = b; o; o = o.parent) {
-    const m = /^(Left|Right)(Arm|ForeArm)$/.exec(suffix(o.name));
-    if (m) q.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), (m[1] === "Left" ? 1 : -1) * ARM_SPREAD[m[2]]));
+    const m = /^(Left|Right)(\w+)$/.exec(suffix(o.name));
+    const angle = m ? LIMB_SPREAD[m[2]] : undefined;
+    if (m && angle) q.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), (m[1] === "Left" ? 1 : -1) * angle));
   }
   return q;
 }
@@ -66,14 +67,20 @@ function retargetClip(clip: THREE.AnimationClip, src: THREE.Object3D, dst: THREE
   const worldP = (o: THREE.Object3D): THREE.Vector3 => o.getWorldPosition(new THREE.Vector3());
   src.updateMatrixWorld(true);
   dst.updateMatrixWorld(true);
-  // per target bone: its source, rest world rotations, and the rest-direction alignment
+  // per target bone: its source, rest world rotations, and the rest-direction alignment. A bone aims at its only
+  // child (a hand at its middle finger); others (hips, chest, finger tips) keep their parent's alignment, so an
+  // A-pose hand follows its T-pose-aligned forearm instead of bending ~65 degrees at the wrist.
+  const aligned = new Map<THREE.Object3D, THREE.Quaternion>();
   const rig = dstBones.map((b) => {
     const s = srcBones.get(suffix(b.name));
-    const align = new THREE.Quaternion();
     const kids = b.children.filter((c) => (c as THREE.Bone).isBone);
-    const sc = kids.length === 1 ? srcBones.get(suffix(kids[0].name)) : undefined;
-    if (s && sc) align.setFromUnitVectors(worldP(kids[0]).sub(worldP(b)).normalize(), worldP(sc).sub(worldP(s)).normalize());
-    return { b, s, fix: armSpread(b), srcRestInv: s ? worldQ(s).invert() : null, dstRest: align.multiply(worldQ(b)), restLocal: b.quaternion.clone() };
+    const aim = kids.length === 1 ? kids[0] : kids.find((c) => /HandMiddle1$/.test(c.name));
+    const sc = aim ? srcBones.get(suffix(aim.name)) : undefined;
+    const align = s && aim && sc
+      ? new THREE.Quaternion().setFromUnitVectors(worldP(aim).sub(worldP(b)).normalize(), worldP(sc).sub(worldP(s)).normalize())
+      : (aligned.get(b.parent!) ?? new THREE.Quaternion()).clone();
+    aligned.set(b, align);
+    return { b, s, fix: limbSpread(b), srcRestInv: s ? worldQ(s).invert() : null, dstRest: align.clone().multiply(worldQ(b)), restLocal: b.quaternion.clone() };
   });
   const parentRest = new Map<THREE.Object3D, THREE.Quaternion>();
   for (const { b } of rig) if (b.parent && !(b.parent as THREE.Bone).isBone) parentRest.set(b.parent, worldQ(b.parent));
