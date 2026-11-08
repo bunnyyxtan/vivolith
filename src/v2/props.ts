@@ -19,6 +19,10 @@ const SHOP_NAMES: Record<string, SignLine[]> = {
 const STALL_NAMES: Record<string, string> = {
   pema: "Pema's Mangoes", tomas: "Tomas & Sons", v1: "Orchard Row", v2: "Mira's Exchange", v3: "Harbor Dispatch",
 };
+/** What each stall is known for, in plain words (the second line under the stall name). */
+const STALL_TAGS: Record<string, string> = {
+  pema: "Fruit at fair prices", tomas: "Mangoes by the crate", v1: "Fruit and greens", v2: "Always a coin cheaper", v3: "Harbor crates",
+};
 /** Board placement in each model's local frame (front = +Z), measured by raycasts against the GLBs. */
 const BOARDS: Record<string, { w: number; h: number; x: number; y: number; z: number }> = {
   shop_corner: { w: 2.4, h: 0.55, x: -0.5, y: 3.45, z: 3.1 }, // the blank fascia above the awning
@@ -30,7 +34,7 @@ function decor(asset: string, id: string): THREE.Object3D | null {
   let lines: SignLine[] | undefined;
   if (asset === "shop_corner") lines = SHOP_NAMES[id];
   if (asset === "stall_fruit" && STALL_NAMES[id]) {
-    lines = [{ text: STALL_NAMES[id], size: 0.5, weight: 700 }, { text: "Mango crates · NEP-245", size: 0.26, dim: true }];
+    lines = [{ text: STALL_NAMES[id], size: 0.5, weight: 700 }, { text: STALL_TAGS[id] ?? "Fresh fruit daily", size: 0.26, dim: true }];
   }
   if (!b || !lines) return null;
   const map = makeSignTexture({ lines, style: "civic", logo: "tile", aspect: b.w / b.h, px: 1024 });

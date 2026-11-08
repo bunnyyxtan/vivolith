@@ -2130,7 +2130,8 @@ def plum_dress(M):
         bin_t(x + 1.5, -93.2, M)
     for x in (-58, -46, -30, -18):
         bunting(M, x, -83.4, x, -95.0, 6.2, 8, 0.8)
-    for x in (-66, -22):
+    for x in (-66, -25):
+        # second span ends at x=-3, off the spawn line at x=0 (a pole there blocked the walk north)
         p = pole(x, -85.2, M)
         q = pole(x + 22, -85.2, M)
         wire_span(p, q, M, 0.7)

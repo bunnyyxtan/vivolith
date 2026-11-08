@@ -144,9 +144,9 @@ export function createMenu(game: Game, play: Play): { open(): void } {
       <p><b>Trade with the four merchants.</b> Pema is loyal and never gouges. Tomas charges what a shortage allows. Mira buys surplus and undercuts. Arin pays a steady price for mangoes.</p>
       <table>
         <tr><td><kbd>WASD</kbd>move</td><td><kbd>Shift</kbd>run</td></tr>
-        <tr><td><kbd>F</kbd>haggle or talk</td><td><kbd>1-5</kbd>haggle tactics</td></tr>
-        <tr><td><kbd>I</kbd>invest in a stall</td><td><kbd>T</kbd>fast-forward a week</td></tr>
-        <tr><td><kbd>N</kbd>see it on NEAR</td><td><kbd>Esc</kbd>this menu</td></tr>
+        <tr><td><kbd>F</kbd>talk or trade</td><td><kbd>B</kbd>your bag</td></tr>
+        <tr><td><kbd>J</kbd>goals</td><td><kbd>H</kbd>help</td></tr>
+        <tr><td><kbd>N</kbd>your NEAR account</td><td><kbd>Esc</kbd>this menu</td></tr>
       </table>
       <p>Look at a chalkboard to see why a price is what it is. Every deal and share is recorded on NEAR testnet, with no wallet popups.</p></div>`;
     if (sheet === "new") return `<div class="sheet">

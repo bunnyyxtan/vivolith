@@ -5,8 +5,13 @@ import type { AnimatedCharacter } from "../character";
 
 const CSS = `
 .npc-bubble { position:fixed; left:0; top:0; z-index:4; pointer-events:none; font:600 14px "Inter Tight",system-ui,sans-serif;
-  color:#eef2f0; background:#10151f; padding:6px 10px; border-bottom:2px solid #00ec97; white-space:nowrap; display:none; }
+  color:#1d2433; background:#fffaf1; padding:7px 12px; border-radius:12px; box-shadow:0 6px 18px rgba(24,36,60,.18); white-space:nowrap; display:none; }
+.npc-bubble::after { content:""; position:absolute; left:50%; bottom:-6px; width:12px; height:12px; margin-left:-6px; background:#fffaf1; transform:rotate(45deg); border-radius:2px; }
+body.in-menu .npc-bubble { display:none !important; }
 `;
+
+/** Metres above the head: clears the stall boards hung at canopy height in front of merchants. */
+const BUBBLE_LIFT = 0.75;
 
 interface Bubble { el: HTMLDivElement; head: THREE.Vector3 | null; t: number }
 
@@ -36,7 +41,7 @@ export function createBubbles(pool = 5): Bubbles {
       for (const b of bubbles) {
         if (b.t <= 0 || !b.head) continue;
         b.t -= dt;
-        v.copy(b.head).project(camera);
+        v.copy(b.head).setY(b.head.y + BUBBLE_LIFT).project(camera);
         if (b.t <= 0 || v.z > 1) { b.el.style.display = "none"; b.t = 0; continue; }
         b.el.style.display = "block";
         b.el.style.transform = `translate(${((v.x * 0.5 + 0.5) * innerWidth).toFixed(0)}px,${((-v.y * 0.5 + 0.5) * innerHeight - 6).toFixed(0)}px) translate(-50%,-100%)`;

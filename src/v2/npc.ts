@@ -62,6 +62,8 @@ export interface Life {
   update(dt: number): void;
   /** 0..2 shopper pull per merchant id (pricing.ts stallPull): 0 = nobody queues (closed or sold out). */
   setPull(id: string, pull: number): void;
+  /** Speech bubble above a point (e.g. a merchant's head) for `sec` seconds. */
+  say(at: THREE.Vector3, text: string, sec?: number): void;
 }
 
 export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Object3D | null, mers: readonly MerchantRef[], folkChars: readonly FolkChar[], floor: FloorHeight = (_x, _z, g) => g): Life {
@@ -382,6 +384,7 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
 
   return {
     setPull(id, pull) { pulls.set(id, pull); },
+    say(at, text, sec = 3.2) { bubbles.say(at, text, sec); },
     bind(b, c) { pb = b; cam = c; lpx = b.x; lpz = b.z; },
     update(dt) {
       dt = Math.min(dt, 0.1);

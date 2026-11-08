@@ -11,14 +11,12 @@
     <style>
       html, body { margin: 0; height: 100%; overflow: hidden; background: #8cc4ff; font-family: "Inter Tight", system-ui, sans-serif; }
       canvas#game { display: block; width: 100vw; height: 100vh; }
-      #hint { position: fixed; left: 0; right: 0; bottom: 16px; text-align: center; color: rgba(255,255,255,.85); font-size: 13px; letter-spacing: .08em; text-shadow: 0 1px 6px rgba(0,40,100,.6); pointer-events: none; }
     </style>
   </head>
   <body>
     <canvas id="game"></canvas>
     <div id="boot"><h1>VIVOLITH</h1><p></p><div class="rule"><i></i></div></div>
     <div id="menu"></div>
-    <div id="hint">WASD move &middot; F haggle / talk &middot; 1-5 tactics &middot; T fast-forward &middot; Shift run &middot; Space jump &middot; Mouse look &middot; Wheel zoom &middot; Esc release mouse</div>
     <script type="module" src="/src/v2/main.ts"></script>
   </body>
 </html>

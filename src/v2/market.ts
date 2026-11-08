@@ -72,6 +72,8 @@ export interface Market {
   readonly floor: FloorHeight;
   /** Shows a stall's economic state in the world: crate pile = stock, closed shutter, upgrade, shopper pull. */
   setStall(id: string, s: StallState): void;
+  /** A merchant says a line (speech bubble above their head). */
+  say(id: string, text: string, sec?: number): void;
 }
 
 export interface StallState {
@@ -282,6 +284,7 @@ export async function createMarket(scene: THREE.Scene, colliders: Box[]): Promis
     boards: npcs.flatMap((n) => (n.board ? [n.board.mesh] : [])),
     bind: (body, camera) => life.bind(body, camera),
     setStall(id, st) { dressing.get(id)?.(st); life.setPull(id, st.pull); },
+    say(id, text, sec) { const n = npcs.find((x) => x.id === id); if (n) life.say(n.head, text, sec); },
     nearest(p) {
       let best: Npc | null = null, bd = INTERACT_RADIUS;
       for (const n of npcs) {
