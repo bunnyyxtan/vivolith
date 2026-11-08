@@ -11,7 +11,7 @@ export interface Input {
   readonly locked: boolean;
   /** A panel or menu is up: the cursor is free for its buttons and the mouse does not turn the camera. */
   readonly ui: boolean;
-  /** Enter or leave UI mode. Entering frees the cursor; leaving re-locks it if mouse-look was on before. */
+  /** Enter or leave UI mode. Entering frees the cursor; leaving returns to mouse-look. */
   setUi(on: boolean): void;
   /** The Escape key of the current (or last) keydown only released pointer lock: it must not close anything. */
   readonly escapeReleasedLock: boolean;
@@ -25,7 +25,6 @@ export function createInput(canvas: HTMLCanvasElement): Input {
   const pressed = new Set<string>();
   let dx = 0, dy = 0, wheel = 0, drag = false;
   let ui = false;
-  let wantLock = false; // the player was in mouse-look; restore it when the panel closes
   let releasingForUi = false; // our own exitPointerLock: not the player asking for the cursor
   let unlockedAt = -Infinity, escReleased = false;
   const isLocked = () => document.pointerLockElement === canvas;
@@ -34,9 +33,13 @@ export function createInput(canvas: HTMLCanvasElement): Input {
     try { void Promise.resolve(canvas.requestPointerLock?.()).catch(() => undefined); } catch { /* not allowed now */ }
   };
 
+  const releaseForUi = (): void => { releasingForUi = true; document.exitPointerLock(); };
+  let lockSeen = false; // lock state as of the last pointerlockchange: an Esc keydown can beat the event
   document.addEventListener("pointerlockchange", () => {
-    if (isLocked()) { wantLock = true; return; }
-    if (!releasingForUi) { wantLock = false; unlockedAt = performance.now(); }
+    lockSeen = isLocked();
+    // a lock granted late (requested just before a panel opened) must not hide the cursor over the panel
+    if (isLocked()) { if (ui) releaseForUi(); return; }
+    if (!releasingForUi) unlockedAt = performance.now();
     releasingForUi = false;
   });
   window.addEventListener("keydown", (e) => {
@@ -44,7 +47,7 @@ export function createInput(canvas: HTMLCanvasElement): Input {
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable) && e.code !== "Escape") return;
     if (e.code === "Escape") {
-      escReleased = isLocked() || performance.now() - unlockedAt < ESC_UNLOCK_MS;
+      escReleased = isLocked() || lockSeen || performance.now() - unlockedAt < ESC_UNLOCK_MS;
       if (escReleased) return;
     }
     if (!held.has(e.code)) pressed.add(e.code);
@@ -78,8 +81,9 @@ export function createInput(canvas: HTMLCanvasElement): Input {
       ui = on;
       drag = false;
       dx = dy = wheel = 0;
-      if (on && isLocked()) { releasingForUi = true; document.exitPointerLock(); }
-      else if (!on && wantLock && !isLocked()) lock();
+      // closing any panel returns to mouse-look, even after an Esc release (a refusal leaves the next click to lock)
+      if (on && isLocked()) releaseForUi();
+      else if (!on && !isLocked()) lock();
     },
   };
 }

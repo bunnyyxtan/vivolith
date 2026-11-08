@@ -129,7 +129,8 @@ export function createMenu(game: Game, play: Play): { open(): void } {
     started = true;
     rig.yaw = player.heading;
     rig.snap(player.focus, game.colliders);
-    void game.look.renderer.domElement.requestPointerLock?.();
+    // inside the click: mouse-look straight away, unless a card (the welcome) opened with the world
+    if (!player.frozen) game.input.setUi(false); // leaves UI mode now (not next frame) and locks
   };
 
   const build = (): void => {
@@ -213,7 +214,7 @@ export function createMenu(game: Game, play: Play): { open(): void } {
       sel = 0;
       document.body.classList.add("in-menu");
       game.input.flush();
-      if (document.pointerLockElement) document.exitPointerLock();
+      game.input.setUi(true); // frees the cursor now, as our release (not the player's), so Resume re-locks
       render();
       root.classList.add("show");
     },
