@@ -37,6 +37,9 @@ function findClip(clips: THREE.AnimationClip[], pattern: RegExp): THREE.Animatio
 
 const suffix = (name: string): string => name.replace(/^mixamorig\d*:?/, "");
 const RETARGET_FPS = 30;
+const LIMB = /^(Left|Right)(Shoulder|Arm|ForeArm|Hand|UpLeg|Leg|Foot)/;
+/** Retargeted clips by "model|source|clip": instances of one model share bone names, so the 24 townsfolk bake 6 sets. */
+const retargeted = new Map<string, THREE.AnimationClip>();
 /** Outward swing (radians, about the body's forward axis) added to retargeted limbs: the Mixamo walk and run set
  *  each foot on the centre line, which on Kavi's wider hips crossed the steps like a catwalk. */
 const LIMB_SPREAD: Record<string, number> = { UpLeg: 0.05 };
@@ -63,7 +66,9 @@ function retargetClip(clip: THREE.AnimationClip, src: THREE.Object3D, dst: THREE
   src.traverse((o) => { if ((o as THREE.Bone).isBone) srcBones.set(suffix(o.name), o); });
   const dstBones: THREE.Object3D[] = [];
   dst.traverse((o) => { if ((o as THREE.Bone).isBone) dstBones.push(o); }); // parents before children
-  const worldQ = (o: THREE.Object3D): THREE.Quaternion => o.getWorldQuaternion(new THREE.Quaternion());
+  // from matrixWorld (updated before every read): getWorldQuaternion re-walks the parent chain per bone per frame
+  const _p = new THREE.Vector3(), _s = new THREE.Vector3();
+  const worldQ = (o: THREE.Object3D): THREE.Quaternion => { const q = new THREE.Quaternion(); o.matrixWorld.decompose(_p, q, _s); return q; };
   const worldP = (o: THREE.Object3D): THREE.Vector3 => o.getWorldPosition(new THREE.Vector3());
   src.updateMatrixWorld(true);
   dst.updateMatrixWorld(true);
@@ -76,8 +81,10 @@ function retargetClip(clip: THREE.AnimationClip, src: THREE.Object3D, dst: THREE
     const kids = b.children.filter((c) => (c as THREE.Bone).isBone);
     const aim = kids.length === 1 ? kids[0] : kids.find((c) => /HandMiddle1$/.test(c.name));
     const sc = aim ? srcBones.get(suffix(aim.name)) : undefined;
-    const align = s && aim && sc
-      ? new THREE.Quaternion().setFromUnitVectors(worldP(aim).sub(worldP(b)).normalize(), worldP(sc).sub(worldP(s)).normalize())
+    // Only limbs align (A-pose vs T-pose). The spine, neck and head keep the target's own posture: forcing a
+    // forward-carried neck vertical tipped every townsperson's face up ~13 degrees.
+    const align = s && aim && sc && LIMB.test(suffix(b.name))
+      ?new THREE.Quaternion().setFromUnitVectors(worldP(aim).sub(worldP(b)).normalize(), worldP(sc).sub(worldP(s)).normalize())
       : (aligned.get(b.parent!) ?? new THREE.Quaternion()).clone();
     aligned.set(b, align);
     return { b, s, fix: limbSpread(b), srcRestInv: s ? worldQ(s).invert() : null, dstRest: align.clone().multiply(worldQ(b)), restLocal: b.quaternion.clone() };
@@ -134,7 +141,13 @@ export async function loadCharacter(url: string, height: number, clipSource?: st
       for (const c of srcGltf.animations) {
         if (seen.has(c.name) || (pick && !pick.has(c.name))) continue; // first source wins per clip name
         seen.add(c.name);
-        if (pick && srcGltf !== gltf) { merged.push(retargetClip(c, srcGltf.scene, gltf.scene)); continue; }
+        if (srcGltf !== gltf) { // rest poses differ between rigs (3-23 degrees per bone): copied local rotations lean the body back
+          const k = `${url}|${srcUrl}|${c.name}`;
+          let clip = retargeted.get(k);
+          if (!clip) { clip = retargetClip(c, srcGltf.scene, gltf.scene); retargeted.set(k, clip); }
+          merged.push(clip);
+          continue;
+        }
         merged.push(new THREE.AnimationClip(c.name, c.duration,
           c.tracks.flatMap((t) => {
             const target = t.name.endsWith(".quaternion") ? bySuffix.get(t.name.split(".")[0].replace(/^mixamorig\d*/, "")) : undefined;
