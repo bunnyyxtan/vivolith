@@ -1,7 +1,7 @@
 // Run: node src/economy/haggle.check.ts   (haggling is deterministic and personality matters)
 import assert from "node:assert/strict";
 import { initialEconomy } from "./state.ts";
-import { applyTactic, closeDeal, openHaggle, type HaggleSession } from "./haggle.ts";
+import { applyTactic, closeDeal, dealTotal, dealUnit, openHaggle, type HaggleSession } from "./haggle.ts";
 
 const open = (s: ReturnType<typeof initialEconomy>, id: "pema" | "tomas" | "arin"): HaggleSession => {
   const h = openHaggle(s, id);
@@ -42,4 +42,10 @@ assert.ok(out.ok && c.player.coins === coins - out.total && c.player.inventory.m
 const sell = applyTactic(c, open(c, "arin"), "fair").session;
 const before = c.player.coins;
 assert.ok(closeDeal(c, sell).ok && c.player.coins > before);
+
+// The price shown is the price settled: whole coins per unit, rounded in the player's favour.
+const frac = (mode: "buy" | "sell"): HaggleSession => ({ ...d, mode, unit: 3.67, qty: 3 });
+assert.equal(dealUnit(frac("buy")), 3);
+assert.equal(dealTotal(frac("buy")), 9);
+assert.equal(dealTotal(frac("sell")), 12);
 console.log("haggle checks passed");

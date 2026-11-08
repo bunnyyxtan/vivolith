@@ -11,7 +11,7 @@ import { deserialize } from "borsh";
 import { Account, JsonRpcProvider, KeyPairSigner, PublicKey, SCHEMA, actions, nearToYocto, teraToGas, type KeyPairString } from "near-api-js";
 import { MERCHANTS, keyPairFromSeed, merchantKey, type MerchantId } from "./keys.ts";
 import { bidFor, planMerchantTrades, quote } from "../../src/economy/pricing.ts";
-import { shopperWant } from "../../src/economy/sim.ts";
+import { SHARE_PRICE, shopperWant } from "../../src/economy/sim.ts";
 import { initialEconomy, type EconomyState } from "../../src/economy/state.ts";
 
 export interface RelayEnv {
@@ -41,6 +41,8 @@ const HAGGLE_CEILING = 1.5; // merchant pays at most 150% of its bid
 const GUEST_FUNDING = "0.01"; // account + key storage; guests never pay gas (meta-transactions)
 /** One on-chain market day settles every 10 real minutes (fast-forward previews run in the client sim). */
 export const MARKET_DAY_MS = 10 * 60 * 1000;
+/** Coins the Market Guild keeps in an open stall's till (covers one tutorial delivery: 3 mangoes at 6 c). */
+const GUILD_FLOAT = 18;
 
 const LIMITS = {
   guest: { max: 5, windowSec: 3600 }, // per IP
@@ -427,6 +429,7 @@ async function chainEconomy(provider: JsonRpcProvider, cfg: Config): Promise<Eco
     const m = st.merchants[id];
     m.stock = { mango: b.mango ?? 0, lemon: b.lemon ?? 0, lassi: b.lassi ?? 0 };
     m.cash = b.coin ?? 0;
+    st.flags[`treasury.${id}`] = b[`share:${id}`] ?? 0; // stall shares the merchant still holds
   }));
   return st;
 }
@@ -447,6 +450,20 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
   const log: string[] = [];
   const txs: string[] = [];
 
+  // 0. The Market Guild keeps a small float in every open stall's till, once per market day, so a stall can always
+  // pay for the first delivery a newcomer brings (the tutorial's 3 mangoes at 6 c). Minted with a public reason in
+  // step 3; counted now so this turn's bids already use it.
+  const day = Math.floor(Date.now() / MARKET_DAY_MS);
+  const floats: ReturnType<typeof actions.functionCall>[] = [];
+  for (const id of MERCHANTS) {
+    const m = st.merchants[id];
+    if (m.status !== "open" || m.cash >= GUILD_FLOAT) continue;
+    if (!(await hit(cfg, `float:${id}:${day}`, 1, Math.ceil(MARKET_DAY_MS / 1000)))) continue;
+    floats.push(actions.functionCall("operator_mint", { account_id: `${id}.${cfg.relayerId}`, token_id: "coin", amount: String(GUILD_FLOAT - m.cash), reason: "market guild float" }, TICK_GAS, 0n));
+    log.push(`market guild topped ${id}'s till up to ${GUILD_FLOAT} c`);
+    m.cash = GUILD_FLOAT;
+  }
+
   // 1. Every merchant reprices (only orders that changed are sent).
   const repriced = await Promise.all(MERCHANTS.map(async (id) => {
     const m = st.merchants[id];
@@ -458,6 +475,8 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
       calls.push(actions.functionCall(side === "ask" ? "list" : "bid", { token_id: token, qty: String(qty), price: String(price) }, TICK_GAS, 0n));
     };
     for (const good of m.sells) want("ask", good, m.stock[good], quote(st, id, good, false).price);
+    // Keep the unsold stall shares on offer at the stall's share price, so new partners can always buy in.
+    want("ask", `share:${id}`, Number(st.flags[`treasury.${id}`] ?? 0), SHARE_PRICE[id]);
     for (const good of ["mango", "lemon"] as const) {
       const b = bidFor(st, id, good);
       want("bid", good, b ? Math.min(b.qty, Math.floor(m.cash / Math.max(1, b.price))) : 0, b?.price ?? 1);
@@ -497,13 +516,13 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
     }
   }
   const tomas = st.merchants.tomas;
-  const day = Math.floor(Date.now() / MARKET_DAY_MS);
   const harborDue = tomas.stock.mango < tomas.target.mango && (await hit(cfg, `harbor:${day}`, 1, Math.ceil(MARKET_DAY_MS / 1000)));
   if (harborDue) {
     const qty = Math.round(tomas.target.mango * 1.4) - tomas.stock.mango;
     op.push(actions.functionCall("operator_mint", { account_id: `tomas.${cfg.relayerId}`, token_id: "mango", amount: String(qty), reason: "harbor standing contract" }, TICK_GAS, 0n));
     log.push(`harbor delivered ${qty} mangoes to tomas`);
   }
+  op.push(...floats);
   const arin = st.merchants.arin;
   const batches = Math.min(arin.stock.mango, Math.max(0, Math.ceil((8 - arin.stock.lassi) / 4)));
   if (batches > 0) {

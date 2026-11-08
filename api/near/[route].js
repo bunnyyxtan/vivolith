@@ -11457,7 +11457,7 @@ function initialEconomy() {
 				greed: .1,
 				rent: 40,
 				rentEveryDays: 2,
-				cash: 12,
+				cash: 24,
 				stock: stock(3, 16, 0),
 				recentSales: stock(0, 0, 0),
 				status: "open"
@@ -11744,7 +11744,8 @@ function planMerchantTrades(state) {
 		}
 		if (!best) continue;
 		const s = state.merchants[best.seller];
-		const qty = Math.min(bid.qty, s.stock[good] - reserve(s, good), Math.floor(state.merchants[buyer].cash / best.price));
+		const spare = Math.max(0, state.merchants[buyer].cash - 18);
+		const qty = Math.min(bid.qty, s.stock[good] - reserve(s, good), Math.floor(spare / best.price));
 		if (qty > 0) out.push({
 			buyer,
 			seller: best.seller,
@@ -11774,6 +11775,13 @@ function shopperWant(state, id, good) {
 	if (good === "lassi") return HOURLY_DEMAND.lassi * Math.pow(m.baseCost.lassi * 1.5 / price, ELASTICITY);
 	return HOURLY_DEMAND[good] / FRUIT_SELLERS.length * Math.pow(m.baseCost[good] * 1.2 / price, ELASTICITY);
 }
+/** The posted price of one stall share (each stall floats 100; the contract's opening asks use the same numbers). */
+const SHARE_PRICE = {
+	pema: 5,
+	tomas: 9,
+	mira: 7,
+	arin: 6
+};
 // server/near/handlers.ts
 const MAX_BODY = 4096;
 const MAX_GAS = teraToGas("100");
@@ -11794,6 +11802,8 @@ const HAGGLE_CEILING = 1.5;
 const GUEST_FUNDING = "0.01";
 /** One on-chain market day settles every 10 real minutes (fast-forward previews run in the client sim). */
 const MARKET_DAY_MS = 6e5;
+/** Coins the Market Guild keeps in an open stall's till (covers one tutorial delivery: 3 mangoes at 6 c). */
+const GUILD_FLOAT = 18;
 const LIMITS = {
 	guest: {
 		max: 5,
@@ -12229,6 +12239,7 @@ async function chainEconomy(provider, cfg) {
 			lassi: b.lassi ?? 0
 		};
 		m.cash = b.coin ?? 0;
+		st.flags[`treasury.${id}`] = b[`share:${id}`] ?? 0;
 	}));
 	return st;
 }
@@ -12249,6 +12260,21 @@ async function tick(cfg, env) {
 	const signerOf = (id) => new Account(`${id}.${cfg.relayerId}`, provider, new KeyPairSigner(merchantKey(id, secret)));
 	const log = [];
 	const txs = [];
+	const day = Math.floor(Date.now() / MARKET_DAY_MS);
+	const floats = [];
+	for (const id of MERCHANTS) {
+		const m = st.merchants[id];
+		if (m.status !== "open" || m.cash >= GUILD_FLOAT) continue;
+		if (!await hit(cfg, `float:${id}:${day}`, 1, Math.ceil(600))) continue;
+		floats.push(actions.functionCall("operator_mint", {
+			account_id: `${id}.${cfg.relayerId}`,
+			token_id: "coin",
+			amount: String(GUILD_FLOAT - m.cash),
+			reason: "market guild float"
+		}, TICK_GAS, 0n));
+		log.push(`market guild topped ${id}'s till up to ${GUILD_FLOAT} c`);
+		m.cash = GUILD_FLOAT;
+	}
 	const repriced = await Promise.all(MERCHANTS.map(async (id) => {
 		const m = st.merchants[id];
 		const calls = [];
@@ -12270,6 +12296,7 @@ async function tick(cfg, env) {
 			}, TICK_GAS, 0n));
 		};
 		for (const good of m.sells) want("ask", good, m.stock[good], quote(st, id, good, false).price);
+		want("ask", `share:${id}`, Number(st.flags[`treasury.${id}`] ?? 0), SHARE_PRICE[id]);
 		for (const good of ["mango", "lemon"]) {
 			const b = bidFor(st, id, good);
 			want("bid", good, b ? Math.min(b.qty, Math.floor(m.cash / Math.max(1, b.price))) : 0, b?.price ?? 1);
@@ -12318,7 +12345,6 @@ async function tick(cfg, env) {
 		}
 	}
 	const tomas = st.merchants.tomas;
-	const day = Math.floor(Date.now() / MARKET_DAY_MS);
 	if (tomas.stock.mango < tomas.target.mango && await hit(cfg, `harbor:${day}`, 1, Math.ceil(600))) {
 		const qty = Math.round(tomas.target.mango * 1.4) - tomas.stock.mango;
 		op.push(actions.functionCall("operator_mint", {
@@ -12329,6 +12355,7 @@ async function tick(cfg, env) {
 		}, TICK_GAS, 0n));
 		log.push(`harbor delivered ${qty} mangoes to tomas`);
 	}
+	op.push(...floats);
 	const arin = st.merchants.arin;
 	const batches = Math.min(arin.stock.mango, Math.max(0, Math.ceil((8 - arin.stock.lassi) / 4)));
 	if (batches > 0) {

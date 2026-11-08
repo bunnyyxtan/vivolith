@@ -163,6 +163,10 @@ export interface MerchantTrade {
   readonly reason: string;
 }
 
+/** Coins a merchant never spends on other merchants' goods: kept to pay players who bring deliveries
+ *  (the tutorial's 3 mangoes at 6 c), so a stall's own restocking can't leave it unable to buy from Kavi. */
+export const TILL_RESERVE = 18;
+
 /** Units a seller keeps back from other merchants (Tomas sells his whole glut; others keep 30% for shoppers). */
 const reserve = (s: Merchant, good: Good): number => (s.style === "gouger" ? s.target[good] : Math.ceil(s.target[good] * 0.3));
 
@@ -184,7 +188,8 @@ export function planMerchantTrades(state: EconomyState): MerchantTrade[] {
       }
       if (!best) continue;
       const s = state.merchants[best.seller];
-      const qty = Math.min(bid.qty, s.stock[good] - reserve(s, good), Math.floor(state.merchants[buyer].cash / best.price));
+      const spare = Math.max(0, state.merchants[buyer].cash - TILL_RESERVE);
+      const qty = Math.min(bid.qty, s.stock[good] - reserve(s, good), Math.floor(spare / best.price));
       if (qty > 0) out.push({ buyer, seller: best.seller, good, qty, price: best.price, reason: bid.reason });
     }
   }

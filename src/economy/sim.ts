@@ -210,15 +210,18 @@ export function playerBuy(state: EconomyState, id: MerchantId, good: Good, qty: 
   return { ok: true, message: `Bought ${units} for ${units * price} c.` };
 }
 
-/** Player pays the harbor's storage fee: the held shipment departs now and arrives in 90 minutes. */
-export function payReleaseFee(state: EconomyState, shipmentId: string): ActionResult {
+/** The player (or the receiving merchant, e.g. with a new partner's money) pays the harbor's storage fee: the held
+ *  shipment departs now and arrives in 90 minutes. */
+export function payReleaseFee(state: EconomyState, shipmentId: string, payer: "player" | "merchant" = "player"): ActionResult {
   const s = state.shipments.find((x) => x.id === shipmentId);
   if (!s || s.status !== "held") return { ok: false, message: "Nothing is held." };
-  if (state.player.coins < s.releaseFee) return { ok: false, message: `The fee is ${s.releaseFee} c.` };
-  state.player.coins -= s.releaseFee;
+  const m = state.merchants[s.to];
+  const purse = payer === "player" ? state.player.coins : m.cash;
+  if (purse < s.releaseFee) return { ok: false, message: `The fee is ${s.releaseFee} c.` };
+  if (payer === "player") state.player.coins -= s.releaseFee; else m.cash -= s.releaseFee;
   s.status = "transit";
   s.arriveAt = state.minute + 90;
-  log(state, "player", `You paid the ${s.releaseFee} c storage fee. Mangoes are on their way (${clockOf(s.arriveAt)}).`);
+  log(state, "player", `${payer === "player" ? "You" : m.name} paid the ${s.releaseFee} c storage fee. Mangoes are on their way (${clockOf(s.arriveAt)}).`);
   return { ok: true, message: "Shipment released." };
 }
 

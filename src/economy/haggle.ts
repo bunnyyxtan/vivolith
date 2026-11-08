@@ -170,7 +170,7 @@ function judge(s: EconomyState, h: HaggleSession, t: Exclude<Tactic, "fair">): {
         ? { e: 0.5, line: "Crates don't sell themselves. Fine." }
         : { e: -0.7, line: "Ha. My cart came in at six. I can wait, you can't." };
       case "rival": return rivalCheaper
-        ? { e: 0.9, line: `Pema? She's three crates from closing. ...I'll match ${c.rivalPrice}.` }
+        ? { e: 0.9, line: `Pema at ${c.rivalPrice} c? She's three crates from closing. ...Fine, I'll come down.` }
         : { e: -0.5, line: `${rival} asks more than me and you know it.` };
       case "bundle": return c.scarce
         ? { e: -0.4, line: "I'm not dumping stock on one customer." }
@@ -230,7 +230,10 @@ export function tickPatience(h: HaggleSession, seconds: number): HaggleSession {
   return { ...h, patience, over: patience <= 0 ? "walked" : null };
 }
 
-export const dealTotal = (h: HaggleSession): number => Math.max(1, Math.round(h.unit * h.qty));
+/** Whole coins per unit (the contract settles whole units), rounded in the player's favour: what the panel shows
+ *  is exactly what the chain charges or pays. */
+export const dealUnit = (h: HaggleSession): number => Math.max(1, h.mode === "buy" ? Math.floor(h.unit + 1e-6) : Math.ceil(h.unit - 1e-6));
+export const dealTotal = (h: HaggleSession): number => dealUnit(h) * h.qty;
 
 export interface DealOutcome {
   readonly ok: boolean;
