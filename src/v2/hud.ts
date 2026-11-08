@@ -88,6 +88,26 @@ const CSS = /* css */ `
 .tp-qty button { width:36px; height:36px; padding:0; text-align:center; font-size:20px; font-weight:700; }
 .tp-qty b { min-width:28px; text-align:center; font-size:20px; }
 .tp-qty span { margin-left:auto; font-size:13px; color:var(--mute); text-align:right; line-height:1.35; }
+.tp-facts { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin:0 18px 12px; }
+.tp-facts div { background:var(--paper2); border-radius:10px; padding:8px 11px; }
+.tp-facts span { display:block; font-size:12px; color:var(--mute); font-weight:600; }
+.tp-facts b { display:block; font-size:16px; font-weight:700; margin-top:1px; }
+.tp-shares { flex-wrap:wrap; }
+.tp-shares button:disabled { opacity:.35; cursor:default; }
+.tp-shares input { width:64px; height:36px; box-sizing:border-box; border:2px solid var(--line); border-radius:10px; background:#fff; color:var(--ink);
+  font:700 18px "Inter Tight",system-ui,sans-serif; text-align:center; font-variant-numeric:tabular-nums; -moz-appearance:textfield; }
+.tp-shares input::-webkit-outer-spin-button, .tp-shares input::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
+.tp-shares input:focus { outline:none; border-color:var(--mint); }
+.hud .tp-shares .tp-max { width:auto; padding:0 10px; font-size:13px; font-weight:600; }
+.tp-sum { margin-left:auto; text-align:right; }
+.tp-qty .tp-sum b { display:block; min-width:0; text-align:right; font-size:20px; }
+.tp-qty .tp-sum span { display:block; font-size:12px; }
+.tp-stake { margin:0 18px 12px; }
+.tp-stake i { position:relative; display:flex; height:8px; border-radius:4px; background:var(--paper2); overflow:hidden; }
+.tp-stake i b { display:block; height:100%; background:var(--mint); transition:width .15s; } .tp-stake i b.mine { background:var(--mintd); }
+.tp-stake span { display:block; font-size:13px; color:var(--ink2); margin-top:6px; line-height:1.4; }
+.tp-note { font-size:12px; color:var(--mute); }
+@media (max-width:520px) { .tp-sum { flex-basis:100%; margin-left:0; text-align:left; } .tp-qty .tp-sum b { text-align:left; } }
 .tp-acts { display:grid; gap:8px; padding:4px 18px 18px; grid-template-columns:1fr 1fr; }
 .tp-acts .primary { grid-column:1 / -1; text-align:center; font-size:16px; padding:13px; }
 .tp-acts .full { grid-column:1 / -1; }

@@ -40,6 +40,9 @@ export function createInput(canvas: HTMLCanvasElement): Input {
     releasingForUi = false;
   });
   window.addEventListener("keydown", (e) => {
+    // typing into a panel field (the share count) is not a hotkey: digits would press buttons, "-" change amounts
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable) && e.code !== "Escape") return;
     if (e.code === "Escape") {
       escReleased = isLocked() || performance.now() - unlockedAt < ESC_UNLOCK_MS;
       if (escReleased) return;

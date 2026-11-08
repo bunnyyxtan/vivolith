@@ -16,7 +16,7 @@ import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
 import {
   EXPLORER_ACCOUNT, EXPLORER_TX, balances, buyPosted, connectGuest, haggleDeal, marketTick, merchantAccount, playerId, playerLabel, receipts as chainReceipts,
-  settleDay, socialAvailable, finishSocialRedirect, signInSocial, signOutSocial, type TxOutcome,
+  settleDay, socialAvailable, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
 } from "../near/chain";
 
 const GAME_MIN_PER_SEC = 2.4; // 09:00 -> 21:00 in five real minutes
@@ -26,7 +26,6 @@ const FF_MAX_DAYS = 7;
 const RENT_MINUTE = 21 * 60;
 const RESULT_HOLD = 2.6; // seconds the deal result stays on the panel
 const TRADERS: readonly MerchantId[] = MERCHANT_IDS;
-const SHARE_LOT = 4;
 const AUTOSAVE_SEC = 10;
 const TICK_EVERY_SEC = 60;
 /** Index of "Haggle with Tomas" in guide.ts STEPS. */
@@ -393,11 +392,15 @@ export async function createPlay(game: Game): Promise<Play> {
     if (unlocked(state, "invest") || state.player.shares[id] > 0) t.push("invest");
     return t;
   };
+  /** Shares the stall still sells: its posted ask on NEAR (the contract sells no more than that), or, offline, all
+   *  the shares the player does not own yet. */
+  const shareAsk: Partial<Record<MerchantId, number>> = {};
+  const sharesForSale = (id: MerchantId): number => shareAsk[id] ?? (playerId() ? 0 : SHARES_PER_STALL - state.player.shares[id]);
   const maxQty = (id: MerchantId, tab: Tab): number => {
     const m = state.merchants[id];
     if (tab === "buy") { const g = goodFor(id, tab); return Math.min(MAX_QTY, m.stock[g], Math.floor(state.player.coins / Math.max(1, priceOf(state, id).price))); }
     if (tab === "sell") { const p = sellPrice(id) ?? 1; return Math.min(MAX_QTY, state.player.inventory.mango, Math.floor(m.cash / p)); }
-    return 1;
+    return Math.min(sharesForSale(id), Math.floor(state.player.coins / SHARE_PRICE[id]));
   };
   const defaultTab = (id: MerchantId): Tab => {
     const tabs = tabsFor(id), i = stepIndex(state);
@@ -498,20 +501,64 @@ export async function createPlay(game: Game): Promise<Play> {
   };
 
   const renderInvestBody = (id: MerchantId): void => {
-    const m = state.merchants[id];
-    const own = state.player.shares[id], cost = SHARE_LOT * SHARE_PRICE[id];
-    hud.panel.append(el("div", "tp-text", `${m.shop} is split into ${SHARES_PER_STALL} shares. Every evening, half of the day's sales is paid out to the shareholders. Your money goes into the stall: ${m.name.split(" ").pop()} gets cash to restock and pay rent.`));
-    const item = el("div", "tp-item");
-    const left = el("div");
-    left.append(el("b", "", `${SHARE_LOT} shares`), el("span", "", `You own ${own} of ${SHARES_PER_STALL}${own >= UPGRADE_AT ? " · stall upgraded" : ""}`));
-    const price = el("div", "price");
-    price.append(el("b", "", `${cost} c`), el("span", "", `${SHARE_PRICE[id]} c each`));
-    item.append(el("i", "ico share"), left, price);
-    hud.panel.append(item);
+    if (mode.kind !== "trade") return;
+    const m = state.merchants[id], price = SHARE_PRICE[id], own = state.player.shares[id], coins = state.player.coins;
+    const forSale = sharesForSale(id), max = maxQty(id, "invest");
+    hud.panel.append(el("div", "tp-text", `${m.shop} is split into ${SHARES_PER_STALL} shares. A share is a piece of the stall: every evening half of the day's sales is shared out among the owners, so more shares means a bigger cut. Your coins go to ${m.name.split(" ").pop()} to restock and pay rent.`));
+    const facts = el("div", "tp-facts");
+    const fact = (label: string, value: string): void => { const d = el("div"); d.append(el("span", "", label), el("b", "", value)); facts.append(d); };
+    fact("Price per share", `${price} c`);
+    fact("Your coins", `${coins} c`);
+    fact("You own", `${own} of ${SHARES_PER_STALL}${own >= UPGRADE_AT ? " · upgraded" : ""}`);
+    fact("For sale now", playerId() && shareAsk[id] === undefined ? "checking…" : `${forSale} ${forSale === 1 ? "share" : "shares"}`);
+    hud.panel.append(facts);
     const acts = el("div", "tp-acts");
-    if (mode.kind === "trade" && mode.done > 0) { /* the result line is showing */ }
-    else if (state.player.coins >= cost) acts.append(button(`Buy ${SHARE_LOT} shares for ${cost} c`, "primary", () => investIn(id), "1", `you'd own ${own + SHARE_LOT} of ${SHARES_PER_STALL}: ${Math.round(((own + SHARE_LOT) / SHARES_PER_STALL) * 100)}% of the payout`));
-    else acts.append(el("div", "tp-text full", `You need ${cost} c and have ${state.player.coins} c.`));
+    if (mode.done > 0) { /* the result line is showing */ }
+    else if (playerId() && shareAsk[id] === undefined) acts.append(el("div", "tp-text full", "Checking NEAR for shares on sale…"));
+    else if (forSale <= 0) acts.append(el("div", "tp-text full", `No shares of ${m.shop} are for sale right now: every share already has an owner.`));
+    else if (max <= 0) acts.append(el("div", "tp-text full", `One share costs ${price} c and you have ${coins} c. Sell some goods first, then come back.`));
+    else {
+      const qty = Math.max(1, Math.min(max, mode.qty));
+      if (qty !== mode.qty) mode = { ...mode, qty };
+      // − [n] + Max, then what the choice costs and what it buys, updated as the player types
+      const q = el("div", "tp-qty tp-shares");
+      const input = el("input") as HTMLInputElement;
+      Object.assign(input, { type: "number", min: "1", max: String(max), step: "1", value: String(qty), inputMode: "numeric" });
+      input.setAttribute("aria-label", "Number of shares");
+      const total = el("b"), after = el("span"), stake = el("div", "tp-stake"), bar = el("i"), fill = el("b"), mine = el("b", "mine"), line = el("span");
+      bar.append(mine, fill); stake.append(bar, line);
+      const buy = button("", "primary", () => investIn(id, mode.kind === "trade" ? mode.qty : qty), "1");
+      const label = document.createTextNode(""); buy.childNodes[1]?.replaceWith(label);
+      const minus = button("−", "", () => setQty(-1)), plus = button("+", "", () => setQty(1));
+      const show = (n: number): void => {
+        const pct = (k: number): number => Math.round((k / SHARES_PER_STALL) * 100);
+        minus.disabled = n <= 1; plus.disabled = n >= max;
+        total.textContent = `${n * price} c`;
+        after.textContent = `${n} × ${price} c · your coins after: ${coins - n * price} c`;
+        mine.style.width = `${pct(own)}%`;
+        fill.style.width = `${pct(n)}%`;
+        line.textContent = `You'd own ${own + n} of ${SHARES_PER_STALL} shares: ${pct(own + n)}% of the stall and of its daily payout.`;
+        label.textContent = `Buy ${n} ${n === 1 ? "share" : "shares"} for ${n * price} c`;
+      };
+      const pick = (n: number): number => Math.max(1, Math.min(max, Math.floor(n)));
+      input.oninput = () => {
+        const n = Number(input.value);
+        if (input.value === "" || !Number.isFinite(n)) return; // mid-edit: keep the last valid choice
+        const v = pick(n);
+        if (mode.kind === "trade") mode = { ...mode, qty: v };
+        show(v);
+      };
+      input.onchange = () => { const v = pick(Number(input.value) || 1); input.value = String(v); if (mode.kind === "trade") mode = { ...mode, qty: v }; show(v); };
+      input.onkeydown = (e) => { if (e.key === "Enter") { input.blur(); buy.click(); } };
+      const all = button(`Max ${max}`, "ghost tp-max", () => { if (mode.kind === "trade") { mode = { ...mode, qty: max }; renderTrade(); } });
+      const sum = el("div", "tp-sum");
+      sum.append(total, after);
+      q.append(minus, input, plus, all, sum);
+      hud.panel.append(q, stake);
+      acts.append(buy);
+      show(qty);
+      if (max < forSale) acts.append(el("div", "tp-text full tp-note", `Your coins cover ${max} of the ${forSale} shares for sale.`));
+    }
     acts.append(button("Leave", "ghost full", () => endPanel(), "Esc"));
     hud.panel.append(acts);
   };
@@ -986,16 +1033,19 @@ export async function createPlay(game: Game): Promise<Play> {
   game.onUpdate.push(update);
 
   // ---------------------------------------------------------------- invest ----
-  const investIn = (id: MerchantId): void => {
+  const investIn = (id: MerchantId, qty: number): void => {
     if (mode.kind === "trade" && mode.done > 0) return;
-    const r = invest(structuredClone(state), id, SHARE_LOT); // checks only: shares move once NEAR confirms
+    const n = Math.floor(qty);
+    if (!(n >= 1) || n > sharesForSale(id)) { hud.toast(n >= 1 ? "Not that many shares are for sale." : "Pick how many shares."); return; }
+    const r = invest(structuredClone(state), id, n); // checks only: shares move once NEAR confirms
     if (!r.ok) { hud.toast(r.message); return; }
     const m = state.merchants[id];
-    if (mode.kind === "trade") { mode = { ...mode, say: "Signing the partnership on NEAR…", tone: "", done: AWAITING }; renderTrade(); }
-    record("invest", `Bought ${SHARE_LOT} shares of ${m.shop} for ${SHARE_LOT * SHARE_PRICE[id]} c`, buyPosted(id, `share:${id}`, SHARE_LOT, SHARE_PRICE[id]), () => applyInvest(id), refusedAt(id));
+    if (mode.kind === "trade") { mode = { ...mode, say: `Buying ${n} ${n === 1 ? "share" : "shares"} for ${n * SHARE_PRICE[id]} c. Recording it on NEAR…`, tone: "", done: AWAITING }; renderTrade(); }
+    record("invest", `Bought ${n} ${n === 1 ? "share" : "shares"} of ${m.shop} for ${n * SHARE_PRICE[id]} c`, buyPosted(id, `share:${id}`, n, SHARE_PRICE[id]), () => applyInvest(id, n), refusedAt(id));
   };
-  const applyInvest = (id: MerchantId): void => {
-    invest(state, id, SHARE_LOT);
+  const applyInvest = (id: MerchantId, n: number): void => {
+    invest(state, id, n);
+    if (shareAsk[id] !== undefined) shareAsk[id] = Math.max(0, shareAsk[id]! - n); // until the next sync re-reads it
     // Pema spends part of her partner's money on the harbor's storage fee: her held crates are finally on the way.
     const released = id === "pema" && payReleaseFee(state, "pema-mangoes", "merchant").ok;
     market.say(id, released ? "A partner! I've paid the harbor. My crates are coming!" : id === "pema" ? "A partner! That's tonight's rent, and a new awning." : "Partner! Let's make it worth it.", 4);
@@ -1017,7 +1067,14 @@ export async function createPlay(game: Game): Promise<Play> {
   };
   /** Merchants' coins and goods follow the chain too, so a stall never offers a deal its wallet can't settle. */
   const syncMerchants = async (): Promise<void> => {
-    const all = await Promise.all(TRADERS.map((id) => balances(merchantAccount(id)).catch(() => null)));
+    const [all, offers] = await Promise.all([
+      Promise.all(TRADERS.map((id) => balances(merchantAccount(id)).catch(() => null))),
+      view<{ merchant: string; token_id: string; side: string; qty: string }[]>("get_offers").catch(() => null),
+    ]);
+    if (offers) for (const id of TRADERS) {
+      const ask = offers.find((o) => o.merchant === id && o.token_id === `share:${id}` && o.side === "ask");
+      shareAsk[id] = ask ? Number(ask.qty) : 0;
+    }
     if (ff) return; // a fast-forward week runs on the local model; the next sync after it catches up
     TRADERS.forEach((id, i) => {
       const b = all[i];
