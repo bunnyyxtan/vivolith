@@ -30,6 +30,8 @@ export interface AnimatedCharacter {
 export interface Footprint { x: number; z: number; lift: number }
 
 const FADE = 0.25;
+const WALK_STRETCH = 1.3; // fastest walk, x the walk clip's natural speed
+const RUN_SLOW = 0.75; // slowest pure run, x the run clip's natural speed
 
 function findClip(clips: THREE.AnimationClip[], pattern: RegExp): THREE.AnimationClip | undefined {
   return clips.find((c) => pattern.test(c.name));
@@ -269,7 +271,13 @@ export async function loadCharacter(url: string, height: number, clipSource?: st
   // Gait of each locomotion clip, measured on the scaled model: the ground speed its planted foot carries
   // (playback rate = speed / natural, so feet do not slide) and the phase of the left foot's touchdown (walk and run
   // play on one shared gait phase, aligned there, so a blend never crosses the legs).
-  const footBone = (side: RegExp): THREE.Object3D[] => feet.filter((f) => side.test(f.name));
+  // One stance point per foot, the ball (ToeBase): taking the lowest of ankle and toe jumped from heel to ball mid-
+  // stance, a fake forward slide that overestimated the run's speed and left a jog's planted feet sliding ~20%.
+  const footBone = (side: RegExp): THREE.Object3D[] => {
+    const all = feet.filter((f) => side.test(f.name));
+    const ball = all.filter((f) => /toebase/i.test(f.name));
+    return ball.length ? ball : all;
+  };
   const leftF = footBone(/left/i), rightF = footBone(/right/i);
   const gaitOf = (clip: THREE.AnimationClip | undefined): { natural: number; touchdown: number } | null => {
     if (!clip || !leftF.length || !rightF.length) return null;
@@ -310,17 +318,21 @@ export async function loadCharacter(url: string, height: number, clipSource?: st
   const setSpeed = (speed: number, walkSpeed: number, runSpeed: number): void => {
     last = { speed, walk: walkSpeed, run: runSpeed };
     if (walkA && runA && walkGait && runGait) {
-      // measured gaits: idle -> walk up to 80% of the walk's own speed, walk -> run between the two natural speeds
+      // measured gaits: idle -> walk up to 80% of the walk's own speed; walk -> run in a narrow band (a brisk walk up
+      // to 1.3x the walk, a slow run from 0.75x the run). Spanning the whole gap left Kavi's 3.2 m/s jog a 60/40
+      // walk/run pose mix: bent knees and a shuffling stride, neither gait.
       const w = THREE.MathUtils.clamp(speed / (walkGait.natural * 0.8), 0, 1);
-      const r = THREE.MathUtils.clamp((speed - walkGait.natural) / Math.max(0.1, runGait.natural - walkGait.natural), 0, 1);
+      const r0 = walkGait.natural * WALK_STRETCH, r1 = Math.max(r0 + 0.1, runGait.natural * RUN_SLOW);
+      const r = THREE.MathUtils.smoothstep(speed, r0, r1);
       const locoWeight = overlay ? 0 : 1;
       trim = overlay ? idle0 : trimOf(w, r);
       idleA.setEffectiveWeight((1 - w) * locoWeight);
       walkA.setEffectiveWeight(w * (1 - r) * locoWeight);
       runA.setEffectiveWeight(w * r * locoWeight);
-      // stride matched to ground speed (no sliding); both clips advance on one phase
-      const ws = THREE.MathUtils.clamp(speed / walkGait.natural, 0.35, 2.2), rs = THREE.MathUtils.clamp(speed / runGait.natural, 0.35, 2.2);
-      phaseRate = (1 - r) * (ws / walk!.duration) + r * (rs / run!.duration);
+      // stride matched to ground speed (no sliding); both clips advance on one phase. The blended feet cover the
+      // blended distance per cycle, so the rate is speed over that distance (summing the two rates ran ~8% fast).
+      const cycle = (1 - r) * walkGait.natural * walk!.duration + r * runGait.natural * run!.duration;
+      phaseRate = Math.max(speed, walkGait.natural * 0.35) / cycle;
       walkA.timeScale = 0; runA.timeScale = 0; // driven by phase in update()
       return;
     }

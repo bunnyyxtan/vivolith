@@ -6,10 +6,11 @@ import { applyToon } from "./toon";
 import { standHeight } from "./floor";
 import type { Input } from "./input";
 
-export const WALK_SPEED = 3.2; // a jog: the run clip plays at ~1.1x its own measured ground speed
-// Sprint: the run clip's legs carry ~2.8 m/s on Kavi, so 5.4 m/s already plays it at ~1.9x (6.8 m/s needed 2.4x,
-// a frantic six steps a second). A real sprint needs a sprint clip, not a faster jog.
-export const RUN_SPEED = 5.4;
+// Kavi's clips carry 1.62 m/s (walk) and 4.2 m/s (run) at their own cadence (measured by loadCharacter's gait).
+// The old 3.2 m/s jog sat between them: a 60/40 walk/run pose mix that shuffled like an old man.
+export const WALK_SPEED = 4.0; // a jog: the run clip at 0.95x its own speed, pure run pose
+export const RUN_SPEED = 6.3; // sprint: the run clip at 1.5x, ~4.3 steps/s (real sprint cadence), leaning in
+const SPRINT_LEAN = 0.09; // rad of forward lean at full sprint, pivoting at the feet
 const ACCEL = 18; // m/s^2 toward target velocity: ~0.18 s to a jog, so the first steps read as steps
 const DECEL = 22;
 const AIR_CONTROL = 0.45;
@@ -105,6 +106,8 @@ export async function createPlayer(): Promise<Player> {
       // Pose first, then height: on the ground both feet stand on the visible pavement; in the air, follow the body.
       root.position.set(body.x, root.position.y, body.z);
       root.rotation.y = player.heading;
+      const lean = SPRINT_LEAN * THREE.MathUtils.clamp((speedNow - WALK_SPEED) / (RUN_SPEED - WALK_SPEED), 0, 1);
+      character.root.rotation.x += (lean - character.root.rotation.x) * (1 - Math.exp(-8 * dt));
       focus.set(body.x, body.y + 1.45, body.z);
       character.setSpeed(speedNow, WALK_SPEED, RUN_SPEED);
       character.update(dt);
