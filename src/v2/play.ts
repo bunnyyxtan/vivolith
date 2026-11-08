@@ -178,6 +178,26 @@ export async function createPlay(game: Game): Promise<Play> {
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveNow(); });
   window.addEventListener("pagehide", saveNow);
 
+  /** Hourly: the townsfolk's rhythm, crates on the depot dock for shipments that landed, and what people talk about. */
+  const townHour = (prevHour: number): void => {
+    const hour = Math.floor(state.minute / 60);
+    market.life.setHour(hour % 24);
+    const landed = state.log.filter((e) => e.kind === "shipment" && e.minute >= prevHour * 60 && /delivered|released/.test(e.text)).length;
+    if (landed) market.life.deliver(3 * landed);
+    const lines: string[] = [];
+    const cheapest = TRADERS.filter((id) => id !== "arin" && state.merchants[id].status === "open")
+      .sort((a, b) => priceOf(state, a).price - priceOf(state, b).price)[0];
+    if (cheapest) lines.push(`Mangoes are ${priceOf(state, cheapest).price} c at ${PERSONALITY[cheapest].name.split(" ")[0]}'s today.`);
+    for (const id of TRADERS) if (state.merchants[id].status !== "open") lines.push(`${state.merchants[id].shop} is shut. I hope someone helps.`);
+    if (state.shipments.some((s) => s.status === "held")) lines.push("Pema's crates are still stuck at the harbor.");
+    if (landed) lines.push("The harbor crates just came in!");
+    if ((dayOf(state.minute) - 1) % 2 === 0) lines.push("Rent is due tonight at nine.");
+    if (state.player.shares.pema > 0) lines.push("Kavi owns part of Pema's stall now.");
+    lines.push(hour % 24 >= 18 ? "Everyone's on the Spire lawn tonight." : hour % 24 < 11 ? "Busy morning at the Harbor Depot." : "Lunch at the food trucks by the Labs?");
+    market.life.setGossip(lines);
+  };
+  townHour(lastHour);
+
   // ---------------------------------------------------------------- world readouts ----
   const drawBoards = (): void => {
     for (const id of TRADERS) market.setStall(id, { stock: id === "arin" ? state.merchants[id].stock.lassi : state.merchants[id].stock.mango, open: state.merchants[id].status === "open", upgraded: state.player.shares[id] >= UPGRADE_AT, pull: stallPull(state, id) });
@@ -880,7 +900,7 @@ export async function createPlay(game: Game): Promise<Play> {
     if (autosaveIn <= 0) { autosaveIn = AUTOSAVE_SEC; save(); }
     if (mode.kind === "walk") runClock(dt * (ff ? FF_MIN_PER_SEC : GAME_MIN_PER_SEC * (unlocked(state, "rent") ? 1 : TUTORIAL_CLOCK)));
     const hour = Math.floor(state.minute / 60);
-    if (hour !== lastHour) { lastHour = hour; drawBoards(); save(); }
+    if (hour !== lastHour) { townHour(lastHour); lastHour = hour; drawBoards(); save(); }
 
     if (mode.kind === "trade" || mode.kind === "talk") {
       const npc = mode.npc;

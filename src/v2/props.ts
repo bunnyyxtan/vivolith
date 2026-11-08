@@ -29,6 +29,32 @@ const BOARDS: Record<string, { w: number; h: number; x: number; y: number; z: nu
   stall_fruit: { w: 2.2, h: 0.42, x: 0, y: 1.95, z: 1.2 },     // hung from the canopy's front edge
 };
 
+/** Lettered signs on PLACARD_<id> empties of town.glb (blender/build_v2_spire_district.py): name the places and
+ *  point the way around the Spire district. Face size in metres; the empty sits at the face centre. */
+const PLACARDS: Record<string, { w: number; h: number; style: "civic" | "dark" | "mint"; lines: SignLine[]; logo?: "tile" | "none" }> = {
+  depot: { w: 5.6, h: 0.62, style: "civic", lines: [{ text: "Harbor Depot", size: 0.52, weight: 700 }, { text: "Crates for the market stalls", size: 0.26, dim: true }] },
+  station: { w: 3.4, h: 0.62, style: "dark", lines: [{ text: "Spire Station", size: 0.5, weight: 700 }, { text: "Trams · taxis · city bikes", size: 0.26, dim: true }] },
+  yard: { w: 4.6, h: 0.62, style: "mint", lines: [{ text: "Builders' Yard", size: 0.52, weight: 700 }, { text: "NEAR Labs outdoor desks · food trucks", size: 0.24 }] },
+  orchard: { w: 1.9, h: 0.75, style: "civic", lines: [{ text: "Mango Orchard", size: 0.36, weight: 700 }, { text: "Picked every morning", size: 0.22, dim: true }, { text: "for the market", size: 0.22, dim: true }] },
+  way_w: { w: 2.2, h: 0.8, style: "civic", logo: "none", lines: [{ text: "← Builders' Yard", size: 0.3, weight: 700 }, { text: "← Mango Orchard", size: 0.3, weight: 700 }] },
+  way_e: { w: 2.2, h: 0.8, style: "civic", logo: "none", lines: [{ text: "Spire Station →", size: 0.3, weight: 700 }, { text: "Harbor Depot →", size: 0.3, weight: 700 }] },
+  way_gw: { w: 2.2, h: 0.8, style: "civic", logo: "none", lines: [{ text: "↑ Builders' Yard", size: 0.3, weight: 700 }, { text: "↗ Demo Day Lawn", size: 0.3, weight: 700 }] },
+  way_ge: { w: 2.2, h: 0.8, style: "civic", logo: "none", lines: [{ text: "↑ Spire Station", size: 0.3, weight: 700 }, { text: "↖ Demo Day Lawn", size: 0.3, weight: 700 }] },
+};
+
+function placard(id: string): THREE.Object3D | null {
+  const p = PLACARDS[id];
+  if (!p) return null;
+  const map = makeSignTexture({ lines: p.lines, style: p.style, logo: p.logo ?? "tile", aspect: p.w / p.h, px: 1024 });
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(p.w, p.h), new THREE.MeshBasicMaterial({ map, toneMapped: false }));
+  const back = new THREE.Mesh(new THREE.BoxGeometry(p.w + 0.08, p.h + 0.08, 0.06), new THREE.MeshToonMaterial({ color: "#1a2238" }));
+  back.position.z = -0.035;
+  const g = new THREE.Group();
+  g.add(back, face);
+  g.name = `placard_${id}`;
+  return g;
+}
+
 function decor(asset: string, id: string): THREE.Object3D | null {
   const b = BOARDS[asset];
   let lines: SignLine[] | undefined;
@@ -72,6 +98,12 @@ export async function installProps(town: THREE.Object3D, colliders?: Box[]): Pro
   }
   let placed = 0;
   await brand;
+  const boards: THREE.Object3D[] = [];
+  town.traverse((o) => { if (o.name.startsWith("PLACARD_")) boards.push(o); });
+  for (const o of boards) {
+    const sign = placard(o.name.slice("PLACARD_".length));
+    if (sign) { o.add(sign); placed++; }
+  }
   await Promise.all(slots.map(async ({ node, asset, id }) => {
     const t = await templates.get(asset);
     if (!t) return;

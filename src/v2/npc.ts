@@ -17,6 +17,25 @@ const WEIGHT: Record<Kind, number> = { bench: 2, shopdoor: 2, stallq: 3, chat: 3
 const SPIRE_KINDS: readonly Kind[] = ["bench", "shopdoor", "chat", "wait", "photo", "cafe", "stallq", "jog"];
 const JOG_SPEED = 3.0;
 
+/** Spire district areas, from the spot name (spire_<area>_...), see blender/build_v2_spire_district.py. */
+type Area = "amph" | "yard" | "orch" | "stn" | "depot";
+const AREA = /spire_(amph|yard|orch|stn|depot)_/;
+/** The day's rhythm: what people do at each hour (multiplies WEIGHT) and where they gather (cost bonus, metres). */
+interface Phase { kinds: Partial<Record<Kind, number>>; areas: Partial<Record<Area, number>>; spire: number }
+const RHYTHM: { from: number; phase: Phase }[] = [
+  { from: 0, phase: { kinds: { wait: 2, bench: 1.2, stallq: 0.3, crate: 0.2, jog: 0 }, areas: { stn: 25 }, spire: 0.4 } },       // night: last trams home
+  { from: 6, phase: { kinds: { crate: 3, stallq: 2, wait: 1.6, jog: 2 }, areas: { depot: 30, orch: 25, stn: 15 }, spire: 0.35 } }, // morning: deliveries, market, commute
+  { from: 11, phase: { kinds: { stallq: 2.2, cafe: 2, bench: 1.2 }, areas: { yard: 40 }, spire: 0.45 } },                        // lunch: food trucks, cafes
+  { from: 15, phase: { kinds: { photo: 2, bench: 1.5, chat: 1.5, jog: 1.5 }, areas: { amph: 10, orch: 10 }, spire: 0.4 } },      // afternoon: strolls
+  { from: 18, phase: { kinds: { bench: 2.5, chat: 2, cafe: 1.5, crate: 0.3 }, areas: { amph: 50, yard: 15 }, spire: 0.6 } },     // evening: Demo Day on the lawn
+  { from: 23, phase: { kinds: { wait: 2, bench: 1.2, stallq: 0.3, crate: 0.2, jog: 0 }, areas: { stn: 25 }, spire: 0.4 } },
+];
+const phaseAt = (hour: number): Phase => {
+  let p = RHYTHM[0].phase;
+  for (const r of RHYTHM) if (hour >= r.from) p = r.phase;
+  return p;
+};
+
 /** Anything cars must stop for. */
 export interface Pedestrian { x: number; z: number; hidden: boolean }
 export const pedestrians: Pedestrian[] = [];
@@ -33,7 +52,7 @@ export interface MerchantRef {
 export interface FolkChar { c: AnimatedCharacter; root: THREE.Group }
 
 interface Spot {
-  kind: Kind; x: number; z: number; yaw: number; cap: number; users: number;
+  kind: Kind; area: Area | null; x: number; z: number; yaw: number; cap: number; users: number;
   name: string; deep: boolean; mer: MerchantRef | null; next: Spot | null;
   slots: (Ent | null)[]; t: number; turn: number; has: boolean; crate: THREE.Object3D | null;
 }
@@ -64,6 +83,12 @@ export interface Life {
   setPull(id: string, pull: number): void;
   /** Speech bubble above a point (e.g. a merchant's head) for `sec` seconds. */
   say(at: THREE.Vector3, text: string, sec?: number): void;
+  /** Game hour (0..23): sets the day's rhythm; at 07:00 the orchard is picked. */
+  setHour(hour: number): void;
+  /** What people talk about (built from the live economy). */
+  setGossip(lines: readonly string[]): void;
+  /** A shipment landed at the Harbor Depot: up to `crates` crates appear on the dock for porters to carry. */
+  deliver(crates: number): void;
 }
 
 export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Object3D | null, mers: readonly MerchantRef[], folkChars: readonly FolkChar[], floor: FloorHeight = (_x, _z, g) => g): Life {
@@ -71,7 +96,7 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
   const bubbles = createBubbles();
   const spots: Spot[] = [];
   const mk = (kind: Kind, x: number, z: number, yaw: number, cap = 1, name = "", deep = false): Spot => {
-    const s: Spot = { kind, x, z, yaw, cap, users: 0, name, deep, mer: null, next: null, slots: [null, null], t: 0, turn: 0, has: false, crate: null };
+    const s: Spot = { kind, area: (AREA.exec(name)?.[1] as Area | undefined) ?? null, x, z, yaw, cap, users: 0, name, deep, mer: null, next: null, slots: [null, null], t: 0, turn: 0, has: false, crate: null };
     spots.push(s);
     return s;
   };
@@ -177,6 +202,18 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
   // ---- decisions
   const dist = (e: Ent, s: Spot): number => Math.hypot(e.x - s.x, e.z - s.z);
   const pulls = new Map<string, number>();
+  let phase = phaseAt(10), hourNow = -1;
+  let gossip: readonly string[] = CHAT_LINES;
+  /** Puts a crate on up to n empty crate spots of an area (a delivery or a morning's picking). */
+  const stock = (area: Area, n: number): void => {
+    for (const s of spots) {
+      if (n <= 0) break;
+      if (s.kind !== "crate" || s.area !== area || s.has || s.users > 0) continue;
+      s.has = true;
+      if (s.crate) s.crate.visible = true;
+      n--;
+    }
+  };
   const pullOf = (s: Spot): number => (s.mer?.id ? pulls.get(s.mer.id) ?? 1 : 1);
   const claim = (e: Ent, kind: Kind, spireOnly = false): Spot | null => {
     const far = Math.random() < 0.3; // sometimes head across town (park, Spire)
@@ -184,12 +221,15 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
     for (const s of spots) {
       if (s.kind !== kind || s.users >= s.cap || (spireOnly && !s.name.includes("spire"))) continue;
       if (kind === "crate" && (e.carrying ? s.has : !s.has)) continue; // pick up where a crate is, drop where none
+      if (kind === "crate" && e.carrying && (s.area === "depot" || s.area === "orch")) continue; // crates go to market, not back
       if (kind === "stallq" && s.next === null && s.users >= 1) continue;
       if (kind === "stallq" && pullOf(s) < 0.05) continue; // closed or sold out: shoppers walk past
       let c = (far && kind !== "stallq" ? 0 : dist(e, s)) + rnd(0, 18);
       if (kind === "chat" && s.users === 1) c -= 40; // join a waiting partner
       if (kind === "stallq" && s.next && s.next.users === 0) c += 50; // queue place 1 only behind an occupied place 0
       if (kind === "stallq") c += (1 - pullOf(s)) * 30; // cheap, stocked stalls draw the crowd
+      if (s.area) c -= phase.areas[s.area] ?? 0; // where people gather at this hour
+      if (kind === "crate" && !e.carrying && s.area) c -= 15; // porters fetch from the depot and the orchard first
       if (c < bc) { bc = c; best = s; }
     }
     return best;
@@ -217,10 +257,11 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
   };
   const decide = (e: Ent): void => {
     e.state = "idle"; e.t = rnd(0.5, 2);
-    const spire = Math.random() < 0.4; // routine: a trip to the N Spire district (lobby, gardens, square)
-    const opts = spire ? SPIRE_KINDS.filter((k) => k !== e.last) : KINDS.filter((k) => k !== e.last && k !== "jog");
+    // a trip to the N Spire district (lobby, gardens, square, yard, lawn); porters with a crate always deliver it
+    const spire = !e.carrying && Math.random() < phase.spire;
+    const opts = e.carrying ? KINDS : spire ? SPIRE_KINDS.filter((k) => k !== e.last) : KINDS.filter((k) => k !== e.last && k !== "jog");
     let total = 0;
-    const w = opts.map((k) => { const v = e.carrying ? (k === "crate" ? 10 : 0) : WEIGHT[k]; total += v; return v; });
+    const w = opts.map((k) => { const v = e.carrying ? (k === "crate" ? 10 : 0) : WEIGHT[k] * (phase.kinds[k] ?? 1); total += v; return v; });
     let r = Math.random() * total;
     for (let i = 0; i < opts.length; i++) {
       r -= w[i];
@@ -271,7 +312,7 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
         if (p && p.state === "act" && p.spot === s) { // friends on a bench take turns talking
           if (e.slot === 0) { s.turn -= dt; if (s.turn < 0) { s.turn = rnd(3, 6); e.phase ^= 1; p.phase = e.phase ^ 1; } }
           talk = e.phase === 1;
-          if (talk && Math.random() < dt * 0.06) bubbles.say(e.head, CHAT_LINES[Math.floor(Math.random() * CHAT_LINES.length)], 2.4);
+          if (talk && Math.random() < dt * 0.06) bubbles.say(e.head, gossip[Math.floor(Math.random() * gossip.length)], 2.4);
         }
         break;
       }
@@ -300,7 +341,7 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
           if (e.slot === 0) { s.turn -= dt; if (s.turn < 0) { s.turn = rnd(3, 5); s.slots[0]!.phase ^= 1; s.slots[1]!.phase = s.slots[0]!.phase ^ 1; } }
           talk = e.phase === 0 ? e.slot === 0 : e.slot === 1;
           if (e.slot === 0) { s.t -= dt; if (s.t <= 0.001) { s.t = 0.001; e.t = 0; p.t = 0; } }
-          if (e.slot === 0 && Math.random() < dt * 0.15 && talk) bubbles.say(e.head, CHAT_LINES[Math.floor(Math.random() * CHAT_LINES.length)], 2.4);
+          if (e.slot === 0 && Math.random() < dt * 0.15 && talk) bubbles.say(e.head, gossip[Math.floor(Math.random() * gossip.length)], 2.4);
         } else if (s.t > 0) e.t = 0; // partner left
         break;
       }
@@ -386,6 +427,14 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
 
   return {
     setPull(id, pull) { pulls.set(id, pull); },
+    setHour(hour) {
+      if (hour === hourNow) return;
+      hourNow = hour;
+      phase = phaseAt(hour);
+      if (hour === 7) stock("orch", 4); // the morning's picking waits by the orchard lane
+    },
+    setGossip(lines) { if (lines.length) gossip = lines; },
+    deliver(crates) { stock("depot", crates); },
     say(at, text, sec = 3.2) { bubbles.say(at, text, sec); },
     bind(b, c) { pb = b; cam = c; lpx = b.x; lpz = b.z; },
     update(dt) {
@@ -453,6 +502,12 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
           if (e.cd > 0 && e.cd < 2.9) e.yaw += wrap(Math.atan2(-nx, -nz) - e.yaw) * 0.1; // turn toward Kavi
         }
         // folk turn to look at Kavi after a bump
+      }
+      // crates set down at the market sell over a couple of minutes, so porters keep coming from the depot and orchard
+      for (const s of spots) {
+        if (s.kind !== "crate" || !s.has || s.area || s.users > 0 || Math.random() > dt * 0.008) continue;
+        s.has = false;
+        if (s.crate) s.crate.visible = false;
       }
       if (cam) bubbles.update(dt, cam);
     },

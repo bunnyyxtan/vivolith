@@ -76,6 +76,8 @@ export interface Market {
   setStall(id: string, s: StallState): void;
   /** A merchant says a line (speech bubble above their head). */
   say(id: string, text: string, sec?: number): void;
+  /** Townsfolk rhythm, gossip and harbor deliveries (see npc.ts Life). */
+  readonly life: Pick<Life, "setHour" | "setGossip" | "deliver">;
 }
 
 export interface StallState {
@@ -288,6 +290,7 @@ export async function createMarket(scene: THREE.Scene, colliders: Box[]): Promis
     bind: (body, camera) => life.bind(body, camera),
     setStall(id, st) { dressing.get(id)?.(st); life.setPull(id, st.pull); },
     say(id, text, sec) { const n = npcs.find((x) => x.id === id); if (n) life.say(n.head, text, sec); },
+    life,
     nearest(p) {
       let best: Npc | null = null, bd = INTERACT_RADIUS;
       for (const n of npcs) {

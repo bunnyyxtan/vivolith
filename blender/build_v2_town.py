@@ -2362,16 +2362,16 @@ def spire_edges(M):
     sp_hedge(M, "district_e", 58.6, -5.5, 59.6, 50.0, 0.14)  # the district's outer edges are planted, not cut off
     sp_hedge(M, "district_w", -59.6, -2.0, -58.6, 50.0, 0.08)
     lawn_dress(M, -59.0, -6.0, -24.5, 50.0, 0.08, 700, ((-51, 13, -32, 31), (-57.5, -4, -26.5, -2), (-57.5, 45.5, -26.5, 47.5)))
-    lawn_dress(M, -59.0, 50.0, -34.5, 94.0, 0.08, 260)
-    lawn_dress(M, 34.5, 50.0, 59.0, 94.0, 0.08, 260)
-    lawn_dress(M, -34.5, 75.5, 34.5, 94.0, 0.08, 300)
     # backdrop: tree belt and hills beyond the district edge, so no view ends on a bare field
     r = random.Random(11)
     belt = [(s * r.uniform(62, 70), y + r.uniform(-2, 2)) for y in range(-4, 104, 6) for s in (1, -1)]
     belt += [(s * r.uniform(72, 82), y + r.uniform(-3, 3)) for y in range(0, 104, 9) for s in (1, -1)]
     belt += [(x + r.uniform(-2, 2), r.uniform(98, 106)) for x in range(-66, 67, 7)]
     for x, y in belt:
-        town_tree(x, y, -0.05, r.uniform(9, 14), r.randint(1, 10 ** 6), 5)
+        h, seed = r.uniform(9, 14), r.randint(1, 10 ** 6)  # drawn even when skipped: the hills below keep their shapes
+        if abs(x) < 82 and y > -7:
+            continue  # the backdrop streets and terraces stand there now (build_v2_spire_district.py)
+        town_tree(x, y, -0.05, h, seed, 5)
     for k in range(18):
         a = math.radians(-15 + 210 * k / 17)
         rr = r.uniform(115, 150)
@@ -2664,7 +2664,7 @@ def town(M):
     collider("bound_ne", 59, -7, 85, -6, 0, 8)
     spire_gardens(M)
     spire_square(M)
-    spire_grove(M)
+    spire_district(M)  # Demo Day Lawn, Builders' Yard, Mango Orchard, Spire Station, Harbor Depot
     spire_edges(M)
     outer_ring(M)
     hills(M)
@@ -2701,3 +2701,6 @@ def build():
     write_roads()
     print("spots", dict(SPOTS), "total", sum(SPOTS.values()))
     stats()
+
+
+exec(open(r"C:/Bunnyy/Hackathons/NEAR/blender/build_v2_spire_district.py").read())  # the district behind and beside the Spire
