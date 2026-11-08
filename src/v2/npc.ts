@@ -67,6 +67,8 @@ interface Ent extends Pedestrian {
   by: number; // last ground height outside seat colliders
   jogLeft: number; // waypoints left on a jogging lap (0 = not jogging)
   baseSpeed: number;
+  /** View culling: drawn this frame, animation time owed while off screen, ink/shadow detail (near only). */
+  onScreen: boolean; lag: number; near: boolean; inks: THREE.Object3D[]; bodies: THREE.Mesh[];
 }
 
 const WALK = 1.3, PLAYER_R = 0.32, HEAD = 1.85;
@@ -171,6 +173,7 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
     r: 0.33, fixed, cd: 0, svx: 0, svz: 0, stag: 0, head: new THREE.Vector3(),
     state: "idle", spot: null, slot: 0, path: [], pi: 0, speed: rnd(1.0, 1.5), spd: 0, t: 0, phase: 0, last: null, carrying: false,
     stuckT: 0, sx: 0, sz: 0, carry: null, mer: null, hx: root.position.x, hz: root.position.z, hy: root.position.y, by: root.position.y, jogLeft: 0, baseSpeed: 1.2,
+    onScreen: true, lag: 0, near: true, inks: [], bodies: [],
   });
   const merEnts = mers.map((m) => { const e = mkEnt(m.character, m.root, true); e.mer = m; return e; });
   const folk = folkChars.map((f) => {
@@ -399,6 +402,34 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
 
   const body: Body = { x: 0, y: 0, z: 0, vy: 0, radius: 0.3, height: 1.7, grounded: true };
   let pb: Body | null = null, cam: THREE.Camera | null = null;
+  // ---- view culling: townsfolk outside the camera frustum or far away are not drawn; beyond DETAIL_FAR they lose the
+  // ink outline and shadow (a few pixels tall there). Characters disable three's own culling (skinned bounds lag).
+  const VIEW_FAR = 90, DETAIL_FAR = 30;
+  const frustum = new THREE.Frustum(), viewProj = new THREE.Matrix4(), sphere = new THREE.Sphere(new THREE.Vector3(), 1.2);
+  for (const e of folk) {
+    e.root.traverse((o) => {
+      if (/_outline$/.test(o.name)) e.inks.push(o);
+      else if ((o as THREE.Mesh).isMesh && (o as THREE.Mesh).castShadow) e.bodies.push(o as THREE.Mesh);
+    });
+  }
+  const cull = (): void => {
+    if (!cam) return;
+    viewProj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+    frustum.setFromProjectionMatrix(viewProj);
+    const cp = cam.position;
+    for (const e of folk) {
+      const d = Math.hypot(e.x - cp.x, e.z - cp.z);
+      sphere.center.set(e.x, e.y + 0.9, e.z);
+      e.onScreen = !e.hidden && d < VIEW_FAR && frustum.intersectsSphere(sphere);
+      e.root.visible = e.onScreen;
+      const near = d < DETAIL_FAR;
+      if (near !== e.near) {
+        e.near = near;
+        for (const o of e.inks) o.visible = near;
+        for (const b of e.bodies) b.castShadow = near;
+      }
+    }
+  };
   let lpx = 0, lpz = 0;
 
   const bump = (e: Ent, nx: number, nz: number, speed: number): void => {
@@ -469,7 +500,9 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
         }
         if (e.state === "idle") e.c.lift = 0;
         e.c.setSpeed(e.spd, WALK, WALK * 2);
-        e.c.update(dt);
+        // off screen: the mixer catches up twice a second instead of every frame (nobody sees the pose)
+        e.lag += dt;
+        if (e.onScreen || e.lag > 0.5) { e.c.update(e.lag); e.lag = 0; }
         place(e);
       }
       // separation between walking folk
@@ -509,6 +542,7 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
         s.has = false;
         if (s.crate) s.crate.visible = false;
       }
+      cull();
       if (cam) bubbles.update(dt, cam);
     },
   };

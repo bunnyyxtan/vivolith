@@ -1,6 +1,6 @@
 // Visible walking surface height. The collision ground is flat at the street level, but sidewalks, pavers and
 // curbs are modelled ~0.14 m higher, so characters standing on the collision ground looked sunk into them.
-// One downward ray per 0.5 m cell onto the walkway meshes, cached: cheap after the first visit to an area.
+// Exact height under any point from a 2 m grid index of the walkway triangles (built once at load).
 import * as THREE from "three";
 import type { Footprint } from "../character";
 
@@ -26,36 +26,55 @@ export function createFloor(scene: THREE.Object3D): FloorHeight {
     if ((o as THREE.Mesh).isMesh && !(o as THREE.SkinnedMesh).isSkinnedMesh && WALKWAY.test(o.name) && !NOT_WALKWAY.test(o.name)) meshes.push(o as THREE.Mesh);
   });
   scene.updateMatrixWorld(true);
-  const ray = new THREE.Raycaster();
-  const from = new THREE.Vector3(), down = new THREE.Vector3(0, -1, 0);
-  const sample = (x: number, z: number, ground: number): number => {
-    from.set(x, ground + MAX_STEP + 0.5, z);
-    ray.set(from, down);
-    ray.far = MAX_STEP + 0.6;
-    const hit = ray.intersectObjects(meshes, false)[0];
-    return hit && hit.point.y <= ground + MAX_STEP ? hit.point.y : -Infinity;
-  };
-  // A 0.5 m cell is one height unless a curb or step crosses it; then it holds 5 x 5 sub-cells of 0.1 m, so a foot
-  // near an edge stands on the side it is really on (a whole-cell value put it 14 cm up or down at every curb).
-  const SUB = 5;
-  const cache = new Map<string, number | Float32Array>();
-  return (x, z, ground) => {
-    const cx = Math.round(x * 2) / 2, cz = Math.round(z * 2) / 2;
-    const key = `${cx},${cz},${Math.round(ground * 4)}`;
-    let cell = cache.get(key);
-    if (cell === undefined) {
-      const h = 0.24;
-      const probes = [sample(cx, cz, ground), sample(cx - h, cz - h, ground), sample(cx + h, cz - h, ground), sample(cx - h, cz + h, ground), sample(cx + h, cz + h, ground)];
-      if (probes.every((p) => p === probes[0] || Math.abs(p - probes[0]) < 0.01)) cell = probes[0];
-      else {
-        const sub = new Float32Array(SUB * SUB);
-        for (let i = 0; i < SUB; i++) for (let j = 0; j < SUB; j++) sub[i * SUB + j] = sample(cx - 0.2 + i * 0.1, cz - 0.2 + j * 0.1, ground);
-        cell = sub;
+  // Walkway triangles in world space, bucketed by their xz bounds on a 2 m grid: a query tests only its bucket.
+  // (A raycast tested every triangle of the town-wide walkway meshes: ~0.5 ms each, and townsfolk walking into new
+  // ground fired dozens per frame.) Vertical faces (curb sides) are skipped: they have no top to stand on.
+  const tri: number[] = []; // x0 y0 z0 x1 y1 z1 x2 y2 z2 per triangle
+  const v = new THREE.Vector3();
+  for (const m of meshes) {
+    const pos = m.geometry.getAttribute("position");
+    const index = m.geometry.index;
+    const n = index ? index.count : pos.count;
+    for (let k = 0; k < n; k += 3) {
+      const base = tri.length;
+      for (let c = 0; c < 3; c++) {
+        v.fromBufferAttribute(pos, index ? index.getX(k + c) : k + c).applyMatrix4(m.matrixWorld);
+        tri.push(v.x, v.y, v.z);
       }
-      cache.set(key, cell);
+      const area = (tri[base + 3] - tri[base]) * (tri[base + 8] - tri[base + 2]) - (tri[base + 6] - tri[base]) * (tri[base + 5] - tri[base + 2]);
+      if (Math.abs(area) < 1e-6) tri.length = base;
     }
-    if (typeof cell === "number") return Math.max(ground, cell);
-    const i = Math.min(SUB - 1, Math.max(0, Math.round((x - cx + 0.2) * 10))), j = Math.min(SUB - 1, Math.max(0, Math.round((z - cz + 0.2) * 10)));
-    return Math.max(ground, cell[i * SUB + j]);
+  }
+  const T = new Float32Array(tri);
+  const CELL = 2;
+  const grid = new Map<number, number[]>();
+  const key = (i: number, j: number): number => (i + 4096) * 8192 + (j + 4096);
+  for (let t = 0; t < T.length; t += 9) {
+    const i0 = Math.floor(Math.min(T[t], T[t + 3], T[t + 6]) / CELL), i1 = Math.floor(Math.max(T[t], T[t + 3], T[t + 6]) / CELL);
+    const j0 = Math.floor(Math.min(T[t + 2], T[t + 5], T[t + 8]) / CELL), j1 = Math.floor(Math.max(T[t + 2], T[t + 5], T[t + 8]) / CELL);
+    for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+      const k = key(i, j);
+      const list = grid.get(k);
+      if (list) list.push(t); else grid.set(k, [t]);
+    }
+  }
+  /** Top of the walkway under (x, z): the highest surface no more than MAX_STEP above the collision ground. */
+  return (x, z, ground) => {
+    const list = grid.get(key(Math.floor(x / CELL), Math.floor(z / CELL)));
+    let top = -Infinity;
+    if (list) {
+      const hi = ground + MAX_STEP, lo = ground - 0.1;
+      for (const t of list) {
+        const ax = T[t], az = T[t + 2], bx = T[t + 3], bz = T[t + 5], cx = T[t + 6], cz = T[t + 8];
+        const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+        const l1 = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / d;
+        const l2 = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / d;
+        const l3 = 1 - l1 - l2;
+        if (l1 < -1e-5 || l2 < -1e-5 || l3 < -1e-5) continue;
+        const y = l1 * T[t + 1] + l2 * T[t + 4] + l3 * T[t + 7];
+        if (y <= hi && y >= lo && y > top) top = y;
+      }
+    }
+    return Math.max(ground, top);
   };
 }
