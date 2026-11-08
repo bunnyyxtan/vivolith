@@ -124,6 +124,20 @@ export function prepareModel(root: THREE.Object3D): PreparedModel {
         m.alphaTest = 0.5;
         m.depthWrite = true;
         m.side = THREE.DoubleSide;
+        // Mipmapping averages the cut-out alpha down with distance, so far trees lost their leaves and looked bare.
+        // Scale alpha up by the mip level being sampled so canopies keep their coverage at any distance.
+        m.onBeforeCompile = (sh) => {
+          sh.fragmentShader = sh.fragmentShader.replace(
+            "#include <alphatest_fragment>",
+            `#ifdef USE_MAP
+               vec2 texel = vMapUv * vec2(textureSize(map, 0));
+               float mip = max(0.0, 0.5 * log2(max(dot(dFdx(texel), dFdx(texel)), dot(dFdy(texel), dFdy(texel)))));
+               diffuseColor.a *= 1.0 + mip * 0.3;
+             #endif
+             #include <alphatest_fragment>`,
+          );
+        };
+        m.customProgramCacheKey = () => "leaf-coverage";
         m.needsUpdate = true;
       }
     }

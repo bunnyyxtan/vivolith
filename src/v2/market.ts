@@ -36,7 +36,7 @@ const CAST: Partial<Record<NpcId, string>> = { pema: "merchant_fruit", tomas: "t
 const TOWN_POST: Record<NpcId, string> = { pema: "pema", tomas: "tomas", mira: "v2", arin: "teahouse", harbor: "v3", engineer: "engineer" };
 const CAST_HEIGHT = 1.7;
 const HEIGHT: Record<NpcId, number> = { pema: CAST_HEIGHT, tomas: CAST_HEIGHT * 1.06, mira: CAST_HEIGHT * 0.98, arin: CAST_HEIGHT, harbor: CAST_HEIGHT, engineer: CAST_HEIGHT };
-const FOLK = 16;
+const FOLK = 24;
 const INTERACT_RADIUS = 2.4;
 const NOTICE_RADIUS = 7;
 

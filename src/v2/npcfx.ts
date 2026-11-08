@@ -58,11 +58,11 @@ function rot(bone: THREE.Object3D | undefined, yaw: number, ang: number): void {
   bone.quaternion.copy(qp.invert()).multiply(qb);
 }
 
-export interface PoseState { sit: number; carry: number; lean: number; yaw: number }
+export interface PoseState { sit: number; carry: number; lean: number; yaw: number; phone: number }
 
 /** Installs the pose post-pass on a character. The caller mutates the returned state each frame. */
 export function installPose(c: AnimatedCharacter): PoseState {
-  const s: PoseState = { sit: 0, carry: 0, lean: 0, yaw: 0 };
+  const s: PoseState = { sit: 0, carry: 0, lean: 0, yaw: 0, phone: 0 };
   const b = (n: string): THREE.Object3D | undefined => c.bone(n);
   c.post = () => {
     if (s.sit > 0.01) {
@@ -78,6 +78,10 @@ export function installPose(c: AnimatedCharacter): PoseState {
       }
     }
     if (s.lean > 0.01) rot(b("Spine1"), s.yaw, 0.3 * s.lean);
+    if (s.phone > 0.01) { // taking a photo: right arm raised in front, forearm bent up to the face
+      rot(b("RightArm"), s.yaw, -1.25 * s.phone);
+      rot(b("RightForeArm"), s.yaw, -0.9 * s.phone);
+    }
   };
   return s;
 }

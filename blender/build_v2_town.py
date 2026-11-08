@@ -278,7 +278,7 @@ def town_materials():
         blue=f("town_blue", "3d7fd1", 0.6), yellow=f("town_yellow", "f2c230", 0.6), pink=f("town_pink", "f2a5b8", 0.7),
         cone=f("town_cone", "ff6a1f", 0.6), glassd=f("town_glass_dark", "2c5560", 0.1, 0.5),
         container1=f("town_container_teal", "2f8f86", 0.6), container2=f("town_container_orange", "e0793a", 0.6),
-        container3=f("town_container_cream", "e9dfc8", 0.6), water2=f("town_water_pond", "4fb8d8", 0.05, 0.1),
+        container3=f("town_container_cream", "e9dfc8", 0.6), water2=f("town_water_pond", "4fb8d8", 0.05, 0.1), hedge_core=f("town_hedge_core", "2f6b33", 0.95),
     )
     for m in bpy.data.materials:  # viewport colour for headless Workbench inspection
         b = next((n for n in m.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None) if m.node_tree else None
@@ -1216,8 +1216,8 @@ def stall(sid, x, y, face, canopy, goods, M):
 
 
 def kiosk(name, x, y, M):
-    """Orange coffee kiosk with a counter, stools and a striped awning (open to -y)."""
-    wbox(M["orange"], x - 1.6, y - 1.2, 0.14, x + 1.6, y + 1.2, 2.8)
+    """Coffee kiosk with a counter, stools and a striped awning (open to -y)."""
+    wbox(M["walls"][0] if name.startswith("sq_") else M["orange"], x - 1.6, y - 1.2, 0.14, x + 1.6, y + 1.2, 2.8)
     wbox(M["trim"], x - 1.8, y - 1.6, 2.8, x + 1.8, y + 1.4, 3.0)
     wbox(M["tealdk"], x - 1.8, y - 1.6, 3.0, x + 1.8, y + 1.4, 3.1)
     wbox(M["interior"], x - 1.2, y - 1.22, 1.2, x + 1.2, y - 1.2, 2.4)
@@ -2238,6 +2238,288 @@ def gate_zone(M):
     street_tree(M, -5.4, -81.0, 6.5, 0.14, 7)
 
 
+# ------------------------------------------------------- Spire district ----
+# The N Spire's surroundings (plaza.glb holds the Spire, promenade and forecourt). West: Spire Gardens, a park
+# around a fountain plaza, continuing Linden Park to the south. East: Spire Square, a paved square with a cafe
+# terrace, drinks kiosk, vending, a NEAR sculpture and bikes. North: a quiet grove behind the towers.
+# Paths join the promenade (hedge gaps at y 10-14 / 30-34), the forecourt and the town streets.
+SG_C = (-41.5, 22.0)      # Spire Gardens fountain plaza centre
+SQ_X0, SQ_X1 = 25.0, 58.5  # Spire Square extent
+SQ_Y0, SQ_Y1 = -5.5, 50.0
+
+
+def sg_path(M, pts, w=2.8, sm=2, z=0.08):
+    path_strip(M["path"], smooth(pts, sm), w, z - 0.01, z + 0.03)
+
+
+def pergola(M, x, y, w, d, rot=0.0, z0=0.08):
+    """Timber pergola with a slatted roof and warm string lights; two benches face each other under it."""
+    T = tf(x, y, rot)
+    for lx in (-w / 2, w / 2):
+        for ly in (-d / 2, d / 2):
+            obox(M["wood2"], T, lx - 0.1, ly - 0.1, z0, lx + 0.1, ly + 0.1, z0 + 2.7)
+    for ly in (-d / 2, d / 2):
+        obox(M["wood2"], T, -w / 2 - 0.3, ly - 0.08, z0 + 2.7, w / 2 + 0.3, ly + 0.08, z0 + 2.88)
+    for k in range(int(w / 0.5) + 1):
+        lx = -w / 2 + k * 0.5
+        obox(M["wood"], T, lx - 0.05, -d / 2 - 0.3, z0 + 2.88, lx + 0.05, d / 2 + 0.3, z0 + 2.98)
+    a, b = T(-w / 2, 0), T(w / 2, 0)
+    string_lights(a[0], a[1], b[0], b[1], z0 + 2.75, M, 6, 0.25)
+    for side in (-1, 1):
+        bx, by = T(0, side * (d / 2 - 0.6))
+        bench_t(f"spire_pergola{side}_{x:.0f}", bx, by, rot + (0 if side < 0 else math.pi), M, z0)
+    for lx in (-w / 2, w / 2):
+        for ly in (-d / 2, d / 2):
+            px, py = T(lx, ly)
+            collider(f"pergola{px:.1f}_{py:.1f}", px - 0.12, py - 0.12, px + 0.12, py + 0.12, z0, z0 + 2.7)
+
+
+def sg_bed(M, name, x0, y0, x1, y1, z=0.08, pal=None):
+    """Low stone-edged flower bed (walkers go round it)."""
+    wbox(M["stone"], x0, y0, z - 0.02, x1, y1, z + 0.22)
+    wbox(M["soil"], x0 + 0.15, y0 + 0.15, z + 0.22, x1 - 0.15, y1 - 0.15, z + 0.25)
+    flower_bed(M, x0 + 0.3, y0 + 0.3, x1 - 0.3, y1 - 0.3, z + 0.25, 9, pal)
+    collider(name, x0, y0, x1, y1, z - 0.02, z + 0.3)
+
+
+def sculpture(M, x, y, z0=0.14):
+    """NEAR symbol on a stepped plinth, the square's landmark and photo spot."""
+    prism(M["stone"], circle(x, y, 2.2, 20), z0 - 0.02, z0 + 0.3)
+    prism(M["plinth"], circle(x, y, 1.1, 16), z0 + 0.3, z0 + 1.2)
+    wbox(M["trim"], x - 1.2, y - 0.25, z0 + 1.2, x + 1.2, y + 0.25, z0 + 1.35)
+    symbol_mesh("sq_sym_a", x, y - 0.2, z0 + 2.75, 2.6, 0.18, M["teal"])
+    symbol_mesh("sq_sym_b", x, y + 0.2, z0 + 2.75, 2.6, -0.18, M["teal"])
+    ring_ell(M["led"], x, y, 1.1, 1.1, 1.18, 1.18, z0 + 1.2, z0 + 1.26, 20)
+    collider("sculpture", x - 1.3, y - 1.3, x + 1.3, y + 1.3, z0, z0 + 4.2)
+
+
+def sp_hedge(M, name, x0, y0, x1, y1, z=0.08, h=1.1):
+    """Leaf-card hedge with a collider (the plaza's box hedges are gone)."""
+    x0, x1 = sorted((x0, x1)); y0, y1 = sorted((y0, y1))
+    wbox(M["stone"], x0, y0, z - 0.02, x1, y1, z + 0.3)
+    wbox(M["hedge_core"], x0 + 0.25, y0 + 0.25, z + 0.3, x1 - 0.25, y1 - 0.25, z + 0.3 + h * 0.45)
+    along_x = (x1 - x0) >= (y1 - y0)
+    L = (x1 - x0) if along_x else (y1 - y0)
+    for i in range(max(1, int(L / 0.7))):
+        t = (i + 0.5) / max(1, int(L / 0.7))
+        cx, cy = ((x0 + (x1 - x0) * t), (y0 + y1) / 2) if along_x else ((x0 + x1) / 2, y0 + (y1 - y0) * t)
+        w = (y1 - y0) if along_x else (x1 - x0)
+        leaf_cards(cx, cy, z + 0.3 + h * 0.15, 0.3 if along_x else w * 0.32, w * 0.32 if along_x else 0.3, h * 0.28, 14, 0.85, rt.randint(1, 10 ** 6))
+    collider(name, x0, y0, x1, y1, z - 0.02, z + 0.3 + h)
+
+
+def lawn_dress(M, x0, y0, x1, y1, z, n, keep_out=()):
+    """Tufts and a few daisies so lawns are not flat green; skips the given rectangles (paths, plazas)."""
+    r = random.Random(int(x0 * 7 + y0 * 13))
+    for _ in range(n):
+        x, y = r.uniform(x0, x1), r.uniform(y0, y1)
+        if any(a <= x <= b and c <= y <= d for a, c, b, d in keep_out):
+            continue
+        tuft(M, x, y, z, r.uniform(0.25, 0.4), 0.16)
+        if r.random() < 0.25:
+            flower(M, x + 0.2, y, z, r, M[r.choice(("petal_w", "petal_y"))], 0.6)
+
+
+def cafe_pavilion(M, x, y, z0):
+    """Small glass-fronted cafe on the terrace: mint walls, white roof with an overhang, striped awning, menu board.
+    Front faces -y (toward the terrace tables)."""
+    w, d, h = 6.0, 3.6, 3.2
+    x0, x1, y0, y1 = x - w / 2, x + w / 2, y - d / 2, y + d / 2
+    wbox(M["walls"][3], x0, y0 + 0.15, z0, x1, y1, z0 + h)                 # mint walls
+    wbox(M["shop"], x0 + 0.4, y0 + 0.1, z0 + 0.25, x1 - 0.4, y0 + 0.16, z0 + h - 0.45)  # glass front
+    wbox(M["interior"], x0 + 0.45, y0 + 0.16, z0 + 0.3, x1 - 0.45, y0 + 0.2, z0 + h - 0.5)
+    for k in range(5):  # mullions
+        mx = x0 + 0.4 + k * (w - 0.8) / 4
+        wbox(M["trim"], mx - 0.05, y0 + 0.08, z0 + 0.2, mx + 0.05, y0 + 0.17, z0 + h - 0.4)
+    wbox(M["wood"], x0 + 0.5, y0 - 0.35, z0 + 0.95, x1 - 0.5, y0 + 0.1, z0 + 1.05)   # outside counter ledge
+    wbox(M["trim"], x0 - 0.5, y0 - 0.6, z0 + h, x1 + 0.5, y1 + 0.3, z0 + h + 0.28)   # roof slab with overhang
+    wbox(M["teal"], x0 - 0.5, y0 - 0.62, z0 + h + 0.05, x1 + 0.5, y0 - 0.55, z0 + h + 0.23)
+    for s in range(12):  # striped awning
+        m = M["teal"] if s % 2 == 0 else M["fabric_cream"]
+        ax = x0 + s * w / 12
+        hexa(m, [(ax, y0 + 0.1, z0 + h - 0.35), (ax + w / 12, y0 + 0.1, z0 + h - 0.35), (ax + w / 12, y0 - 1.1, z0 + h - 0.75), (ax, y0 - 1.1, z0 + h - 0.75),
+                 (ax, y0 + 0.1, z0 + h - 0.3), (ax + w / 12, y0 + 0.1, z0 + h - 0.3), (ax + w / 12, y0 - 1.1, z0 + h - 0.7), (ax, y0 - 1.1, z0 + h - 0.7)])
+    wbox(M["dark"], x1 + 0.2, y0 - 0.6, z0, x1 + 0.28, y0 - 0.1, z0 + 1.3)          # chalk menu board
+    wbox(M["tealdk"], x1 + 0.15, y0 - 0.65, z0 + 0.35, x1 + 0.2, y0 - 0.05, z0 + 1.25)
+    for px in (x0 + 0.3, x1 - 0.3):
+        plant_pot(M, px, y0 - 0.45, z0, M["orange"], 0.22, 1.6)
+    string_lights(x0 - 0.4, y0 - 1.1, x1 + 0.4, y0 - 1.1, z0 + h - 0.8, M, 7, 0.2)
+    collider("cafe_pavilion", x0, y0, x1, y1, z0, z0 + h + 0.3)
+    spot("shopdoor", "spire_cafe_door", x, y0 - 0.9, 0, 1)
+
+
+def spire_edges(M):
+    """Leafy hedges along the promenade and forecourt (gaps where paths cross), lawn dressing, backdrop belt."""
+    for k, (ya, yb) in enumerate(((8.0, 13.0), (20.0, 25.0), (32.0, 37.0))):  # flower beds on the promenade axis
+        sg_bed(M, f"prom_bed{k}", -1.4, ya, 1.4, yb, 0.02, ["petal_w", "petal_p", "petal_l"])  # low: the axis view to the Spire stays open
+    for s in (1, -1):
+        xa, xb = sorted((s * 22.0, s * 24.0))
+        for k, (ya, yb) in enumerate(((-6.0, 10.0), (14.0, 30.0), (34.0, 44.0))):
+            sp_hedge(M, f"prom_hedge{s}_{k}", xa, ya, xb, yb, 0.02)
+        xa, xb = sorted((s * 17.0, s * 31.0))
+        sp_hedge(M, f"fore_hedge{s}", xa, 47.0, xb, 48.4, 0.03)
+    sp_hedge(M, "district_e", 58.6, -5.5, 59.6, 50.0, 0.14)  # the district's outer edges are planted, not cut off
+    sp_hedge(M, "district_w", -59.6, -2.0, -58.6, 50.0, 0.08)
+    lawn_dress(M, -59.0, -6.0, -24.5, 50.0, 0.08, 700, ((-51, 13, -32, 31), (-57.5, -4, -26.5, -2), (-57.5, 45.5, -26.5, 47.5)))
+    lawn_dress(M, -59.0, 50.0, -34.5, 94.0, 0.08, 260)
+    lawn_dress(M, 34.5, 50.0, 59.0, 94.0, 0.08, 260)
+    lawn_dress(M, -34.5, 75.5, 34.5, 94.0, 0.08, 300)
+    # backdrop: tree belt and hills beyond the district edge, so no view ends on a bare field
+    r = random.Random(11)
+    belt = [(s * r.uniform(62, 70), y + r.uniform(-2, 2)) for y in range(-4, 104, 6) for s in (1, -1)]
+    belt += [(s * r.uniform(72, 82), y + r.uniform(-3, 3)) for y in range(0, 104, 9) for s in (1, -1)]
+    belt += [(x + r.uniform(-2, 2), r.uniform(98, 106)) for x in range(-66, 67, 7)]
+    for x, y in belt:
+        town_tree(x, y, -0.05, r.uniform(9, 14), r.randint(1, 10 ** 6), 5)
+    for k in range(18):
+        a = math.radians(-15 + 210 * k / 17)
+        rr = r.uniform(115, 150)
+        x, y = math.cos(a) * rr * 1.1, 45 + math.sin(a) * rr * 0.7
+        bm = bmesh.new()
+        bmesh.ops.create_icosphere(bm, subdivisions=3, radius=1.0)
+        bmesh.ops.scale(bm, vec=(r.uniform(26, 40), r.uniform(18, 28), r.uniform(14, 26)), verts=bm.verts)
+        bmesh.ops.translate(bm, verts=bm.verts, vec=(x, y, -6))
+        h = mesh_obj(f"hill_n{k}", bm, M["hill"] if k % 3 else M["hill2"])
+        for p in h.data.polygons:
+            p.use_smooth = True
+
+
+def spire_gardens(M):
+    z = 0.08
+    X0, X1, Y0, Y1 = -59.0, -24.5, -6.0, 50.0
+    cx, cy = SG_C
+    wbox(M["lawn"], X0, Y0, -0.1, X1, Y1, z)
+    # fountain plaza: paved round with a fountain and a ring of benches facing it
+    prism(M["path"], circle(cx, cy, 9.0, 32), z - 0.02, 0.14)
+    ring_ell(M["brick"], cx, cy, 5.2, 5.2, 6.0, 6.0, 0.14, 0.146, 32)
+    ring_ell(M["stone"], cx, cy, 9.0, 9.0, 9.35, 9.35, z - 0.02, 0.17, 32)
+    fountain("sg_fountain", cx, cy, 3.6, M)
+    for k in range(6):
+        a = math.radians(30 + k * 60)
+        bx, by = cx + math.cos(a) * 6.6, cy + math.sin(a) * 6.6
+        bench_t(f"spire_ring{k}", bx, by, face_rot(cx - bx, cy - by), M)
+    for k in range(6):
+        a = math.radians(k * 60)
+        town_lamp(f"sg_lamp{k}", cx + math.cos(a) * 8.4, cy + math.sin(a) * 8.4, M, banner=False)
+    # paths: promenade gaps -> plaza, plaza -> forecourt, plaza -> Linden Park (town), and the jogging loop
+    sg_path(M, [(-24.5, 12.0), (-28.0, 13.5), (-32.5, 16.5)], 3.0)
+    sg_path(M, [(-24.5, 32.0), (-28.5, 30.5), (-33.0, 27.5)], 3.0)
+    sg_path(M, [(cx, cy + 9.0), (cx, 38.0), (-38.0, 45.0), (-34.5, 49.5)], 3.0)
+    sg_path(M, [(cx - 6.0, cy - 6.5), (-50.0, 8.0), (-55.0, 0.0), (-57.0, -6.0)], 2.8)
+    loop = smooth([(-56.5, -3.0), (-27.5, -3.0), (-27.5, 46.5), (-56.5, 46.5)], 3, closed=True)
+    path_strip(M["path"], loop + loop[:2], 2.2, z - 0.01, z + 0.03)
+    for k, (px, py) in enumerate(loop[::6]):
+        spot("jog", f"spire_loop{k:02d}", px, py, 0, 1)
+    # beds and planting in the four lawns between the paths
+    pal_warm, pal_cool = ["petal_p", "petal_c", "petal_y"], ["petal_l", "petal_w", "petal_p"]
+    sg_bed(M, "sg_bed1", -36.0, 4.0, -29.5, 8.5, z, pal_warm)
+    sg_bed(M, "sg_bed2", -53.5, 30.0, -47.0, 34.0, z, pal_cool)
+    sg_bed(M, "sg_bed3", -36.5, 34.5, -30.0, 39.0, z, pal_cool)
+    sg_bed(M, "sg_bed4", -54.0, 10.0, -48.5, 14.0, z, pal_warm)
+    for i, (tx, ty, h) in enumerate([(-31.5, 0.5, 9.5), (-45.0, 4.0, 10.5), (-53.0, 20.5, 9.0), (-52.5, 41.0, 11.0), (-30.5, 22.5, 8.5),
+                                     (-44.5, 42.0, 9.5), (-32.5, 43.5, 10.0), (-55.5, 6.5, 8.5), (-38.0, 1.0, 8.0), (-48.5, 26.5, 7.5)]):
+        tree(tx, ty, z, h, M, pit=False)
+    for sx, sy, r in [(-34.0, 10.0, 0.9), (-29.0, 9.5, 0.8), (-50.0, 35.5, 0.9), (-46.0, 30.0, 0.7), (-37.5, 33.0, 0.8), (-49.5, 15.5, 0.9),
+                      (-55.0, 15.0, 0.8), (-33.5, 30.5, 0.7), (-41.0, 5.5, 0.9), (-27.5, 20.0, 0.8)]:
+        shrub(M, sx, sy, z, r)
+    pergola(M, -49.5, 44.0, 4.4, 3.4, 0.0, z)
+    # quiet picnic corner: two benches and a table under the trees
+    cafe_table("spire_picnic", -36.0, -0.5, M, None, z, 4)
+    town_lamp("sg_lamp_s", -30.0, -1.5, M, banner=False)
+    for k, (wx, wy, wdx, wdy) in enumerate([(-36.5, 20.0, 1, 0), (-41.5, 15.0, 0, 1), (-47.0, 23.5, 1, -0.3)]):
+        spot("photo", f"spire_fountain{k}", wx, wy, wdx, wdy)
+
+
+def spire_square(M):
+    z = 0.14
+    wbox(M["path"], SQ_X0, SQ_Y0, -0.1, SQ_X1, SQ_Y1, z)
+    for y in range(-4, 50, 7):  # brick bands give the square a rhythm
+        wbox(M["brick"], SQ_X0, y, z, SQ_X1, y + 1.1, z + 0.006)
+    for x in (33.0, 50.0):
+        wbox(M["brick"], x, SQ_Y0, z, x + 1.1, SQ_Y1, z + 0.006)
+    # raised cafe terrace with three steps, cafe kiosk at its back
+    tx0, tx1, ty0, ty1 = 38.0, 57.5, 26.0, 40.0
+    for i, h in enumerate((0.15, 0.3, 0.45)):
+        wbox(M["stone"], tx0 - (2 - i) * 0.45, ty0 - (2 - i) * 0.45, z - 0.02, tx1, ty1, z + h)
+        collider(f"terrace{i}", tx0 - (2 - i) * 0.45, ty0 - (2 - i) * 0.45, tx1, ty1, 0, z + h)
+    tz = z + 0.45
+    wbox(M["stone"], tx0, ty0, tz, tx1, ty1, tz + 0.02)
+    sp_hedge(M, "terrace_e", tx1 - 0.9, ty0, tx1, ty1 - 6.0, tz)
+    cafe_pavilion(M, 50.5, 36.0, tz)
+    for k, (x, y) in enumerate([(40.5, 28.5), (44.5, 28.5), (48.5, 28.5), (41.5, 32.5), (45.5, 32.5), (40.5, 36.5)]):
+        cafe_table(f"spire_terrace{k}", x, y, M, M["teal"] if k % 2 else M["orange"], tz, 2)
+    railing(tx0, ty1, tx1, ty1, M, tz, 0.95)
+    for x in (tx0 + 1.0, tx1 - 1.0):
+        plant_pot(M, x, ty0 + 0.6, tz, M["orange"], 0.3, 2.2)
+    # drinks kiosk facing the promenade, with a two-place queue
+    prop("kiosk_drinks", "sq", 31.5, 8.0, 0.0, 0.14)  # Tripo kiosk, serving window to -y
+    collider("sq_kiosk", 29.8, 6.6, 33.2, 9.5, 0, 2.9)
+    for k, dy in enumerate((0.0, 1.0)):
+        spot("stallq", f"spire_kiosk_{'ab'[k]}", 31.5, 8.0 - 2.9 - dy, 0, 1)
+    for k, y in enumerate((13.6, 15.1, 16.6)):  # Tripo vending machines (front faces the square, -x)
+        prop("vending_mint", f"sq{k}", 57.6, y, -math.pi / 2, 0.14)
+        collider(f"sq_vend{k}", 57.0, y - 0.55, 58.3, y + 0.55, 0, 1.9)
+    spot("stallq", "spire_vend_a", 56.0, 15.1, 1, 0)
+    # the NEAR sculpture, with places to take a photo of it and of the Spire
+    sculpture(M, 42.0, 14.0)
+    ring_ell(M["stone"], 42.0, 14.0, 3.6, 3.6, 4.2, 4.2, z - 0.02, z + 0.35, 28)
+    collider("sculpture_ring", 37.8, 9.8, 46.2, 18.2, 0, 0.35)
+    ring_ell(M["soil"], 42.0, 14.0, 3.7, 3.7, 4.1, 4.1, z + 0.35, z + 0.38, 28)
+    for k in range(24):
+        a = 2 * math.pi * k / 24
+        fx, fy = 42.0 + math.cos(a) * 3.9, 14.0 + math.sin(a) * 3.9
+        flower_bed(M, fx - 0.4, fy - 0.4, fx + 0.4, fy + 0.4, z + 0.38, 22, ["petal_p", "petal_y", "petal_w"], True)
+    for k, a in enumerate((0.0, math.pi)):
+        bx, by = 42.0 + math.cos(a) * 6.0, 14.0 + math.sin(a) * 6.0
+        bench_t(f"spire_sculpt{k}", bx, by, face_rot(42.0 - bx, 14.0 - by), M, z)
+    for k, (px, py, dx, dy) in enumerate([(42.0, 8.5, 0, 1), (37.5, 11.0, 1, 0.4), (46.0, 9.5, -0.5, 1), (36.0, 20.0, -1, 1.2)]):
+        spot("photo", f"spire_sculpture{k}", px, py, dx, dy)
+    # trees in round planters on a grid, benches between them
+    for x in (29.0, 37.0, 45.0, 53.0):
+        for y in (-1.5, 21.0, 45.5):
+            if (x, y) in ((45.0, 21.0), (53.0, 21.0)):
+                continue
+            planter_round(f"sq_pl{x:.0f}_{y:.0f}", x, y, 1.3, M, z)
+            tree(x, y, z + 0.5, 8.0, M, pit=False, col=False)
+            if y != 21.0:
+                bench_t(f"spire_sq{x:.0f}_{y:.0f}", x + 2.6, y, face_rot(0, 1 if y < 20 else -1), M, z)
+    for x, y in ((30.5, 26.0), (30.5, 34.0), (35.5, 44.0), (57.0, 2.0), (57.0, 44.0)):
+        town_lamp(f"sq_lamp{x:.0f}_{y:.0f}", x, y, M, banner=True)
+    # bikes and the city map board by the north edge
+    bike_rack(48.0, 47.5, 0.0, M, z, 5)
+    for k in range(3):
+        bike(46.9 + k * 1.1, 47.5, 0.0, M, z)
+    wbox(M["tealdk"], 27.5, 44.0, z, 29.5, 44.3, z + 2.2)
+    wbox(M["trim"], 27.6, 43.95, z + 0.9, 29.4, 44.0, z + 2.1)
+    collider("mapboard", 27.5, 43.9, 29.5, 44.4, 0, 2.3)
+    spot("wait", "spire_map", 28.5, 42.6, 0, 1)
+    for k, (x, y, dx, dy) in enumerate([(34.0, 2.0, 0, 1), (51.0, 6.0, -1, 0), (33.0, 30.0, 1, 0)]):
+        spot("chat", f"spire_square{k}", x, y, dx, dy)
+    for k, (x, y) in enumerate([(56.0, 22.0), (56.0, 24.0)]):
+        crate(x, y, 0.0, M, z, 2, "orangef")
+        spot("crate", f"spire_cafe{k}", x - 1.0, y, -1, 0)
+
+
+def spire_grove(M):
+    """Behind the towers: tree grove, a path joining the two sides, benches for a quiet lunch."""
+    z = 0.08
+    wbox(M["lawn"], -59.0, 50.0, -0.1, -34.5, 94.0, z)
+    wbox(M["lawn"], 34.5, 50.0, -0.1, 59.0, 94.0, z)
+    wbox(M["lawn"], -34.5, 75.5, -0.1, 34.5, 94.0, z)
+    sg_path(M, [(-34.5, 60.0), (-40.0, 66.0), (-42.0, 78.0), (-30.0, 84.0), (0.0, 85.5), (30.0, 84.0), (42.0, 78.0), (40.0, 66.0), (34.5, 60.0)], 2.6, 3)
+    sg_path(M, [(-42.0, 66.0), (-48.0, 58.0), (-50.0, 50.0)], 2.4)
+    sg_path(M, [(42.0, 66.0), (46.0, 58.0), (46.0, 50.0)], 2.4)
+    for i, (x, y, h) in enumerate([(-52.0, 60.0, 11), (-47.5, 72.0, 10), (-55.0, 82.0, 12), (-38.5, 90.0, 10), (-20.0, 90.5, 11), (-8.0, 79.5, 9),
+                                   (8.0, 79.5, 9), (20.0, 90.5, 11), (38.5, 90.0, 10), (55.0, 82.0, 12), (51.5, 70.0, 10), (52.5, 57.0, 11), (-25.0, 79.0, 9.5), (25.0, 79.0, 9.5)]):
+        tree(x, y, z, h, M, pit=False)
+    for k, (x, y, r) in enumerate([(-44.0, 62.0, 0.9), (-36.0, 80.0, 0.8), (44.0, 62.0, 0.9), (36.0, 80.0, 0.8), (-12.0, 82.0, 0.8), (12.0, 82.0, 0.8)]):
+        shrub(M, x, y, z, r)
+    for k, (x, y, fy) in enumerate([(-6.0, 87.3, -1), (6.0, 87.3, -1), (-44.0, 74.0, 0), (44.0, 74.0, 0)]):
+        rot = face_rot(0, fy) if fy else face_rot(1 if x < 0 else -1, 0)
+        bench_t(f"spire_grove{k}", x, y, rot, M, z)
+    sg_bed(M, "gr_bed1", -4.0, 80.0, 4.0, 82.5, z, ["petal_w", "petal_l", "petal_p"])
+
+
 def outer_ring(M):
     """Tree belt just outside the town limits so no street ends on a bare field."""
     r = random.Random(5)
@@ -2251,6 +2533,8 @@ def outer_ring(M):
         if abs(x) > 28:
             spots.append((x + r.uniform(-2, 2), -3.5 - r.uniform(0, 4)))
     for x, y in spots:
+        if y > -9 and -61 < x < 61:  # the Spire district is laid out there now
+            continue
         town_tree(x, y, -0.05, r.uniform(8, 13), r.randint(1, 10 ** 6), 5)
 
 
@@ -2374,8 +2658,13 @@ def town(M):
     collider("bound_s", -100, -101.5, 100, -100.5, 0, 8)
     collider("bound_w", -77, -101, -76, -6, 0, 8)
     collider("bound_e", 85, -101, 86, -6, 0, 8)
-    collider("bound_nw", -76, -7, -24, -6, 0, 8)
-    collider("bound_ne", 24, -7, 85, -6, 0, 8)
+    # The town opens north into the Spire district (Spire Gardens west, Spire Square east).
+    collider("bound_nw", -76, -7, -60, -6, 0, 8)
+    collider("bound_ne", 59, -7, 85, -6, 0, 8)
+    spire_gardens(M)
+    spire_square(M)
+    spire_grove(M)
+    spire_edges(M)
     outer_ring(M)
     hills(M)
     empty("SPAWN_TOWN", (0.0, -95.0, 0.14), 0.0)

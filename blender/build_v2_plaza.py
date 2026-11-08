@@ -102,7 +102,7 @@ def v2_plaza(M):
     for s in (1, -1):
         x0, x1 = sorted((s * (PROM_X + 2.0), s * (PROM_X + 9.0)))
         box_mesh(f"V2_pool_rim{s}", x0 - 0.35, 4.0, 0.0, x1 + 0.35, 44.0, 0.35, M["rim"], 1.0, None, 0.03)
-        box_mesh(f"V2_pool{s}", x0, 4.35, 0.0, x1, 43.65, 0.3, M["water"], 2.0)
+        box_mesh(f"V2_pool{s}", x0, 4.35, 0.0, x1, 43.65, 0.37, M["water"], 2.0)  # above the solid rim box, so it shows
         collider(f"pool{s}", x0 - 0.35, 4.0, x1 + 0.35, 44.0, 0, 0.35)
     # Gold light strips along the promenade edges (the reference's warm ground lines).
     for s in (1, -1):
@@ -113,11 +113,7 @@ def v2_plaza(M):
             bench(f"bench{i}_{s}", s * (PROM_X + 1.0), y + 2.0, -s * math.pi / 2, M)
             lamp(f"lamp{i}_{s}", s * (PROM_X + 0.9), y - 1.0, M)
     # Hedges framing the forecourt and the outer plaza edge.
-    for s in (1, -1):
-        xa, xb = sorted((s * 22.0, s * 24.0))
-        hedge(f"hedge_outer{s}", xa, -6.0, xb, 44.0, M)
-        xa, xb = sorted((s * 17.0, s * 31.0))
-        hedge(f"hedge_fore{s}", xa, 47.0, xb, 49.0, M)
+    # (Promenade and forecourt hedges are leafy hedges in build_v2_town.py's Spire district, with path gaps.)
     # Stylised trees: lining the outer edge and ringing the field.
     trees = []
     bark, leaves = tree_materials()
@@ -130,13 +126,17 @@ def v2_plaza(M):
             bmesh.ops.translate(bm, verts=bm.verts, vec=(x, y + 2, 0.0))
             trees.append(mesh_obj(f"tree_p{i}_{s}", bm, [bark, leaves]))
             collider(f"tree_p{i}_{s}", x - 0.3, y + 1.7, x + 0.3, y + 2.3, 0, 3.0)
+    # Far ring: leaf-card trees beyond the district edge (no rounded blob crowns).
     k = 0
-    for a in range(0, 360, 9):
-        rad = rngp.uniform(85, 110)
-        x, y = math.cos(math.radians(a)) * rad, 40 + math.sin(math.radians(a)) * rad
-        h = rngp.uniform(7, 12)
-        if y > -8 or abs(x) > 62:  # south arc is the town district (build_v2_town.py)
-            trees += stylised_tree(f"tree_r{k}", x, y, h, M, 500 + k)
+    for a in range(0, 181, 7):
+        rad = rngp.uniform(66, 80)
+        x, y = math.cos(math.radians(a)) * rad * 1.05, 40 + math.sin(math.radians(a)) * rad * 0.85
+        if y < 97 and abs(x) < 62:
+            k += 1
+            continue
+        bm = procedural_tree(700 + k, rngp.uniform(9, 13))
+        bmesh.ops.translate(bm, verts=bm.verts, vec=(x, y, 0.0))
+        trees.append(mesh_obj(f"tree_r{k}", bm, [bark, leaves]))
         k += 1
     # NEAR sign pylon at the promenade entrance (wayfinding, as in the reference).
     box_mesh("V2_pylon", -9.2, 0.0, 0.0, -8.0, 0.35, 3.0, M["fin"], 1.0, None, 0.06)

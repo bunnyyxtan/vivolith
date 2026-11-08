@@ -21,6 +21,7 @@ PROPS = {
     "ev_pickup": ("out/truck/tripo-out/truck-p2-texture-c86d8288/model.glb", 5.7, "length", 0.0, True),  # P2: flat panels (v3.1 was dented)
     "stall_fruit": ("out/stall/tripo-out/stall-p2-texture-6847743a/model.glb", 3.4, "width", 0.0, True),
     "vending_mint": ("library/vending_mint.fbx", 1.85, "height", -math.pi / 2, True),
+    "kiosk_drinks": ("library/kiosk_drinks.fbx", 3.4, "width", -math.pi / 2, True),  # Spire Square drinks kiosk
     "shop_corner": ("out/shop/tripo-out/shop-v31-texture-551f6d27/model.glb", 7.2, "height", -math.pi / 2, True),
 }
 MAX_TRIS = 40000  # v3.1 meshes arrive dense (the shop is ~1.4M triangles)

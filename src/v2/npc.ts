@@ -10,9 +10,12 @@ import type { AnimatedCharacter } from "../character";
 import { NPC_STEP, createNav, type Nav } from "./nav";
 import { createBubbles, installPose, type PoseState } from "./npcfx";
 
-type Kind = "bench" | "shopdoor" | "stallq" | "chat" | "wait" | "crate" | "cafe";
-const KINDS: readonly Kind[] = ["bench", "shopdoor", "stallq", "chat", "wait", "crate", "cafe"];
-const WEIGHT: Record<Kind, number> = { bench: 2, shopdoor: 2, stallq: 3, chat: 3, wait: 1, crate: 1.5, cafe: 2 };
+type Kind = "bench" | "shopdoor" | "stallq" | "chat" | "wait" | "crate" | "cafe" | "photo" | "jog";
+const KINDS: readonly Kind[] = ["bench", "shopdoor", "stallq", "chat", "wait", "crate", "cafe", "photo", "jog"];
+const WEIGHT: Record<Kind, number> = { bench: 2, shopdoor: 2, stallq: 3, chat: 3, wait: 1, crate: 1.5, cafe: 2, photo: 1.2, jog: 0.5 };
+/** What people do on a trip to the N Spire district (gardens, square, lobby). */
+const SPIRE_KINDS: readonly Kind[] = ["bench", "shopdoor", "chat", "wait", "photo", "cafe", "stallq", "jog"];
+const JOG_SPEED = 3.0;
 
 /** Anything cars must stop for. */
 export interface Pedestrian { x: number; z: number; hidden: boolean }
@@ -43,6 +46,8 @@ interface Ent extends Pedestrian {
   stuckT: number; sx: number; sz: number; carry: THREE.Object3D | null; mer: MerchantRef | null;
   hx: number; hz: number; hy: number; // merchant home
   by: number; // last ground height outside seat colliders
+  jogLeft: number; // waypoints left on a jogging lap (0 = not jogging)
+  baseSpeed: number;
 }
 
 const WALK = 1.3, PLAYER_R = 0.32, HEAD = 1.85;
@@ -80,7 +85,7 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
       if (!kind || !KINDS.includes(kind)) return;
       o.getWorldPosition(p);
       o.getWorldDirection(d); // town empties' +Z points away from where the person looks (checked against stallq/merchant), so flipped
-      mk(kind, p.x, p.z, Math.atan2(-d.x, -d.z), kind === "chat" ? 2 : 1, o.name);
+      mk(kind, p.x, p.z, Math.atan2(-d.x, -d.z), kind === "chat" || kind === "bench" ? 2 : kind === "jog" ? 99 : 1, o.name);
       have.add(kind);
     });
   }
@@ -138,7 +143,7 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
     c, root, pose: installPose(c), x: root.position.x, z: root.position.z, y: root.position.y, yaw: root.rotation.y, hidden: false,
     r: 0.33, fixed, cd: 0, svx: 0, svz: 0, stag: 0, head: new THREE.Vector3(),
     state: "idle", spot: null, slot: 0, path: [], pi: 0, speed: rnd(1.0, 1.5), spd: 0, t: 0, phase: 0, last: null, carrying: false,
-    stuckT: 0, sx: 0, sz: 0, carry: null, mer: null, hx: root.position.x, hz: root.position.z, hy: root.position.y, by: root.position.y,
+    stuckT: 0, sx: 0, sz: 0, carry: null, mer: null, hx: root.position.x, hz: root.position.z, hy: root.position.y, by: root.position.y, jogLeft: 0, baseSpeed: 1.2,
   });
   const merEnts = mers.map((m) => { const e = mkEnt(m.character, m.root, true); e.mer = m; return e; });
   const folk = folkChars.map((f) => {
@@ -154,10 +159,12 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
   (window as unknown as { __npcs: Pedestrian[]; __tpose: unknown }).__npcs = pedestrians; // playtest handles
   (window as unknown as { __tpose: unknown }).__tpose = (sim: (sec: number) => void): string[] => tposeReport(scene, sim);
 
-  const spire = spots.filter((q) => q.name.startsWith("spire"));
+  const spire = spots.filter((q) => q.name.includes("spire"));
+  const jogs = spots.filter((q) => q.kind === "jog").sort((a, b) => a.name.localeCompare(b.name));
   let spawnN = 0;
   const spawn = (e: Ent): void => {
-    const pool = spawnN++ % 4 === 1 ? spire : spots;
+    e.baseSpeed = e.speed;
+    const pool = spawnN++ % 2 === 1 ? spire : spots; // half the town starts around the Spire
     const s = pool[Math.floor(Math.random() * pool.length)];
     if (s && nav.nearestFree(s.x + rnd(-2, 2), s.z + rnd(-2, 2), cell)) { e.x = cell.x; e.z = cell.z; }
     e.y = groundHeightAt(colliders, e.x, e.z, 0);
@@ -173,7 +180,7 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
     const far = Math.random() < 0.3; // sometimes head across town (park, Spire)
     let best: Spot | null = null, bc = 1e9;
     for (const s of spots) {
-      if (s.kind !== kind || s.users >= s.cap || (spireOnly && !s.name.startsWith("spire"))) continue;
+      if (s.kind !== kind || s.users >= s.cap || (spireOnly && !s.name.includes("spire"))) continue;
       if (kind === "crate" && (e.carrying ? s.has : !s.has)) continue; // pick up where a crate is, drop where none
       if (kind === "stallq" && s.next === null && s.users >= 1) continue;
       if (kind === "stallq" && pullOf(s) < 0.05) continue; // closed or sold out: shoppers walk past
@@ -187,8 +194,9 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
   };
   const goTo = (e: Ent, s: Spot, slot = 0): boolean => {
     let tx = s.x, tz = s.z;
-    if (s.kind === "chat") { // stand on either side of the spot centre, facing each other
-      tx += Math.cos(s.yaw) * (slot ? 0.55 : -0.55); tz -= Math.sin(s.yaw) * (slot ? 0.55 : -0.55);
+    if (s.kind === "chat" || s.kind === "bench") { // chat: either side, facing; bench: two seats side by side
+      const off = s.kind === "chat" ? 0.55 : 0.45;
+      tx += Math.cos(s.yaw) * (slot ? off : -off); tz -= Math.sin(s.yaw) * (slot ? off : -off);
     }
     if (!nav.path(e.x, e.z, tx, tz, e.path)) return false;
     e.path.push(tx, tz);
@@ -203,12 +211,12 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
       if (s.slots[e.slot] === e) s.slots[e.slot] = null;
       if (s.kind === "stallq" && s.mer && !s.next) { s.mer.serving = false; s.mer.attend = null; }
     }
-    e.spot = null; e.pose.sit = 0;
+    e.spot = null; e.pose.sit = 0; e.pose.phone = 0;
   };
   const decide = (e: Ent): void => {
     e.state = "idle"; e.t = rnd(0.5, 2);
-    const spire = Math.random() < 0.22; // routine: a trip to the N Spire plaza (lobby, benches, lawns)
-    const opts = spire ? ((["bench", "shopdoor", "chat", "wait"] as Kind[]).filter((k) => k !== e.last)) : KINDS.filter((k) => k !== e.last || KINDS.length < 2);
+    const spire = Math.random() < 0.4; // routine: a trip to the N Spire district (lobby, gardens, square)
+    const opts = spire ? SPIRE_KINDS.filter((k) => k !== e.last) : KINDS.filter((k) => k !== e.last && k !== "jog");
     let total = 0;
     const w = opts.map((k) => { const v = e.carrying ? (k === "crate" ? 10 : 0) : WEIGHT[k]; total += v; return v; });
     let r = Math.random() * total;
@@ -218,7 +226,7 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
       const s = claim(e, opts[i], spire);
       if (!s) break;
       s.users++;
-      e.spot = s; e.slot = s.kind === "chat" ? (s.slots[0] ? 1 : 0) : 0; s.slots[e.slot] = e; e.last = opts[i]; e.phase = 0;
+      e.spot = s; e.slot = s.kind === "chat" || s.kind === "bench" ? (s.slots[0] ? 1 : 0) : 0; s.slots[e.slot] = e; e.last = opts[i]; e.phase = 0;
       if (goTo(e, s, e.slot)) return;
       release(e);
     }
@@ -232,6 +240,16 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
       case "bench": case "cafe": e.t = rnd(20, 40); break;
       case "shopdoor": e.t = 1.6; break;
       case "wait": e.t = rnd(12, 25); break;
+      case "photo": e.t = rnd(5, 9); break;
+      case "jog": { // run the garden loop: on to the next waypoint until the lap is done
+        if (e.jogLeft === 0) { e.jogLeft = Math.floor(rnd(8, 15)); e.speed = JOG_SPEED; }
+        e.jogLeft--;
+        const next = jogs[(jogs.indexOf(s) + 1) % jogs.length];
+        release(e);
+        if (e.jogLeft > 0 && next && goTo(e, next)) { e.spot = next; next.users++; return; }
+        e.jogLeft = 0; e.speed = e.baseSpeed; decide(e);
+        return;
+      }
       case "chat": e.t = 12; s.t = 0; break; // waits for a partner up to 12 s
       case "crate": e.t = 0.9; break;
       case "stallq": e.t = s.next ? 999 : rnd(4, 7); if (!s.next && s.mer) { s.mer.serving = true; s.mer.attend = new THREE.Vector3(e.x, 0, e.z); } break;
@@ -245,11 +263,22 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
     e.t -= dt;
     let talk = false, seatTarget = 0, carryTarget = e.carrying ? 1 : 0;
     switch (s.kind) {
-      case "bench": case "cafe":
+      case "bench": case "cafe": {
         seatTarget = 1; faceTo(e, s.yaw, dt);
+        const p = s.kind === "bench" ? s.slots[1 - e.slot] : null;
+        if (p && p.state === "act" && p.spot === s) { // friends on a bench take turns talking
+          if (e.slot === 0) { s.turn -= dt; if (s.turn < 0) { s.turn = rnd(3, 6); e.phase ^= 1; p.phase = e.phase ^ 1; } }
+          talk = e.phase === 1;
+          if (talk && Math.random() < dt * 0.06) bubbles.say(e.head, CHAT_LINES[Math.floor(Math.random() * CHAT_LINES.length)], 2.4);
+        }
         break;
+      }
       case "wait": case "shopdoor": case "crate":
         faceTo(e, s.yaw, dt);
+        break;
+      case "photo": // phone up toward the sculpture or the Spire
+        faceTo(e, s.yaw, dt);
+        e.pose.phone += (1 - e.pose.phone) * (1 - Math.exp(-5 * dt));
         break;
       case "stallq":
         faceTo(e, s.yaw, dt);
