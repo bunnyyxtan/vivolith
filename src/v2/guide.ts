@@ -4,7 +4,7 @@
 import * as THREE from "three";
 import type { EconomyState, MerchantId } from "../economy/state";
 import { MERCHANT_IDS } from "../economy/state";
-import { reopenGap } from "../economy/sim";
+import { reopenGap, SHARE_PRICE } from "../economy/sim";
 import { el, type Hud } from "./hud";
 
 export interface Step {
@@ -12,7 +12,7 @@ export interface Step {
   readonly title: string;
   readonly detail: (s: EconomyState) => string;
   /** Who to walk to, if anyone. */
-  readonly target: MerchantId | null;
+  readonly target: MerchantId | null | ((s: EconomyState) => MerchantId);
   readonly done: (s: EconomyState) => boolean;
   /** Shown when the step completes. */
   readonly reward: string;
@@ -22,7 +22,12 @@ const f = (s: EconomyState, k: string): boolean => s.flags[k] === true;
 
 /** Price Pema pays for the first delivery: she is desperate and generous (the relayer caps deals server-side). */
 export const DELIVERY_PRICE = 6;
-export const SHARE_COST = 20;
+
+/** The stall the invest lesson points at. Stall shares are a fixed supply on NEAR that earlier players may have
+ *  bought, so play.ts writes this from the live order book: Pema while she has shares on sale, else the stall with
+ *  the most. With none on sale anywhere it sets `investNone` and the lesson completes without a purchase. */
+export const investTarget = (s: EconomyState): MerchantId => (MERCHANT_IDS as readonly string[]).includes(String(s.flags.investAt)) ? s.flags.investAt as MerchantId : "pema";
+const ownsShares = (s: EconomyState): boolean => MERCHANT_IDS.some((id) => s.player.shares[id] > 0);
 
 export const STEPS: readonly Step[] = [
   {
@@ -51,11 +56,15 @@ export const STEPS: readonly Step[] = [
     done: (s) => f(s, "haggled"), reward: "You can haggle with every merchant now.",
   },
   {
-    id: "invest", title: "Become Pema's partner", target: "pema",
-    detail: (s) => s.player.coins >= SHARE_COST
-      ? `Open the Invest tab at her stall: 4 of her 20 shares cost ${SHARE_COST} c. You earn part of her sales every day.`
-      : `Shares cost ${SHARE_COST} c and you have ${s.player.coins} c. Trade a little more: buy from Tomas, sell to Pema or Arin.`,
-    done: (s) => s.player.shares.pema >= 4, reward: "You own 20% of Pema's Fruit, and her stall is upgraded.",
+    id: "invest", title: "Become a stall partner", target: investTarget,
+    detail: (s) => {
+      const t = investTarget(s), price = SHARE_PRICE[t];
+      return s.player.coins >= price
+        ? `Open the Invest tab at ${NAMES[t]}'s stall and buy at least one share (${price} c each). Every evening you earn part of the stall's sales.`
+        : `A share of ${NAMES[t]}'s stall costs ${price} c and you have ${s.player.coins} c. Trade a little more: buy from Tomas, sell to Pema or Arin.`;
+    },
+    done: (s) => ownsShares(s) || f(s, "investNone"),
+    reward: "You're a partner now: every evening part of that stall's sales comes to you.",
   },
   {
     id: "week", title: "Fast-forward a week", target: null,
@@ -99,7 +108,8 @@ export function createGuide(hud: Hud): Guide {
     const i = stepIndex(s);
     if (i < STEPS.length) {
       const st = STEPS[i];
-      return { title: st.title, detail: st.detail(s), target: st.target, label: `First day · ${i + 1} of ${STEPS.length}` };
+      const target = typeof st.target === "function" ? st.target(s) : st.target;
+      return { title: st.title, detail: st.detail(s), target, label: `First day · ${i + 1} of ${STEPS.length}` };
     }
     // A closed stall comes first: it is the city's most urgent problem and the player can fix it.
     const shut = MERCHANT_IDS.find((id) => s.merchants[id].status !== "open");
@@ -107,7 +117,8 @@ export function createGuide(hud: Hud): Guide {
       const m = s.merchants[shut], gap = reopenGap(s, shut);
       return {
         title: `Help ${NAMES[shut]} reopen`, target: shut, label: "Urgent",
-        detail: `${m.shop} missed rent and closed. Bring ${gap} more ${gap === 1 ? "mango" : "mangoes"} to restock it${s.player.shares[shut] ? "" : ", or invest so it can pay you"}.`,
+        detail: `${m.shop} missed rent and closed. Bring ${gap} more ${gap === 1 ? "mango" : "mangoes"} to restock it${s.player.shares[shut] ? "" : ", or invest so it can pay you"}.`
+          + (m.cash < m.baseCost.mango ? ` ${NAMES[shut]}'s till is empty: the Market Guild tops it up every market day.` : ""),
       };
     }
     const g = GOALS.find((x) => !x.done(s));

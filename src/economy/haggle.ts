@@ -59,6 +59,7 @@ export interface MoveResult {
   readonly line: string;
 }
 
+const BID_STRETCH = 1.3;
 const PATIENCE_HIT = 14;
 const PATIENCE_FAIL = 34;
 export const PATIENCE_DRAIN_PER_SEC = 3.5;
@@ -137,10 +138,13 @@ export function openHaggle(s: EconomyState, id: MerchantId): HaggleSession | { e
   if (have <= 0) return { error: `${m.name} buys mangoes. You have none to sell.` };
   const c = context(s, id, good);
   const scarcity = Math.min(2.2, Math.max(0.8, 1 + 1.1 * (1 - m.stock[good] / Math.max(1, m.target[good]))));
-  const ceiling = Math.max(m.baseCost[good] * scarcity, (c.rivalPrice ?? m.baseCost[good]) * 1.15);
-  const qty = Math.min(LOT, have, Math.floor(m.cash / ceiling));
+  // A posted bid is a promise: haggling opens there and can only climb (to 1.3x, inside the relayer's 1.5x cap).
+  const bid = bidFor(s, id, good)?.price ?? null;
+  const reach = Math.max(m.baseCost[good] * scarcity, (c.rivalPrice ?? m.baseCost[good]) * 1.15, bid === null ? 0 : bid * BID_STRETCH);
+  const offer = Math.max(1, bid ?? 0, Math.round(reach * 0.62));
+  const qty = Math.min(LOT, have, Math.floor(m.cash / offer));
   if (qty <= 0) return { error: `${m.name} can't afford mangoes right now.` };
-  const offer = Math.max(1, Math.round(ceiling * 0.62));
+  const ceiling = Math.max(offer, Math.min(reach, m.cash / qty)); // never haggled past what the till can pay
   return { merchant: id, good, mode, qty, unit: offer, open: offer, limit: ceiling, patience: PERSONALITY[id].patience, used: {}, moves: 0, over: null };
 }
 

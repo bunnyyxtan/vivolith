@@ -5,13 +5,13 @@ import * as THREE from "three";
 import type { Game } from "./game";
 import { createMarket, type Market, type Npc } from "./market";
 import { createHud, el, type Hud } from "./hud";
-import { createGuide, DELIVERY_PRICE, GOALS, STEPS, stepIndex, unlocked } from "./guide";
+import { createGuide, DELIVERY_PRICE, GOALS, inTutorial, investTarget, STEPS, stepIndex, unlocked } from "./guide";
 import { loadGame, saveGame, clearSave } from "../economy/save";
 import { calibrateSoles } from "./soles";
 import { advance, invest, payReleaseFee, recordRestock, REOPEN_SHARE, reopenGap, SHARE_PRICE, tryReopen, UPGRADE_AT } from "../economy/sim";
 import { bidFor, quote, lassiPrice, stallPull, SHARES_PER_STALL, type Quote } from "../economy/pricing";
 import { clockOf, dayOf, MERCHANT_IDS, MINUTES_PER_DAY, type EconomyState, type Good, type MerchantId, type Receipt } from "../economy/state";
-import { applyTactic, closeDeal, dealTotal, dealUnit, lockKey, openHaggle, thoughts, tickPatience, modeFor, PERSONALITY, TACTICS, type HaggleSession, type Tactic } from "../economy/haggle";
+import { applyTactic, closeDeal, dealTotal, dealUnit, isLocked, lockKey, openHaggle, thoughts, tickPatience, modeFor, PERSONALITY, TACTICS, type HaggleSession, type Tactic } from "../economy/haggle";
 import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
 import {
@@ -25,6 +25,7 @@ const FF_MIN_PER_SEC = (7 * MINUTES_PER_DAY) / 60; // a week in a minute
 const FF_MAX_DAYS = 7;
 const RENT_MINUTE = 21 * 60;
 const RESULT_HOLD = 2.6; // seconds the deal result stays on the panel
+const TUTORIAL_PATIENCE = 0.4; // the first haggle drains slower: a new player is still reading the tactics
 const TRADERS: readonly MerchantId[] = MERCHANT_IDS;
 const AUTOSAVE_SEC = 10;
 const TICK_EVERY_SEC = 60;
@@ -349,18 +350,23 @@ export async function createPlay(game: Game): Promise<Play> {
     const p = v.clone().project(rig.camera);
     return { x: ((p.x + 1) / 2) * innerWidth, y: ((1 - p.y) / 2) * innerHeight };
   };
-  /** Keep the panel on the side of the screen away from the speaking character. */
-  const sidePanel = (npc: Npc): void => {
-    const s = screenOf(npc.head);
-    hud.panel.classList.toggle("left", s.x > innerWidth * 0.5);
-    hud.panel.classList.toggle("right", s.x <= innerWidth * 0.5);
+  /** Talk sits centred under the speaker; trade sits left, away from the merchant (the talk camera always swings
+   *  them right of centre, so the side is fixed instead of chasing the camera and jumping mid-swing). */
+  const placePanel = (kind: "talk" | "trade"): void => {
+    const p = hud.panel.classList;
+    p.toggle("talk", kind === "talk"); p.toggle("trade", kind === "trade"); p.add("left");
+    document.body.classList.add("panel-open");
   };
-  const showPanel = (npc: Npc): void => {
-    sidePanel(npc);
+  const showPanel = (kind: "talk" | "trade"): void => {
+    placePanel(kind);
     hud.panel.style.display = "block";
+    hud.panel.scrollTop = 0;
     requestAnimationFrame(() => hud.panel.classList.add("show"));
   };
-  const hidePanel = (): void => { hud.panel.classList.remove("show"); hud.panel.style.display = "none"; };
+  const hidePanel = (): void => {
+    hud.panel.classList.remove("show"); hud.panel.style.display = "none";
+    document.body.classList.remove("panel-open");
+  };
   const head = (name: string, role: string, color: string): HTMLDivElement => {
     const h = el("div", "tp-head");
     const ava = el("div", "tp-ava", name.replace(/^Auntie /, "")[0]);
@@ -404,7 +410,7 @@ export async function createPlay(game: Game): Promise<Play> {
   };
   const defaultTab = (id: MerchantId): Tab => {
     const tabs = tabsFor(id), i = stepIndex(state);
-    if (id === "pema" && i === 5 && tabs.includes("invest")) return "invest";
+    if (id === investTarget(state) && i === 5 && tabs.includes("invest")) return "invest";
     if (tabs.includes("sell") && state.player.inventory.mango > 0 && (i === 3 || id !== "tomas")) return "sell";
     return tabs[0] ?? "buy";
   };
@@ -417,7 +423,7 @@ export async function createPlay(game: Game): Promise<Play> {
       : closed ? "The shutters are down: I couldn't make rent. Bring me stock and I can open again." : WHO[id].hello;
     mode = { kind: "trade", npc, id, tab, qty: q, say, tone: closed ? "bad" : "", why: false, h: null, done: 0 };
     renderTrade();
-    showPanel(npc);
+    showPanel("trade");
     if (playerId()) void syncMerchants(); // offers follow the merchant's live wallet (re-renders when it lands)
   };
   const setTab = (tab: Tab): void => {
@@ -469,7 +475,7 @@ export async function createPlay(game: Game): Promise<Play> {
     }
     const total = unit * mode.qty;
     const after = tab === "buy" ? state.player.coins - total : state.player.coins + total;
-    if (max > 0) {
+    if (max > 0 && mode.done <= 0) { // hidden while a result shows: "coins after" would describe the next deal
       const q = el("div", "tp-qty");
       q.append(button("−", "", () => setQty(-1)), el("b", "", String(mode.qty)), button("+", "", () => setQty(1)));
       const note = el("span", "", `${tab === "buy" ? "Pay" : "Get"} ${total} c\nYour coins after: ${after} c`);
@@ -479,10 +485,15 @@ export async function createPlay(game: Game): Promise<Play> {
     }
     const acts = el("div", "tp-acts");
     if (mode.done > 0) { /* the result line is showing */ }
-    else if (max <= 0) acts.append(el("div", "tp-text full", tab === "buy" ? (m.stock[good] <= 0 ? "Sold out for now." : `You need ${unit} c for one. You have ${state.player.coins} c.`) : (state.player.inventory.mango <= 0 ? "You have no mangoes to sell. Buy some first." : `${PERSONALITY[id].name} can't afford any right now.`)));
+    else if (max <= 0) acts.append(el("div", "tp-text full", tab === "buy" ? (m.stock[good] <= 0 ? "Sold out for now." : `You need ${unit} c for one. You have ${state.player.coins} c.`) : (state.player.inventory.mango <= 0 ? "You have no mangoes to sell. Buy some first." : `${PERSONALITY[id].name.split(" ").pop()} has ${Math.floor(m.cash)} c, not enough for one at ${unit} c. The Market Guild tops up low tills every market day (about 10 minutes): come back soon, or sell to another stall.`)));
     else {
       acts.append(button(`${tab === "buy" ? "Buy" : "Sell"} ${goodName(good, mode.qty)} for ${total} c`, "primary", () => simpleDeal(), "1"));
-      if (unlocked(state, "haggle") && m.status === "open" && modeFor(state, id) === tab && good === "mango") acts.append(button("Haggle", "full", () => startHaggle(), "2", "try for a better price"));
+      if (unlocked(state, "haggle") && m.status === "open" && modeFor(state, id) === tab && good === "mango") {
+        const shut = isLocked(state, id) && !(stepIndex(state) === HAGGLE_STEP && id === "tomas");
+        const hb = button("Haggle", "full", () => startHaggle(), "2", shut ? "not again today: you pushed too hard" : "try for a better price");
+        hb.disabled = shut;
+        acts.append(hb);
+      }
     }
     acts.append(button("Leave", "ghost full", () => endPanel(), "Esc"));
     hud.panel.append(acts);
@@ -700,7 +711,7 @@ export async function createPlay(game: Game): Promise<Play> {
     if (mode.kind !== "talk") frame(npc);
     mode = { kind: "talk", npc, convo: c, node: c.entry(state) };
     renderTalk();
-    showPanel(npc);
+    showPanel("talk");
   };
   const endPanel = (): void => {
     if (mode.kind === "trade" || mode.kind === "talk") mode.npc.talking = false;
@@ -844,7 +855,8 @@ export async function createPlay(game: Game): Promise<Play> {
     }
     const trades = state.log.slice(Math.max(0, from.log - (state.log.length > 60 ? 0 : 0))).filter((e) => e.kind === "trade" && e.minute > from.minute).length;
     if (trades) lines.push(`Merchants traded with each other ${plural(trades, "time", "times")}, moving surplus to where it was short.`);
-    if (!lines.length) lines.push("A quiet stretch: every stall stayed open and prices held.");
+    const shut = TRADERS.filter((id) => state.merchants[id].status !== "open").map((id) => state.merchants[id].shop);
+    if (!lines.length) lines.push(shut.length ? `A quiet stretch: prices held, and ${shut.join(" and ")} ${shut.length === 1 ? "is" : "are"} still closed.` : "A quiet stretch: every stall stayed open and prices held.");
     for (const l of lines.slice(0, 4)) city.append(el("p", "", l));
     card.append(city);
     // 2. your part
@@ -859,6 +871,9 @@ export async function createPlay(game: Game): Promise<Play> {
     const d = state.player.coins - from.coins, div = divsOf(state) - from.divs;
     purse.append(el("div", `big ${d >= 0 ? "pos" : "neg"}`, `${d >= 0 ? "+" : ""}${d} c`));
     purse.append(el("p", "", `From ${from.coins} c to ${state.player.coins} c${div > 0 ? `, including ${div} c in dividends from your shares` : ""}.`));
+    // the week ran on this device; the wallet is the chain's, which only pays for real market days
+    const real = week && playerId() ? el("p", "why", "This week was a preview run on your device. Checking your NEAR wallet…") : null;
+    if (real) purse.append(real);
     card.append(purse);
     // details
     const det = el("details"); det.append(el("summary", "", "The numbers, stall by stall"));
@@ -878,6 +893,9 @@ export async function createPlay(game: Game): Promise<Play> {
         const got = (await chainReceipts(playerId()!).catch(() => [])).filter((x) => x.kind === "dividend").reduce((n, x) => n + Number(x.qty), 0);
         line.textContent = r.status === "onchain" ? `Today's dividends were settled on NEAR for all four stalls. Paid to your account so far: ${got} c. ` : `NEAR settlement: ${String(r.message ?? "not available right now")}`;
         if (r.status === "onchain" && typeof r.txHash === "string") { const a = el("a", "", "view"); a.href = `${EXPLORER_TX}${r.txHash}`; a.target = "_blank"; a.rel = "noopener"; line.append(a); }
+        const id = playerId();
+        if (id) await syncPlayer(id);
+        if (real) real.textContent = `This week was a preview run on your device. Your NEAR wallet holds ${state.player.coins} c: it keeps only real trades and the dividends paid each real market day.`;
       });
     }
     footer(card, week ? "Back to the city" : "Next morning", () => closeReport(week, from));
@@ -971,14 +989,14 @@ export async function createPlay(game: Game): Promise<Play> {
       rig.yaw += d * k;
       rig.pitch += (0.1 - rig.pitch) * k;
       rig.dist += (3.1 - rig.dist) * k;
-      sidePanel(npc);
     }
     if (mode.kind === "trade") {
       if (mode.done > 0) {
         mode = { ...mode, done: mode.done - dt };
-        if (mode.done <= 0) { mode = { ...mode, done: 0 }; if (stepIndex(state) <= 5) endPanel(); else renderTrade(); }
+        // a tutorial deal closes the panel so the next objective shows; a refusal stays open to try again
+        if (mode.done <= 0) { mode = { ...mode, done: 0 }; if (inTutorial(state) && mode.tone !== "bad") endPanel(); else renderTrade(); }
       } else if (mode.h) {
-        const h = tickPatience(mode.h, dt);
+        const h = tickPatience(mode.h, stepIndex(state) === HAGGLE_STEP ? dt * TUTORIAL_PATIENCE : dt);
         mode = { ...mode, h };
         if (h.over === "walked") {
           const out = closeDeal(state, h);
@@ -996,7 +1014,10 @@ export async function createPlay(game: Game): Promise<Play> {
 
     // keys
     if (input.consumePress("KeyF")) play.interact();
-    if (input.consumePress("KeyT") && unlocked(state, "week")) play.fastForward();
+    if (input.consumePress("KeyT") && unlocked(state, "week")) {
+      if (mode.kind === "walk" || ff) play.fastForward();
+      else if (mode.kind === "trade" || mode.kind === "talk") hud.toast("Step away from the stall first (Esc), then press T.");
+    }
     if (mode.kind === "walk" && !ff) {
       if (input.consumePress("KeyB")) openNotebook("bag");
       else if (input.consumePress("KeyJ")) openNotebook("goals");
@@ -1075,6 +1096,11 @@ export async function createPlay(game: Game): Promise<Play> {
       const ask = offers.find((o) => o.merchant === id && o.token_id === `share:${id}` && o.side === "ask");
       shareAsk[id] = ask ? Number(ask.qty) : 0;
     }
+    if (offers) { // point the invest lesson at a stall that still has shares to sell (see investTarget)
+      const most = [...TRADERS].sort((a, b) => (shareAsk[b] ?? 0) - (shareAsk[a] ?? 0))[0];
+      state.flags.investAt = (shareAsk.pema ?? 0) > 0 ? "pema" : most;
+      if ((shareAsk[most] ?? 0) > 0) delete state.flags.investNone; else state.flags.investNone = true;
+    }
     if (ff) return; // a fast-forward week runs on the local model; the next sync after it catches up
     TRADERS.forEach((id, i) => {
       const b = all[i];
@@ -1150,6 +1176,8 @@ export async function createPlay(game: Game): Promise<Play> {
         entered = true;
         state.flags.played = true;
         save();
+        // saved during an evening report: show it again so the night ends with "Next morning", not a dark walk
+        if (unlocked(state, "rent") && state.minute % MINUTES_PER_DAY >= RENT_MINUTE && mode.kind === "walk") showReport(`Evening, Day ${dayOf(state.minute)}`, mark, false);
       }
       play.paused = false;
       player.frozen = mode.kind !== "walk";

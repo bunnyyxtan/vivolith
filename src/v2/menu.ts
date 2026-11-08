@@ -200,6 +200,7 @@ export function createMenu(game: Game, play: Play): { open(): void } {
     else if (e.code === "ArrowUp" || e.code === "KeyW") { sel = (sel - 1 + items.length) % items.length; render(); }
     else if (e.code === "Enter" || e.code === "Space") items[sel]?.run();
     else if (e.code === "Escape" && sheet) { sheet = ""; render(); }
+    else if (e.code === "Escape" && started) enter(); // the pause menu: Esc again resumes
     else return;
     e.preventDefault();
   });

@@ -64,11 +64,26 @@ const CSS = /* css */ `
 @keyframes bob { 50% { transform:translateY(-5px) rotate(45deg); } }
 .hud-mark span { position:absolute; left:50%; top:32px; transform:translateX(-50%); font-size:12px; font-weight:700; color:#fff; text-shadow:0 1px 3px rgba(0,0,0,.7); white-space:nowrap; }
 
-/* trade / talk panel */
-.hud-panel { bottom:24px; width:min(380px, calc(100vw - 48px)); max-height:calc(100vh - 150px); overflow:auto; background:var(--paper); border-radius:18px; box-shadow:var(--shadow);
-  display:none; transform:translateY(12px); opacity:0; transition:transform .2s ease-out, opacity .2s; }
+/* trade / talk panel. Talk: a dialogue box centred along the bottom, under the speaker's face. Trade: a card centred
+   vertically on the side away from the merchant (the camera keeps them right of centre), below the objective.
+   Narrow screens: both become a bottom sheet. */
+.hud-panel { overflow:auto; background:var(--paper); border-radius:18px; box-shadow:var(--shadow); box-sizing:border-box;
+  display:none; transform:translateY(12px); opacity:0; transition:transform .2s ease-out, opacity .2s; overscroll-behavior:contain; }
 .hud-panel.show { transform:none; opacity:1; }
-.hud-panel.left { left:24px; } .hud-panel.right { right:24px; }
+.hud-panel.talk { left:0; right:0; bottom:24px; margin:0 auto; width:min(720px, calc(100vw - 48px)); max-height:min(56vh, calc(100vh - 150px)); }
+.hud-panel.talk .tp-acts { grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); }
+.hud-panel.talk .tp-acts .full { grid-column:auto; } .hud-panel.talk .tp-acts .primary { grid-column:auto; text-align:left; }
+.hud-panel.talk .tp-acts > :only-child { grid-column:1 / -1; text-align:center; }
+.hud-panel.trade { --pt:150px; top:var(--pt); bottom:24px; margin:auto 0; height:fit-content; width:min(400px, calc(100vw - 48px)); max-height:calc(100vh - var(--pt) - 24px); }
+.hud-panel.trade.left { left:clamp(24px, 6vw, 96px); }
+body.panel-open .hud-prompt, body.panel-open .hud-hint, body.panel-open .hud-acct, body.panel-open .hud-mark, body.panel-open .hud-tip { display:none !important; }
+@media (max-width:760px), (max-height:520px) {
+  .hud-panel.trade, .hud-panel.talk { left:0 !important; right:0 !important; top:auto; bottom:12px; margin:0 auto; height:auto; width:min(520px, calc(100vw - 24px)); max-height:calc(100vh - 104px); --pt:0px; }
+  .hud-panel .tp-acts { position:sticky; bottom:0; background:var(--paper); padding:10px 14px 14px; gap:6px; box-shadow:0 -8px 12px -10px rgba(24,36,60,.25); }
+  .hud-panel .tp-acts .full { grid-column:auto; } .hud-panel .tp-acts button { padding:9px 12px; } .hud-panel .tp-acts button small { display:none; }
+  .hud-panel .tp-acts .tp-text { grid-column:1 / -1; padding:0; }
+  body.panel-open .hud-obj { opacity:0; }
+}
 .tp-head { display:flex; gap:12px; align-items:center; padding:16px 18px 12px; }
 .tp-ava { width:42px; height:42px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:17px; color:#fff; }
 .tp-head b { display:block; font-size:18px; font-weight:700; } .tp-head span { display:block; font-size:13px; color:var(--mute); margin-top:1px; }
@@ -161,7 +176,6 @@ const CSS = /* css */ `
 .hud-toast.good { background:var(--mintd); }
 .coin-fly { position:fixed; width:16px; height:16px; border-radius:50%; background:radial-gradient(circle at 35% 35%, #ffe08a, var(--gold) 60%, #c98e1f); z-index:9; pointer-events:none;
   transition:transform .7s cubic-bezier(.5,-.4,.7,1), opacity .7s; }
-.hud-panel.show ~ .hud-acct, .hud-panel.show ~ .hud-mark { display:none !important; }
 .hud-rc { display:none !important; }
 body.in-menu .hud { display:none !important; }
 @media (max-width:1100px) { .hud-toast { max-width:calc(100vw - 40px); top:auto; bottom:126px; } }
