@@ -7,7 +7,7 @@ import { createMarket, type Market, type Npc } from "./market";
 import { createHud, el, type Hud } from "./hud";
 import { createGuide, DELIVERY_PRICE, GOALS, STEPS, stepIndex, unlocked } from "./guide";
 import { loadGame, saveGame, clearSave } from "../economy/save";
-import { advance, invest, payReleaseFee, SHARE_PRICE, UPGRADE_AT } from "../economy/sim";
+import { advance, invest, payReleaseFee, recordRestock, REOPEN_SHARE, reopenGap, SHARE_PRICE, tryReopen, UPGRADE_AT } from "../economy/sim";
 import { bidFor, quote, lassiPrice, stallPull, SHARES_PER_STALL, type Quote } from "../economy/pricing";
 import { clockOf, dayOf, MERCHANT_IDS, MINUTES_PER_DAY, type EconomyState, type Good, type MerchantId, type Receipt } from "../economy/state";
 import { applyTactic, closeDeal, dealTotal, dealUnit, lockKey, openHaggle, thoughts, tickPatience, modeFor, PERSONALITY, TACTICS, type HaggleSession, type Tactic } from "../economy/haggle";
@@ -38,7 +38,7 @@ const refusal = (msg = ""): string =>
     : /slow down|429/i.test(msg) ? "Too many trades at once. Wait a moment."
     : "The market couldn't confirm that trade.";
 /** Flags a trade can set; undone together with the trade when the chain refuses it. */
-const PROGRESS_FLAGS = ["tut", "boughtTomas", "tutCost", "deliveredPema", "haggled", "soldArin"] as const;
+const PROGRESS_FLAGS = ["tut", "boughtTomas", "tutCost", "deliveredPema", "haggled", "soldArin", "reopenedStall"] as const;
 const MAX_QTY = 10;
 
 const TACTIC_LABEL: Record<"buy" | "sell", Record<Tactic, [string, string]>> = {
@@ -342,7 +342,7 @@ export async function createPlay(game: Game): Promise<Play> {
   };
   const tabsFor = (id: MerchantId): Tab[] => {
     const t: Tab[] = [];
-    if (stepIndex(state) !== 3 || id !== "pema") t.push("buy");
+    if ((stepIndex(state) !== 3 || id !== "pema") && state.merchants[id].status === "open") t.push("buy");
     if (sellPrice(id) !== null) t.push("sell");
     if (unlocked(state, "invest") || state.player.shares[id] > 0) t.push("invest");
     return t;
@@ -363,7 +363,10 @@ export async function createPlay(game: Game): Promise<Play> {
     const tab = defaultTab(id);
     const q = Math.max(1, Math.min(3, maxQty(id, tab)));
     frame(npc);
-    mode = { kind: "trade", npc, id, tab, qty: q, say: id === "pema" && stepIndex(state) === 3 ? `Are those for me? ${DELIVERY_PRICE} coins each, as promised!` : WHO[id].hello, tone: "", why: false, h: null, done: 0 };
+    const closed = state.merchants[id].status !== "open";
+    const say = id === "pema" && stepIndex(state) === 3 ? `Are those for me? ${DELIVERY_PRICE} coins each, as promised!`
+      : closed ? "The shutters are down: I couldn't make rent. Bring me stock and I can open again." : WHO[id].hello;
+    mode = { kind: "trade", npc, id, tab, qty: q, say, tone: closed ? "bad" : "", why: false, h: null, done: 0 };
     renderTrade();
     showPanel(npc);
   };
@@ -386,6 +389,7 @@ export async function createPlay(game: Game): Promise<Play> {
     hud.panel.append(head(PERSONALITY[id].name, WHO[id].role, WHO[id].color));
     hud.panel.append(el("div", `tp-say ${mode.tone}`, mode.say));
     if (h) { renderHaggleBody(h); return; }
+    if (m.status !== "open") hud.panel.append(reopenMeter(id));
     const tabs = tabsFor(id);
     if (tabs.length > 1) {
       const t = el("div", "tp-tabs");
@@ -428,10 +432,22 @@ export async function createPlay(game: Game): Promise<Play> {
     else if (max <= 0) acts.append(el("div", "tp-text full", tab === "buy" ? (m.stock[good] <= 0 ? "Sold out for now." : `You need ${unit} c for one. You have ${state.player.coins} c.`) : (state.player.inventory.mango <= 0 ? "You have no mangoes to sell. Buy some first." : `${PERSONALITY[id].name} can't afford any right now.`)));
     else {
       acts.append(button(`${tab === "buy" ? "Buy" : "Sell"} ${goodName(good, mode.qty)} for ${total} c`, "primary", () => simpleDeal(), "1"));
-      if (unlocked(state, "haggle") && modeFor(state, id) === tab && good === "mango") acts.append(button("Haggle", "full", () => startHaggle(), "2", "try for a better price"));
+      if (unlocked(state, "haggle") && m.status === "open" && modeFor(state, id) === tab && good === "mango") acts.append(button("Haggle", "full", () => startHaggle(), "2", "try for a better price"));
     }
     acts.append(button("Leave", "ghost full", () => endPanel(), "Esc"));
     hud.panel.append(acts);
+  };
+
+  /** Closed stall: how far its shelves are from reopening (stock is the only thing that reopens it). */
+  const reopenMeter = (id: MerchantId): HTMLDivElement => {
+    const m = state.merchants[id], gap = reopenGap(state, id);
+    const need = Math.ceil((m.rent * REOPEN_SHARE) / Math.max(1, m.baseCost.mango)), have = Math.max(0, need - gap);
+    const d = el("div", "tp-pat");
+    d.append(el("span", "", `Closed · restock to reopen: ${have} of ${need} mangoes' worth on the shelves`));
+    const bar = el("i"), fill = el("b");
+    fill.style.width = `${Math.round((have / need) * 100)}%`;
+    bar.append(fill); d.append(bar);
+    return d;
   };
 
   const renderInvestBody = (id: MerchantId): void => {
@@ -497,7 +513,7 @@ export async function createPlay(game: Game): Promise<Play> {
   const keep = (id: MerchantId): (() => void) => {
     const p = structuredClone(state.player), m = structuredClone(state.merchants[id]);
     // story progress a deal unlocks rolls back with it: a refused delivery must not finish the step
-    const progress = PROGRESS_FLAGS.map((k) => [k, state.flags[k]] as const);
+    const progress = [...PROGRESS_FLAGS, `reopenNeed.${id}`].map((k) => [k, state.flags[k]] as const);
     return () => {
       state.player = p; state.merchants[id] = m;
       for (const [k, v] of progress) { if (v === undefined) delete state.flags[k]; else state.flags[k] = v; }
@@ -535,6 +551,18 @@ export async function createPlay(game: Game): Promise<Play> {
     if (h.mode === "buy" && h.moves > 0) { state.flags.haggled = true; if (out.gain > 0) say = `${out.gain} c cheaper than the first offer. Nicely done.`; }
     if (h.mode === "sell" && h.merchant === "arin") state.flags.soldArin = true;
     if (h.mode === "sell" && h.moves > 0 && out.gain > 0) say = `${out.gain} c more than the first offer.`;
+    if (h.mode === "sell") recordRestock(state, h.merchant, h.qty);
+    if (h.mode === "sell" && tryReopen(state, h.merchant)) {
+      // the delivery put the shelves over the line: the stall opens again right now (undone with the trade if refused)
+      say = "That's enough stock to open again. The shutters are going up!";
+      market.say(h.merchant, "We're open again, thanks to you!", 4);
+      hud.toast(`${state.merchants[h.merchant].shop} reopened`, true);
+      state.player.rep[h.merchant] += 3;
+      state.flags.reopenedStall = true;
+    } else if (h.mode === "sell" && state.merchants[h.merchant].status !== "open") {
+      const gap = reopenGap(state, h.merchant);
+      say = `Thank you. ${gap} more ${gap === 1 ? "mango" : "mangoes"} and I can open again.`;
+    }
     mode = { ...mode, h: null, say, tone: "good", done: RESULT_HOLD };
     drawBoards();
     renderTrade();
@@ -953,6 +981,7 @@ export async function createPlay(game: Game): Promise<Play> {
       const m = state.merchants[id];
       m.cash = b.coin ?? 0;
       m.stock = { mango: b.mango ?? 0, lemon: b.lemon ?? 0, lassi: b.lassi ?? 0 };
+      if (tryReopen(state, id)) hud.toast(`${m.shop} restocked and reopened.`, true);
     });
     drawBoards();
     if (mode.kind === "trade") renderTrade();
@@ -1037,7 +1066,9 @@ export async function createPlay(game: Game): Promise<Play> {
       if (npc.id === "pema" && stepIndex(state) <= 1) { state.flags.nearPema = true; openTalk(npc, PEMA_INTRO); return; }
       if (!TRADERS.includes(npc.id as MerchantId)) { openTalk(npc); return; }
       const m = state.merchants[npc.id as MerchantId];
-      if (m.status !== "open") { hud.toast(`${m.shop} is closed. ${m.name} couldn't pay the rent.`); return; }
+      if (m.status !== "open" && sellPrice(npc.id as MerchantId) === null && !tabsFor(npc.id as MerchantId).includes("invest")) {
+        hud.toast(`${m.shop} is closed. ${m.name} couldn't pay the rent.`); return;
+      }
       openTrade(npc, npc.id as MerchantId);
     },
     tactic(t) {

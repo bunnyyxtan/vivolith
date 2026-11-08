@@ -1,8 +1,29 @@
 // Run: node src/economy/economy.check.ts   (asserts the Mango Crisis economics hold)
 import assert from "node:assert/strict";
 import { initialEconomy } from "./state.ts";
-import { advance, challengeStandingContract, payReleaseFee, pemaBuysFromTomas, teahouseForwardBuy } from "./sim.ts";
-import { quote } from "./pricing.ts";
+import { advance, challengeStandingContract, payReleaseFee, pemaBuysFromTomas, recordRestock, reopenGap, teahouseForwardBuy, tryReopen } from "./sim.ts";
+import { bidFor, quote } from "./pricing.ts";
+
+// 0. A closed stall still bids for stock, and reopens the moment deliveries cover the gap (not before).
+const shut = initialEconomy();
+Object.assign(shut.merchants.pema, { status: "closed", stock: { mango: 0, lemon: 0, lassi: 0 } });
+assert.ok(bidFor(shut, "pema", "mango"), "a closed stall keeps bidding");
+const gap = reopenGap(shut, "pema");
+assert.ok(gap > 0);
+shut.merchants.pema.stock.mango = gap - 1;
+assert.equal(tryReopen(shut, "pema"), false);
+shut.merchants.pema.stock.mango = gap;
+assert.equal(tryReopen(shut, "pema"), true);
+assert.equal(shut.merchants.pema.status, "open");
+// Deliveries count: street shoppers emptying the restocked shelves never push the target back.
+Object.assign(shut.merchants.pema, { status: "closed", stock: { mango: 0, lemon: 0, lassi: 0 } });
+shut.flags["reopenNeed.pema"] = gap;
+shut.merchants.pema.stock.mango = 3; recordRestock(shut, "pema", 3);
+shut.merchants.pema.stock.mango = 0; // sold to the street
+assert.equal(reopenGap(shut, "pema"), gap - 3);
+shut.merchants.pema.stock.mango = gap - 3; recordRestock(shut, "pema", gap - 3);
+assert.equal(tryReopen(shut, "pema"), true);
+assert.equal(shut.flags["reopenNeed.pema"], undefined);
 
 const hours = (h: number) => h * 60;
 

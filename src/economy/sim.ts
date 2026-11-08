@@ -1,7 +1,7 @@
 // Deterministic market simulation (no randomness): the same choices always give the same city.
 // Time advances in game minutes; rules fire on hour boundaries. Called every frame with real dt,
 // and by fast-forward with large spans. ponytail: mutates state in place (one owner, hot loop).
-import { clockOf, dayOf, MERCHANT_IDS, MINUTES_PER_DAY, type EconomyState, type Good, type MerchantId } from "./state.ts";
+import { clockOf, dayOf, MERCHANT_IDS, MINUTES_PER_DAY, type EconomyState, type Good, type Merchant, type MerchantId } from "./state.ts";
 import { DIVIDEND_SHARE, SHARES_PER_STALL, lassiPrice, planMerchantTrades, quote, type MerchantTrade } from "./pricing.ts";
 
 /** Shoppers per open hour wanting each good across the whole market, at a fair price. */
@@ -108,6 +108,36 @@ function shipments(state: EconomyState): void {
   }
 }
 
+/** Stock a closed stall needs before it can open again: goods worth three quarters of its rent. */
+export const REOPEN_SHARE = 0.75;
+const stockValue = (m: Merchant): number => m.sells.reduce((v, g) => v + m.stock[g] * m.baseCost[g], 0);
+const shelfGap = (m: Merchant): number =>
+  Math.max(0, Math.ceil((m.rent * REOPEN_SHARE - stockValue(m)) / Math.max(1, m.baseCost.mango)));
+/** Mangoes still missing before a closed stall can reopen (0 when it is open or ready). The target is fixed when
+ *  the stall closes and counts deliveries, so street sales of the restocked shelves never move it away. */
+export function reopenGap(state: EconomyState, id: MerchantId): number {
+  const m = state.merchants[id];
+  if (m.status === "open") return 0;
+  const left = state.flags[`reopenNeed.${id}`];
+  return typeof left === "number" ? Math.max(0, Math.min(left, shelfGap(m))) : shelfGap(m);
+}
+/** Counts mangoes delivered to a closed stall toward its reopening. Call after the delivery landed. */
+export function recordRestock(state: EconomyState, id: MerchantId, qty: number): void {
+  const m = state.merchants[id];
+  if (m.status === "open") return;
+  const left = state.flags[`reopenNeed.${id}`];
+  state.flags[`reopenNeed.${id}`] = (typeof left === "number" ? left : shelfGap(m) + qty) - qty;
+}
+/** Reopens a closed stall whose shelves are stocked again; true if it just reopened. */
+export function tryReopen(state: EconomyState, id: MerchantId): boolean {
+  const m = state.merchants[id];
+  if (m.status !== "closed" || reopenGap(state, id) > 0) return false;
+  m.status = "open";
+  delete state.flags[`reopenNeed.${id}`];
+  log(state, "reopened", `${m.shop} reopened with fresh stock.`);
+  return true;
+}
+
 function hourTick(state: EconomyState, hour: number): void {
   const day = dayOf(state.minute);
   shipments(state);
@@ -119,15 +149,7 @@ function hourTick(state: EconomyState, hour: number): void {
     t.cash -= need * 2;
   }
   if (hour === 7 || hour === 14) applyMerchantTrades(state, planMerchantTrades(state));
-  if (hour === OPEN_FROM) {
-    for (const m of Object.values(state.merchants)) {
-      const stockValue = m.sells.reduce((v, g) => v + m.stock[g] * m.baseCost[g], 0);
-      if (m.status === "closed" && stockValue >= m.rent * 0.75) {
-        m.status = "open";
-        log(state, "reopened", `${m.shop} reopened with fresh stock.`);
-      }
-    }
-  }
+  if (hour === OPEN_FROM) for (const id of MERCHANT_IDS) tryReopen(state, id);
   if (hour >= OPEN_FROM && hour < OPEN_UNTIL) shoppers(state);
   if (hour === RENT_HOUR) {
     for (const m of Object.values(state.merchants)) {
@@ -137,6 +159,7 @@ function hourTick(state: EconomyState, hour: number): void {
         log(state, "rent", `${m.name} paid ${m.rent} c rent.`);
       } else {
         m.status = "closed";
+        state.flags[`reopenNeed.${m.id}`] = shelfGap(m);
         log(state, "closed", `${m.shop} could not pay rent and pulled the shutters down.`);
       }
     }

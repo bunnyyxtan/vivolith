@@ -139,7 +139,7 @@ export interface Bid {
 export function bidFor(state: EconomyState, id: MerchantId, good: Good): Bid | null {
   const m = state.merchants[id];
   const short = m.target[good] - m.stock[good];
-  if (m.status !== "open" || short <= 0) return null;
+  if (short <= 0) return null; // a closed stall keeps buying: restocked shelves are how it reopens
   switch (m.style) {
     case "loyal": // restocks once shelves fall under half, pays up to 1.8x cost
       return m.sells.includes(good) && m.stock[good] < m.target[good] * 0.5 ? { price: Math.round(m.baseCost[good] * 1.8), qty: short, reason: "Restocking her shelves" } : null;

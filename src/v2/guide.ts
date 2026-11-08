@@ -4,6 +4,7 @@
 import * as THREE from "three";
 import type { EconomyState, MerchantId } from "../economy/state";
 import { MERCHANT_IDS } from "../economy/state";
+import { reopenGap } from "../economy/sim";
 import { el, type Hud } from "./hud";
 
 export interface Step {
@@ -99,6 +100,15 @@ export function createGuide(hud: Hud): Guide {
     if (i < STEPS.length) {
       const st = STEPS[i];
       return { title: st.title, detail: st.detail(s), target: st.target, label: `First day · ${i + 1} of ${STEPS.length}` };
+    }
+    // A closed stall comes first: it is the city's most urgent problem and the player can fix it.
+    const shut = MERCHANT_IDS.find((id) => s.merchants[id].status !== "open");
+    if (shut) {
+      const m = s.merchants[shut], gap = reopenGap(s, shut);
+      return {
+        title: `Help ${NAMES[shut]} reopen`, target: shut, label: "Urgent",
+        detail: `${m.shop} missed rent and closed. Bring ${gap} more ${gap === 1 ? "mango" : "mangoes"} to restock it${s.player.shares[shut] ? "" : ", or invest so it can pay you"}.`,
+      };
     }
     const g = GOALS.find((x) => !x.done(s));
     return g ? { title: g.title, detail: g.detail, target: null, label: "Goal" } : null;
