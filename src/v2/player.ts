@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { stepBody, type Body, type Box } from "../physics/collision";
 import { loadCharacter, type AnimatedCharacter } from "../character";
 import { applyToon } from "./toon";
+import { standHeight } from "./floor";
 import type { Input } from "./input";
 
 export const WALK_SPEED = 3.2;
@@ -41,6 +42,7 @@ async function loadKavi(): Promise<AnimatedCharacter> {
 export async function createPlayer(): Promise<Player> {
   const character = await loadKavi();
   applyToon(character.root, 0.011);
+  character.autoGround = true;
   const root = new THREE.Group();
   root.add(character.root);
 
@@ -96,12 +98,13 @@ export async function createPlayer(): Promise<Player> {
         d = Math.atan2(Math.sin(d), Math.cos(d));
         player.heading += d * (1 - Math.exp(-TURN_RATE * dt));
       }
-      // On the ground, stand on the visible pavement; in the air, follow the body.
-      root.position.set(body.x, body.grounded && player.floor ? player.floor(body.x, body.z, body.y) : body.y, body.z);
+      // Pose first, then height: on the ground both feet stand on the visible pavement; in the air, follow the body.
+      root.position.set(body.x, root.position.y, body.z);
       root.rotation.y = player.heading;
       focus.set(body.x, body.y + 1.45, body.z);
       character.setSpeed(speedNow, WALK_SPEED, RUN_SPEED);
       character.update(dt);
+      root.position.y = body.grounded && player.floor ? standHeight(player.floor, body.x, body.z, body.y, character.footprints()) : body.y;
     },
   };
   return player;

@@ -70,6 +70,8 @@ export interface Market {
   bind(body: Body, camera: THREE.Camera): void;
   /** Visible walkway height at a point (used to stand Kavi on the pavement). */
   readonly floor: FloorHeight;
+  /** Every merchant and townsfolk character (for the one-time sole calibration). */
+  readonly cast: readonly AnimatedCharacter[];
   /** Shows a stall's economic state in the world: crate pile = stock, closed shutter, upgrade, shopper pull. */
   setStall(id: string, s: StallState): void;
   /** A merchant says a line (speech bubble above their head). */
@@ -281,6 +283,7 @@ export async function createMarket(scene: THREE.Scene, colliders: Box[]): Promis
   const toP = new THREE.Vector3();
   return {
     npcs, townSpawn, floor,
+    cast: [...npcs.map((n) => n.character), ...folk.map((f) => f.c)],
     boards: npcs.flatMap((n) => (n.board ? [n.board.mesh] : [])),
     bind: (body, camera) => life.bind(body, camera),
     setStall(id, st) { dressing.get(id)?.(st); life.setPull(id, st.pull); },

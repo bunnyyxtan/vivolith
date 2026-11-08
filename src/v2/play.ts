@@ -7,6 +7,7 @@ import { createMarket, type Market, type Npc } from "./market";
 import { createHud, el, type Hud } from "./hud";
 import { createGuide, DELIVERY_PRICE, GOALS, STEPS, stepIndex, unlocked } from "./guide";
 import { loadGame, saveGame, clearSave } from "../economy/save";
+import { calibrateSoles } from "./soles";
 import { advance, invest, payReleaseFee, recordRestock, REOPEN_SHARE, reopenGap, SHARE_PRICE, tryReopen, UPGRADE_AT } from "../economy/sim";
 import { bidFor, quote, lassiPrice, stallPull, SHARES_PER_STALL, type Quote } from "../economy/pricing";
 import { clockOf, dayOf, MERCHANT_IDS, MINUTES_PER_DAY, type EconomyState, type Good, type MerchantId, type Receipt } from "../economy/state";
@@ -142,6 +143,7 @@ export async function createPlay(game: Game): Promise<Play> {
   const guide = createGuide(hud);
   market.bind(game.player.body, game.rig.camera);
   game.player.floor = market.floor;
+  calibrateSoles(game.look.renderer, market.cast);
   const enterTown = (): void => {
     if (!market.townSpawn) return; // start at the south gate and walk up Market Avenue toward the Spire
     // 1.6 m east of the gate centre: town.glb has a wire pole at x=0 on the straight line north (z=85.2)
