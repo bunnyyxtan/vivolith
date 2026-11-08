@@ -126,8 +126,8 @@ export function createGuide(hud: Hud): Guide {
       const m = s.merchants[shut], gap = reopenGap(s, shut);
       return {
         title: `Help ${NAMES[shut]} reopen`, target: shut, label: "Urgent",
-        detail: `${m.shop} missed rent and closed. Bring ${gap} more ${gap === 1 ? "mango" : "mangoes"} to restock it${s.player.shares[shut] ? "" : ", or invest so it can pay you"}.`
-          + (m.cash < m.baseCost.mango ? ` ${NAMES[shut]}'s till is empty: the Market Guild tops it up every market day.` : ""),
+        detail: `${m.shop} missed rent and closed. Bring ${gap} more ${gap === 1 ? "mango" : "mangoes"} to reopen it: it pays for every one${chainLive(s) ? " (the Market Guild lent it the coins)" : ""}.`
+          + (m.cash < m.baseCost.mango ? ` ${NAMES[shut]}'s till is empty right now: the Market Guild tops it up every market day.` : ""),
       };
     }
     const g = GOALS.find((x) => !x.done(s));

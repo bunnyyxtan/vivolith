@@ -447,6 +447,8 @@ export async function createPlay(game: Game): Promise<Play> {
 
   const renderTrade = (): void => {
     if (mode.kind !== "trade") return;
+    // an offer can vanish while the panel is open (a bid filled, a kitchen restocked): never show a dead tab
+    if (!mode.h && mode.done <= 0 && !tabsFor(mode.id).includes(mode.tab)) mode = { ...mode, tab: defaultTab(mode.id), qty: 1 };
     const { id, tab, h } = mode;
     const m = state.merchants[id];
     hud.panel.innerHTML = "";
@@ -461,6 +463,9 @@ export async function createPlay(game: Game): Promise<Play> {
       hud.panel.append(t);
     }
     if (tab === "invest") { renderInvestBody(id); return; }
+    if (tab !== "sell" && state.player.inventory.mango > 0 && sellPrice(id) === null && (id === "arin" || id === "pema" || m.status !== "open")) {
+      hud.panel.append(el("div", "tp-text tp-note", `${PERSONALITY[id].name.split(" ").pop()} isn't buying mangoes this minute: ${id === "arin" ? "the kitchen is stocked" : "the shelves are full"}. Bids come back as stock sells; try again in a few minutes or sell elsewhere.`));
+    }
     const good = goodFor(id, tab);
     const unit = tab === "buy" ? priceOf(state, id).price : sellPrice(id) ?? 0;
     const max = maxQty(id, tab);
@@ -509,10 +514,11 @@ export async function createPlay(game: Game): Promise<Play> {
 
   /** Closed stall: how far its shelves are from reopening (stock is the only thing that reopens it). */
   const reopenMeter = (id: MerchantId): HTMLDivElement => {
-    const m = state.merchants[id], gap = reopenGap(state, id);
-    const need = Math.ceil((m.rent * REOPEN_SHARE) / Math.max(1, m.baseCost.mango)), have = Math.max(0, need - gap);
+    const m = state.merchants[id], gap = reopenGap(state, id), total = state.flags[`reopenTotal.${id}`];
+    // connected: the contract's own count of mangoes delivered since it closed; offline: the shelves' value
+    const need = typeof total === "number" ? total : Math.ceil((m.rent * REOPEN_SHARE) / Math.max(1, m.baseCost.mango)), have = Math.max(0, need - gap);
     const d = el("div", "tp-pat");
-    d.append(el("span", "", `Closed · restock to reopen: ${have} of ${need} mangoes' worth on the shelves`));
+    d.append(el("span", "", typeof total === "number" ? `Closed · ${have} of ${need} mangoes delivered: ${gap} more reopens the stall` : `Closed · restock to reopen: ${have} of ${need} mangoes' worth on the shelves`));
     const bar = el("i"), fill = el("b");
     fill.style.width = `${Math.round((have / need) * 100)}%`;
     bar.append(fill); d.append(bar);
@@ -1158,8 +1164,8 @@ export async function createPlay(game: Game): Promise<Play> {
       if (!m) continue;
       const was = m.status;
       m.status = s.open ? "open" : "closed";
-      if (s.open) delete state.flags[`reopenNeed.${id}`];
-      else state.flags[`reopenNeed.${id}`] = Math.max(0, Number(s.need) - Number(s.delivered));
+      if (s.open) { delete state.flags[`reopenNeed.${id}`]; delete state.flags[`reopenTotal.${id}`]; }
+      else { state.flags[`reopenNeed.${id}`] = Math.max(0, Number(s.need) - Number(s.delivered)); state.flags[`reopenTotal.${id}`] = Number(s.need); }
       if (was !== m.status) {
         hud.toast(s.open ? `${m.shop} reopened.` : `${m.shop} couldn't pay rent and closed.`, s.open);
         state.log.push({ minute: state.minute, kind: s.open ? "reopened" : "closed", text: s.open ? `${m.shop} reopened with fresh stock.` : `${m.shop} could not pay rent and pulled the shutters down.` });
