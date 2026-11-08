@@ -57,7 +57,8 @@ void main(){
 
 export function createLook(canvas: HTMLCanvasElement): Look {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: "high-performance" });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  // 1.5 at most: the frame is 4x MSAA + bloom + grade, so DPR 2 would cost 4x the pixels of 1080p for little gain
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.2;
