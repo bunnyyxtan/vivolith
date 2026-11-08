@@ -23,6 +23,8 @@ export interface AnimatedCharacter {
   /** Raise the ground contact by dy metres: the depth of the rendered sole below the root, measured on the GPU
    *  (src/v2/soles.ts) for skins whose CPU skinning cannot be trusted. */
   raiseSole(dy: number): void;
+  /** Natural ground speeds (m/s) of the walk and run clips, measured at load (null without both clips). */
+  readonly gait: { walk: number; run: number } | null;
 }
 
 export interface Footprint { x: number; z: number; lift: number }
@@ -33,21 +35,99 @@ function findClip(clips: THREE.AnimationClip[], pattern: RegExp): THREE.Animatio
   return clips.find((c) => pattern.test(c.name));
 }
 
+const suffix = (name: string): string => name.replace(/^mixamorig\d*:?/, "");
+const RETARGET_FPS = 30;
+/** Outward swing (radians, about the body's forward axis) added to retargeted arms: the Mixamo run pumps the fists
+ *  across a thin chest, which on a bulky hoodie clenches the hands at the sternum with the elbows poking out. */
+const ARM_SPREAD: Record<string, number> = { Arm: 0.12, ForeArm: 0.1 };
+
+/** World-space correction for a bone inside an arm: each Arm/ForeArm ancestor (or itself) swings it away from the body. */
+function armSpread(b: THREE.Object3D): THREE.Quaternion {
+  const q = new THREE.Quaternion();
+  for (let o: THREE.Object3D | null = b; o; o = o.parent) {
+    const m = /^(Left|Right)(Arm|ForeArm)$/.exec(suffix(o.name));
+    if (m) q.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), (m[1] === "Left" ? 1 : -1) * ARM_SPREAD[m[2]]));
+  }
+  return q;
+}
+
+/**
+ * Bakes `clip` (animating `src`) onto the bones of `dst`, whose rest orientations differ (a Tripo rig renamed to
+ * Mixamo names: bone rolls differ by up to 180 degrees, so copying local rotations lays the body on its back).
+ * Each target bone takes the source bone's world rotation away from its rest, applied after first turning the
+ * target's rest bone direction onto the source's. Rotations only; the feet are grounded at runtime.
+ */
+function retargetClip(clip: THREE.AnimationClip, src: THREE.Object3D, dst: THREE.Object3D): THREE.AnimationClip {
+  const srcBones = new Map<string, THREE.Object3D>();
+  src.traverse((o) => { if ((o as THREE.Bone).isBone) srcBones.set(suffix(o.name), o); });
+  const dstBones: THREE.Object3D[] = [];
+  dst.traverse((o) => { if ((o as THREE.Bone).isBone) dstBones.push(o); }); // parents before children
+  const worldQ = (o: THREE.Object3D): THREE.Quaternion => o.getWorldQuaternion(new THREE.Quaternion());
+  const worldP = (o: THREE.Object3D): THREE.Vector3 => o.getWorldPosition(new THREE.Vector3());
+  src.updateMatrixWorld(true);
+  dst.updateMatrixWorld(true);
+  // per target bone: its source, rest world rotations, and the rest-direction alignment
+  const rig = dstBones.map((b) => {
+    const s = srcBones.get(suffix(b.name));
+    const align = new THREE.Quaternion();
+    const kids = b.children.filter((c) => (c as THREE.Bone).isBone);
+    const sc = kids.length === 1 ? srcBones.get(suffix(kids[0].name)) : undefined;
+    if (s && sc) align.setFromUnitVectors(worldP(kids[0]).sub(worldP(b)).normalize(), worldP(sc).sub(worldP(s)).normalize());
+    return { b, s, fix: armSpread(b), srcRestInv: s ? worldQ(s).invert() : null, dstRest: align.multiply(worldQ(b)), restLocal: b.quaternion.clone() };
+  });
+  const parentRest = new Map<THREE.Object3D, THREE.Quaternion>();
+  for (const { b } of rig) if (b.parent && !(b.parent as THREE.Bone).isBone) parentRest.set(b.parent, worldQ(b.parent));
+
+  const mixer = new THREE.AnimationMixer(src);
+  const action = mixer.clipAction(clip).play();
+  const n = Math.max(2, Math.ceil(clip.duration * RETARGET_FPS) + 1);
+  const times = new Float32Array(n);
+  const values = rig.map(() => new Float32Array(n * 4));
+  const world = new Map<THREE.Object3D, THREE.Quaternion>();
+  const local = new THREE.Quaternion();
+  const prev = rig.map(() => new THREE.Quaternion());
+  for (let i = 0; i < n; i++) {
+    const t = (clip.duration * i) / (n - 1);
+    times[i] = t;
+    mixer.setTime(t);
+    src.updateMatrixWorld(true);
+    world.clear();
+    rig.forEach((r, k) => {
+      const parentW = world.get(r.b.parent!) ?? parentRest.get(r.b.parent!) ?? new THREE.Quaternion();
+      const w = r.s ? worldQ(r.s).multiply(r.srcRestInv!).multiply(r.dstRest).premultiply(r.fix) : parentW.clone().multiply(r.restLocal);
+      world.set(r.b, w);
+      local.copy(parentW).invert().multiply(w);
+      if (i > 0 && local.dot(prev[k]) < 0) local.set(-local.x, -local.y, -local.z, -local.w); // no flips between keys
+      prev[k].copy(local);
+      local.toArray(values[k], i * 4);
+    });
+  }
+  action.stop();
+  mixer.uncacheRoot(src);
+  const tracks = rig.flatMap((r, k) => (r.s ? [new THREE.QuaternionKeyframeTrack(`${r.b.name}.quaternion`, times, values[k])] : []));
+  return new THREE.AnimationClip(clip.name, clip.duration, tracks);
+}
+
 /** Loads a character GLB and scales it so its standing height equals `height` metres. */
-/** `clipSource`: another Mixamo-rig GLB whose clips (rotation tracks only) replace this model's own,
- *  for exports whose baked clips are static. */
+/** `clipSource`: Mixamo-rig GLBs whose clips (rotation tracks only) replace this model's own, for exports whose
+ *  baked clips are static or poor. "url#Walk,Run" takes only those clips from that file; the first source wins.
+ *  Picked clips from another file are retargeted onto this rig (retargetClip); the rest are copied by bone name. */
 export async function loadCharacter(url: string, height: number, clipSource?: string | string[]): Promise<AnimatedCharacter> {
   const gltf = await loadGLB(url);
   if (clipSource) {
-    // retarget by bone suffix: rigs differ only in the "mixamorig<N>" prefix
+    // copy by bone suffix: rigs differ only in the "mixamorig<N>" prefix
     const bySuffix = new Map<string, string>();
     gltf.scene.traverse((o) => bySuffix.set(o.name.replace(/^mixamorig\d*/, ""), o.name));
     const seen = new Set<string>();
     const merged: THREE.AnimationClip[] = [];
-    for (const url of Array.isArray(clipSource) ? clipSource : [clipSource]) {
-      for (const c of (await loadGLB(url)).animations) {
-        if (seen.has(c.name)) continue; // first source wins per clip name
+    for (const src of Array.isArray(clipSource) ? clipSource : [clipSource]) {
+      const [srcUrl, only] = src.split("#");
+      const pick = only ? new Set(only.split(",")) : null;
+      const srcGltf = srcUrl === url ? gltf : await loadGLB(srcUrl);
+      for (const c of srcGltf.animations) {
+        if (seen.has(c.name) || (pick && !pick.has(c.name))) continue; // first source wins per clip name
         seen.add(c.name);
+        if (pick && srcGltf !== gltf) { merged.push(retargetClip(c, srcGltf.scene, gltf.scene)); continue; }
         merged.push(new THREE.AnimationClip(c.name, c.duration,
           c.tracks.flatMap((t) => {
             const target = t.name.endsWith(".quaternion") ? bySuffix.get(t.name.split(".")[0].replace(/^mixamorig\d*/, "")) : undefined;
@@ -166,6 +246,34 @@ export async function loadCharacter(url: string, height: number, clipSource?: st
     const loco = idle0 + (walk0 - idle0) * w;
     return loco + (run0 - walk0) * r * w;
   };
+  // Gait of each locomotion clip, measured on the scaled model: the ground speed its planted foot carries
+  // (playback rate = speed / natural, so feet do not slide) and the phase of the left foot's touchdown (walk and run
+  // play on one shared gait phase, aligned there, so a blend never crosses the legs).
+  const footBone = (side: RegExp): THREE.Object3D[] => feet.filter((f) => side.test(f.name));
+  const leftF = footBone(/left/i), rightF = footBone(/right/i);
+  const gaitOf = (clip: THREE.AnimationClip | undefined): { natural: number; touchdown: number } | null => {
+    if (!clip || !leftF.length || !rightF.length) return null;
+    const a = mixer.clipAction(clip).play();
+    const N = 96, L: THREE.Vector3[] = [], R: THREE.Vector3[] = [];
+    const low = (bs: THREE.Object3D[]): THREE.Vector3 => {
+      const out = new THREE.Vector3(0, Infinity, 0);
+      for (const b of bs) { b.getWorldPosition(tmp); if (tmp.y < out.y) out.copy(tmp); }
+      return out;
+    };
+    for (let i = 0; i <= N; i++) { mixer.setTime((clip.duration * i) / N); model.updateMatrixWorld(true); L.push(low(leftF)); R.push(low(rightF)); }
+    a.stop();
+    const lMin = Math.min(...L.map((p) => p.y)), rMin = Math.min(...R.map((p) => p.y));
+    const dt = clip.duration / N, speeds: number[] = [];
+    for (let i = 0; i < N; i++) { // a foot within 2 cm of its lowest is planted: it moves back at the ground speed
+      if (L[i].y < lMin + 0.02 && L[i + 1].y < lMin + 0.02) speeds.push(Math.hypot(L[i + 1].x - L[i].x, L[i + 1].z - L[i].z) / dt);
+      if (R[i].y < rMin + 0.02 && R[i + 1].y < rMin + 0.02) speeds.push(Math.hypot(R[i + 1].x - R[i].x, R[i + 1].z - R[i].z) / dt);
+    }
+    speeds.sort((x, y) => x - y);
+    let td = 0;
+    for (let i = 1; i <= N; i++) if (L[i].y < lMin + 0.02 && L[i - 1].y >= lMin + 0.02) { td = i / N; break; }
+    return speeds.length ? { natural: Math.max(0.3, speeds[speeds.length >> 1]), touchdown: td } : null;
+  };
+  const walkGait = gaitOf(walk), runGait = gaitOf(run);
   const idleA = mixer.clipAction(idle).play();
   const walkA = walk ? mixer.clipAction(walk).play() : null;
   const runA = run ? mixer.clipAction(run).play() : null;
@@ -177,9 +285,25 @@ export async function loadCharacter(url: string, height: number, clipSource?: st
   const api: { lift: number } = { lift: 0 };
   let ground = idle0; // smoothed auto-ground offset
   const rootPos = new THREE.Vector3();
+  let phase = 0, phaseRate = 0; // shared gait phase (0..1 of a walk clip) and its rate, cycles/s
 
   const setSpeed = (speed: number, walkSpeed: number, runSpeed: number): void => {
     last = { speed, walk: walkSpeed, run: runSpeed };
+    if (walkA && runA && walkGait && runGait) {
+      // measured gaits: idle -> walk up to 80% of the walk's own speed, walk -> run between the two natural speeds
+      const w = THREE.MathUtils.clamp(speed / (walkGait.natural * 0.8), 0, 1);
+      const r = THREE.MathUtils.clamp((speed - walkGait.natural) / Math.max(0.1, runGait.natural - walkGait.natural), 0, 1);
+      const locoWeight = overlay ? 0 : 1;
+      trim = overlay ? idle0 : trimOf(w, r);
+      idleA.setEffectiveWeight((1 - w) * locoWeight);
+      walkA.setEffectiveWeight(w * (1 - r) * locoWeight);
+      runA.setEffectiveWeight(w * r * locoWeight);
+      // stride matched to ground speed (no sliding); both clips advance on one phase
+      const ws = THREE.MathUtils.clamp(speed / walkGait.natural, 0.35, 2.2), rs = THREE.MathUtils.clamp(speed / runGait.natural, 0.35, 2.2);
+      phaseRate = (1 - r) * (ws / walk!.duration) + r * (rs / run!.duration);
+      walkA.timeScale = 0; runA.timeScale = 0; // driven by phase in update()
+      return;
+    }
       // idle -> walk over [0, walkSpeed], walk -> run over [walkSpeed, runSpeed]
       const w = THREE.MathUtils.clamp(speed / walkSpeed, 0, 1);
       const r = runA ? THREE.MathUtils.clamp((speed - walkSpeed) / (runSpeed - walkSpeed), 0, 1) : 0;
@@ -198,6 +322,7 @@ export async function loadCharacter(url: string, height: number, clipSource?: st
     post: null,
     autoGround: false,
     raiseSole(dy) { sole += dy; baseY += dy; },
+    gait: walkGait && runGait ? { walk: walkGait.natural, run: runGait.natural } : null,
     get lift() { return api.lift; },
     set lift(v: number) { api.lift = v; },
     bone: (name) => bones.get(name),
@@ -229,6 +354,11 @@ export async function loadCharacter(url: string, height: number, clipSource?: st
       setSpeed(last.speed, last.walk, last.run);
     },
     update(dt) {
+      if (walkA && runA && walkGait && runGait) {
+        phase = (phase + phaseRate * dt) % 1;
+        walkA.time = ((phase + walkGait.touchdown) % 1) * walk!.duration;
+        runA.time = ((phase + runGait.touchdown) % 1) * run!.duration;
+      }
       mixer.update(dt);
       if (character.autoGround && !overlay && feet.length) {
         // Measure where the soles really are this frame and ease the body so they rest on the ground. While seated

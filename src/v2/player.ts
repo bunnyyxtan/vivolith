@@ -6,10 +6,12 @@ import { applyToon } from "./toon";
 import { standHeight } from "./floor";
 import type { Input } from "./input";
 
-export const WALK_SPEED = 3.2;
-export const RUN_SPEED = 6.8;
-const ACCEL = 28; // m/s^2 toward target velocity
-const DECEL = 34;
+export const WALK_SPEED = 3.2; // a jog: the run clip plays at ~1.1x its own measured ground speed
+// Sprint: the run clip's legs carry ~2.8 m/s on Kavi, so 5.4 m/s already plays it at ~1.9x (6.8 m/s needed 2.4x,
+// a frantic six steps a second). A real sprint needs a sprint clip, not a faster jog.
+export const RUN_SPEED = 5.4;
+const ACCEL = 18; // m/s^2 toward target velocity: ~0.18 s to a jog, so the first steps read as steps
+const DECEL = 22;
 const AIR_CONTROL = 0.45;
 const TURN_RATE = 14; // 1/s exponential turn
 const JUMP_SPEED = 6.2;
@@ -33,7 +35,9 @@ export interface Player {
 
 async function loadKavi(): Promise<AnimatedCharacter> {
   try {
-    return await loadCharacter("/models/v2/kavi.glb", HEIGHT);
+    // Kavi's own idle, turn and jump; walk and run from the Mixamo set: the Tripo walk/run carried 1.1 and 3.0 m/s
+    // with one leg lifting 17-35% higher than the other, which read as a limp at any playback speed.
+    return await loadCharacter("/models/v2/kavi.glb", HEIGHT, ["/models/v2/kavi.glb#Idle,Turn,Jump", "/models/player.glb#Walk,Run"]);
   } catch {
     return loadCharacter("/models/player.glb", HEIGHT); // placeholder until kavi.glb exists
   }
