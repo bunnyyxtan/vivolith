@@ -129,28 +129,13 @@ def demo_day_lawn(M):
 
 
 # ----------------------------------------------------------- Builders' Yard ----
-def food_truck(M, ident, x, y, rot, body, accent):
-    """Box food truck, cab toward local +x, serving hatch on its local +Y side; two queue spots in front."""
+def food_truck(M, ident, x, y, rot, asset="food_truck"):
+    """Tripo food truck (props/food_truck.glb, hatch on the model's -Y) with its serving side toward local +Y of
+    tf(x, y, rot); body collider and two queue spots in front of the hatch."""
     T = tf(x, y, rot)
-    z0 = ZP
-    axis = "y" if abs(math.cos(rot)) > 0.5 else "x"
-    for lx in (-1.5, 1.4):
-        for ly in (-0.95, 0.95):
-            wheel(M["tyre"], T(lx, ly) + (z0 + 0.38,), 0.38, 0.22, axis, 12)
-    obox(body, T, -2.6, -1.05, z0 + 0.45, 2.6, 1.05, z0 + 2.75)            # box body
-    obox(M["trim"], T, -2.6, -1.07, z0 + 2.75, 2.6, 1.07, z0 + 2.9)         # roof
-    obox(M["glassd"], T, 2.6, -0.85, z0 + 1.55, 2.62, 0.85, z0 + 2.3)       # windscreen
-    obox(M["dark"], T, -1.7, 1.05, z0 + 1.25, 1.5, 1.07, z0 + 2.3)          # hatch opening
-    obox(M["interior"], T, -1.6, 1.0, z0 + 1.3, 1.4, 1.04, z0 + 2.25)       # lit galley
-    obox(M["trim"], T, -1.8, 1.05, z0 + 1.15, 1.6, 1.45, z0 + 1.22)         # counter ledge
-    hexa(accent, [T(-1.8, 1.05) + (z0 + 2.38,), T(1.6, 1.05) + (z0 + 2.38,), T(1.6, 2.0) + (z0 + 2.62,), T(-1.8, 2.0) + (z0 + 2.62,),
-                  T(-1.8, 1.05) + (z0 + 2.44,), T(1.6, 1.05) + (z0 + 2.44,), T(1.6, 2.0) + (z0 + 2.68,), T(-1.8, 2.0) + (z0 + 2.68,)])  # awning
-    obox(M["fabric_cream"], T, -1.5, 1.07, z0 + 2.45, 1.3, 1.1, z0 + 2.7)  # name band
-    for k in range(4):  # goods on the ledge
-        blob(M[("mango", "orangef", "banana", "apple")[k]], T(-1.3 + k * 0.8, 1.3) + (z0 + 1.32,), 0.12, 0.12, 0.1, 1)
-    obox(M["dark"], T, 2.86, 1.25, z0, 2.94, 1.95, z0 + 1.2)                # A-frame menu board
-    col_rot(x, y, 2.7, 1.1, rot, 0, z0 + 2.9, "truck")
-    for k, ly in enumerate((2.2, 3.1)):
+    prop(asset, ident, x, y, rot + math.pi, ZP)
+    col_rot(x, y, 2.7, 1.15, rot, 0, ZP + 3.0, "truck")
+    for k, ly in enumerate((2.4, 3.3)):
         px, py = T(0.0, ly)
         spot("stallq", f"spire_yard_{ident}_{'ab'[k]}", px, py, *_face(T, 0.0, ly, 0.0, 0.0))
 
@@ -166,20 +151,20 @@ def builders_yard(M):
     for r, y in enumerate((54.3, 59.3, 64.3)):               # outdoor desks under umbrellas, two neat rows
         for c, x in enumerate((-49.0, -43.0)):
             cafe_table(f"spire_yard_desk{r}{c}", x, y, M, M["teal"] if (r + c) % 2 else M["orange"], ZP + 0.03, 4)
-    food_truck(M, "truck_a", -55.6, 56.0, -math.pi / 2, M["car_m"], M["teal"])   # hatches face the desks (+x)
-    food_truck(M, "truck_b", -55.6, 65.5, -math.pi / 2, M["walls"][7], M["orange"])
+    food_truck(M, "truck_a", -55.4, 56.0, -math.pi / 2)   # hatches face the desks (+x)
+    food_truck(M, "truck_b", -55.4, 65.0, -math.pi / 2, "coffee_truck")
     pergola(M, -45.0, 70.0, 8.0, 3.2, 0.0, ZP)
     # the Labs notice board: what people are building, facing the yard
-    wbox(M["tealdk"], -37.4, 56.0, ZP, -37.0, 61.0, ZP + 2.4)
-    wbox(M["trim"], -37.45, 56.2, ZP + 0.9, -37.4, 60.8, ZP + 2.25)
+    wbox(M["tealdk"], -37.4, 53.8, ZP, -37.0, 58.8, ZP + 2.4)
+    wbox(M["trim"], -37.45, 54.0, ZP + 0.9, -37.4, 58.6, ZP + 2.25)
     for k in range(6):
-        wbox(M[("petal_y", "petal_p", "fabric_cream", "petal_l", "petal_y", "fabric_cream")[k]], -37.5, 56.5 + (k % 3) * 1.4, ZP + 1.1 + (k // 3) * 0.55,
-             -37.45, 57.5 + (k % 3) * 1.4, ZP + 1.55 + (k // 3) * 0.55)
-    collider("yard_board", -37.5, 56.0, -37.0, 61.0, 0, ZP + 2.4)
-    wbox(M["tealdk"], -37.4, 56.0, ZP + 2.4, -37.0, 61.0, ZP + 3.15)
-    placard("yard", -37.52, 58.5, ZP + 2.77, 1, 0)
-    spot("wait", "spire_yard_board0", -38.6, 57.5, 1, 0)
-    spot("wait", "spire_yard_board1", -38.6, 59.6, 1, 0)
+        wbox(M[("petal_y", "petal_p", "fabric_cream", "petal_l", "petal_y", "fabric_cream")[k]], -37.5, 54.3 + (k % 3) * 1.4, ZP + 1.1 + (k // 3) * 0.55,
+             -37.45, 55.3 + (k % 3) * 1.4, ZP + 1.55 + (k // 3) * 0.55)
+    collider("yard_board", -37.5, 53.8, -37.0, 58.8, 0, ZP + 2.4)
+    wbox(M["tealdk"], -37.4, 53.8, ZP + 2.4, -37.0, 58.8, ZP + 3.15)
+    placard("yard", -37.52, 56.3, ZP + 2.77, 1, 0)
+    spot("wait", "spire_yard_board0", -38.6, 55.3, 1, 0)
+    spot("wait", "spire_yard_board1", -38.6, 57.4, 1, 0)
     spot("chat", "spire_yard_chat0", -46.0, 67.0, 1, 0)
     spot("chat", "spire_yard_chat1", -40.0, 52.8, 1, 0)
     for mx, my in ((-52.5, 52.6), (-39.5, 52.6), (-52.5, 67.4), (-39.5, 67.4)):  # string lights on black masts
@@ -189,7 +174,7 @@ def builders_yard(M):
     string_lights(-39.5, 52.6, -52.5, 67.4, ZP + 4.2, M, 9, 0.5)
     for x, y in ((-36.8, 53.0), (-36.8, 71.0), (-57.8, 71.0)):
         town_lamp(f"yard_lamp{x:.0f}_{y:.0f}", x, y, M, True, ZP)
-    bin_t(-38.0, 63.0, M, ZP); bin_t(-53.0, 61.0, M, ZP)
+    bin_t(-38.0, 71.2, M, ZP); bin_t(-53.0, 61.0, M, ZP)  # off the entrance line (y 60..66)
     bike_rack(-38.2, 69.0, math.pi / 2, M, ZP, 4)
     for k in range(2):
         bike(-38.2, 68.4 + k * 1.1, math.pi / 2, M, ZP)
@@ -271,7 +256,7 @@ def spire_station(M):
     spot("stallq", "spire_stn_vend_a", 38.2, 54.1, -1, 0)
     for k, y in enumerate((57.5, 60.0, 63.0, 66.5)):
         spot("wait", f"spire_stn_wait{k}", 49.8, y, 1, 0)
-    spot("chat", "spire_stn_chat0", 40.0, 70.0, 1, 0)
+    spot("chat", "spire_stn_chat0", 38.6, 64.0, 1, 0)
     # taxi rank: a drive-through lane with EVs waiting at the kerb
     wbox(M["asphalt"], 51.6, 51.0, ZL - 0.02, 57.6, 93.0, ZL + 0.01)
     wbox(M["curb"], 51.0, 51.0, ZL - 0.02, 51.6, 93.0, ZP + 0.02)
@@ -280,16 +265,16 @@ def spire_station(M):
     for k, y in enumerate((57.0, 63.5)):
         prop("ev_sedan", f"stn_taxi{k}", 53.2, y, 0.0, ZL)
         collider(f"stn_taxi{k}", 52.2, y - 2.4, 54.2, y + 2.4, 0, 1.6)
-    for k in range(2):                                          # bike share dock on the canopy's south side
-        bike_rack(41.0 + k * 3.4, 53.0, 0.0, M, ZP, 5)
+    for k in range(2):                                          # bike share dock on the canopy's north side
+        bike_rack(42.0 + k * 3.4, 70.6, math.pi, M, ZP, 5)
         for j in range(4):
-            bike(39.9 + k * 3.4 + j * 0.55, 53.0, 0.0, M, ZP, M["car_m"])
+            bike(40.9 + k * 3.4 + j * 0.55, 70.6, math.pi, M, ZP, M["car_m"])
     for x, y in ((36.6, 70.8), (36.6, 57.0)):
         town_lamp(f"stn_lamp{x:.0f}_{y:.0f}", x, y, M, True, ZP)
     # station totem facing the square: the NEAR symbol on a white slab
-    wbox(M["trim"], 44.0, 50.6, ZP, 46.2, 51.2, ZP + 3.4)
-    symbol_mesh("stn_sym", 45.1, 50.55, ZP + 2.4, 1.1, 0.06, M["teal"])
-    collider("stn_totem", 44.0, 50.6, 46.2, 51.2, 0, ZP + 3.4)
+    wbox(M["trim"], 47.4, 50.6, ZP, 49.6, 51.2, ZP + 3.4)      # beside the path from the square, not on it
+    symbol_mesh("stn_sym", 48.5, 50.55, ZP + 2.4, 1.1, 0.06, M["teal"])
+    collider("stn_totem", 47.4, 50.6, 49.6, 51.2, 0, ZP + 3.4)
 
 
 # -------------------------------------------------------------- Harbor Depot ----
@@ -317,13 +302,13 @@ def harbor_depot(M):
         crate(wx0 - 3.0, y + 0.35, 0.0, M, ZP + 0.14, 1 + (k + 1) % 2, "mango" if k % 2 else None)
     for k, (x, y) in enumerate([(38.4, 79.0), (38.4, 86.0), (38.4, 90.0)]):
         spot("crate", f"spire_depot_{k}", x, y, 1, 0)
-    prop("ev_pickup", "depot", 37.6, 75.6, -math.pi / 2, ZP)   # the delivery pickup at the yard gate
-    collider("depot_pickup", 34.8, 74.6, 40.4, 76.6, 0, 1.9)
-    T = tf(44.0, 76.0, 0.0)                                     # dispatcher's desk
+    prop("ev_pickup", "depot", 48.0, 76.2, -math.pi / 2, ZP)   # the delivery pickup, parked clear of the walking lines
+    collider("depot_pickup", 45.2, 75.2, 50.8, 77.2, 0, 1.9)
+    T = tf(42.5, 78.4, 0.0)                                     # dispatcher's desk by the first door
     obox(M["shelf"], T, -0.7, -0.4, ZP, 0.7, 0.4, ZP + 0.85)
     obox(M["trim"], T, -0.8, -0.5, ZP + 0.85, 0.8, 0.5, ZP + 0.9)
-    collider("depot_desk", 43.2, 75.5, 44.8, 76.5, 0, 0.9)
-    spot("wait", "spire_depot_desk", 44.0, 77.2, 0, -1)
+    collider("depot_desk", 41.7, 77.9, 43.3, 78.9, 0, 0.9)
+    spot("wait", "spire_depot_desk", 42.5, 77.0, 0, 1)
     for k in range(3):
         cone(36.8 + k * 0.6, 92.4, M, ZP)
     for x, y in ((36.6, 74.0), (36.6, 92.0)):

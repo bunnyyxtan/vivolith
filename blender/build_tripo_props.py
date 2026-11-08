@@ -23,6 +23,8 @@ PROPS = {
     "vending_mint": ("library/vending_mint.fbx", 1.85, "height", -math.pi / 2, True),
     "kiosk_drinks": ("library/kiosk_drinks.fbx", 3.4, "width", -math.pi / 2, True),  # Spire Square drinks kiosk
     "shop_corner": ("out/shop/tripo-out/shop-v31-texture-551f6d27/model.glb", 7.2, "height", -math.pi / 2, True),
+    "food_truck": ("library/food_truck.glb", 5.4, "width", 0.0, True),  # Studio H3.1 text-to-3D; hatch already faces -Y
+    "coffee_truck": ("library/coffee_truck.glb", 5.0, "width", 0.0, True),  # Studio H3.1, the yard's second truck
 }
 MAX_TRIS = 40000  # v3.1 meshes arrive dense (the shop is ~1.4M triangles)
 
