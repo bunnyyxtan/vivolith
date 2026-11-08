@@ -11699,7 +11699,7 @@ function cheapestMango(state) {
 function bidFor(state, id, good) {
 	const m = state.merchants[id];
 	const short = m.target[good] - m.stock[good];
-	if (m.status !== "open" || short <= 0) return null;
+	if (short <= 0) return null;
 	switch (m.style) {
 		case "loyal": return m.sells.includes(good) && m.stock[good] < m.target[good] * .5 ? {
 			price: Math.round(m.baseCost[good] * 1.8),
@@ -11802,8 +11802,13 @@ const HAGGLE_CEILING = 1.5;
 const GUEST_FUNDING = "0.01";
 /** One on-chain market day settles every 10 real minutes (fast-forward previews run in the client sim). */
 const MARKET_DAY_MS = 6e5;
-/** Coins the Market Guild keeps in an open stall's till (covers one tutorial delivery: 3 mangoes at 6 c). */
+/** The Market Guild fund: fixed size, seeded once; it only lends what it holds and refills from dues. */
+const GUILD_FUND = 200;
+/** A till under this borrows up to it (covers one tutorial delivery: 3 mangoes at 6 c). */
 const GUILD_FLOAT = 18;
+/** A till over this pays dues (at most GUILD_DUES a market day) while the fund is below GUILD_FUND. */
+const GUILD_HEALTHY = 80;
+const GUILD_DUES = 10;
 const LIMITS = {
 	guest: {
 		max: 5,
@@ -12244,6 +12249,57 @@ async function chainEconomy(provider, cfg) {
 	return st;
 }
 const orderKey = (o) => `${o.merchant}|${o.side}|${o.token_id}`;
+const coinMove = (from, to, amount, reason) => [actions.functionCall("operator_burn", {
+	account_id: from,
+	token_id: "coin",
+	amount: String(amount),
+	reason
+}, TICK_GAS, 0n), actions.functionCall("operator_mint", {
+	account_id: to,
+	token_id: "coin",
+	amount: String(amount),
+	reason
+}, TICK_GAS, 0n)];
+/** The Guild's calls for this turn (loans to low tills, dues from healthy ones), each at most once per market day
+*  per stall. Adjusts `st` cash so this turn's bids already reflect them. The first turn registers and seeds it. */
+async function guildTurn(cfg, provider, st, day, log) {
+	const guild = `guild.${cfg.relayerId}`;
+	const calls = [];
+	let fund;
+	if (!await view(provider, cfg.contractId, "is_registered", { account_id: guild })) {
+		calls.push(actions.functionCall("register_player", { account_id: guild }, TICK_GAS, 0n));
+		calls.push(actions.functionCall("operator_mint", {
+			account_id: guild,
+			token_id: "coin",
+			amount: String(175),
+			reason: "market guild fund"
+		}, TICK_GAS, 0n));
+		fund = GUILD_FUND;
+		log.push(`market guild fund opened with ${GUILD_FUND} c`);
+	} else {
+		const rows = await view(provider, cfg.contractId, "get_balances", { account_id: guild });
+		fund = Number(rows.find(([t]) => t === "coin")?.[1] ?? 0);
+	}
+	for (const id of MERCHANTS) {
+		const m = st.merchants[id], acct = `${id}.${cfg.relayerId}`;
+		if (m.cash < GUILD_FLOAT && fund > 0) {
+			const amount = Math.min(GUILD_FLOAT - m.cash, fund);
+			if (!await hit(cfg, `guild:${id}:${day}`, 1, Math.ceil(600))) continue;
+			calls.push(...coinMove(guild, acct, amount, "market guild loan"));
+			fund -= amount;
+			m.cash += amount;
+			log.push(`market guild lent ${id} ${amount} c (fund ${fund} c)`);
+		} else if (m.cash > GUILD_HEALTHY && fund < GUILD_FUND) {
+			const amount = Math.min(m.cash - GUILD_HEALTHY, GUILD_FUND - fund, GUILD_DUES);
+			if (!await hit(cfg, `guild:${id}:${day}`, 1, Math.ceil(600))) continue;
+			calls.push(...coinMove(acct, guild, amount, "market guild dues"));
+			fund += amount;
+			m.cash -= amount;
+			log.push(`${id} paid ${amount} c guild dues (fund ${fund} c)`);
+		}
+	}
+	return calls;
+}
 /** One merchant turn on NEAR: each merchant reprices its own asks and bids from pricing.ts (signed with its own
 *  key), merchants fill each other's bids, and the operator records street shoppers, Tomas's harbor contract and
 *  Arin's kitchen. Idempotent enough to call often: throttled to one turn per minute across all players. */
@@ -12261,19 +12317,18 @@ async function tick(cfg, env) {
 	const log = [];
 	const txs = [];
 	const day = Math.floor(Date.now() / MARKET_DAY_MS);
-	const floats = [];
-	for (const id of MERCHANTS) {
-		const m = st.merchants[id];
-		if (m.status !== "open" || m.cash >= GUILD_FLOAT) continue;
-		if (!await hit(cfg, `float:${id}:${day}`, 1, Math.ceil(600))) continue;
-		floats.push(actions.functionCall("operator_mint", {
-			account_id: `${id}.${cfg.relayerId}`,
-			token_id: "coin",
-			amount: String(GUILD_FLOAT - m.cash),
-			reason: "market guild float"
-		}, TICK_GAS, 0n));
-		log.push(`market guild topped ${id}'s till up to ${GUILD_FLOAT} c`);
-		m.cash = GUILD_FLOAT;
+	const guildCalls = await guildTurn(cfg, provider, st, day, log);
+	if (guildCalls.length) {
+		const r = outcome(await relayer.signAndSendTransaction({
+			receiverId: cfg.contractId,
+			actions: guildCalls,
+			throwOnFailure: false
+		}));
+		txs.push(r.txHash);
+		if (!r.ok) {
+			log.push(`guild FAILED: ${r.error}`);
+			st.merchants = (await chainEconomy(provider, cfg)).merchants;
+		}
 	}
 	const repriced = await Promise.all(MERCHANTS.map(async (id) => {
 		const m = st.merchants[id];
@@ -12355,7 +12410,6 @@ async function tick(cfg, env) {
 		}, TICK_GAS, 0n));
 		log.push(`harbor delivered ${qty} mangoes to tomas`);
 	}
-	op.push(...floats);
 	const arin = st.merchants.arin;
 	const batches = Math.min(arin.stock.mango, Math.max(0, Math.ceil((8 - arin.stock.lassi) / 4)));
 	if (batches > 0) {

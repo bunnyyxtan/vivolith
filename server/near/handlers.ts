@@ -41,8 +41,15 @@ const HAGGLE_CEILING = 1.5; // merchant pays at most 150% of its bid
 const GUEST_FUNDING = "0.01"; // account + key storage; guests never pay gas (meta-transactions)
 /** One on-chain market day settles every 10 real minutes (fast-forward previews run in the client sim). */
 export const MARKET_DAY_MS = 10 * 60 * 1000;
-/** Coins the Market Guild keeps in an open stall's till (covers one tutorial delivery: 3 mangoes at 6 c). */
+/** The Market Guild fund: fixed size, seeded once; it only lends what it holds and refills from dues. */
+const GUILD_FUND = 200;
+/** A till under this borrows up to it (covers one tutorial delivery: 3 mangoes at 6 c). */
 const GUILD_FLOAT = 18;
+/** A till over this pays dues (at most GUILD_DUES a market day) while the fund is below GUILD_FUND. */
+const GUILD_HEALTHY = 80;
+const GUILD_DUES = 10;
+/** Must match STARTER_COIN in contracts/market/src/lib.rs (register_player mints it). */
+const STARTER_COIN = 25;
 
 const LIMITS = {
   guest: { max: 5, windowSec: 3600 }, // per IP
@@ -436,6 +443,47 @@ async function chainEconomy(provider: JsonRpcProvider, cfg: Config): Promise<Eco
 
 const orderKey = (o: { merchant: string; token_id: string; side: string }): string => `${o.merchant}|${o.side}|${o.token_id}`;
 
+type Call = ReturnType<typeof actions.functionCall>;
+const coinMove = (from: string, to: string, amount: number, reason: string): Call[] => [
+  actions.functionCall("operator_burn", { account_id: from, token_id: "coin", amount: String(amount), reason }, TICK_GAS, 0n),
+  actions.functionCall("operator_mint", { account_id: to, token_id: "coin", amount: String(amount), reason }, TICK_GAS, 0n),
+];
+
+/** The Guild's calls for this turn (loans to low tills, dues from healthy ones), each at most once per market day
+ *  per stall. Adjusts `st` cash so this turn's bids already reflect them. The first turn registers and seeds it. */
+async function guildTurn(cfg: Config, provider: JsonRpcProvider, st: EconomyState, day: number, log: string[]): Promise<Call[]> {
+  const guild = `guild.${cfg.relayerId}`;
+  const calls: Call[] = [];
+  let fund: number;
+  if (!(await view<boolean>(provider, cfg.contractId, "is_registered", { account_id: guild }))) {
+    // register_player mints the starter purse; the seed tops the fund up to its fixed size, once, ever
+    calls.push(actions.functionCall("register_player", { account_id: guild }, TICK_GAS, 0n));
+    calls.push(actions.functionCall("operator_mint", { account_id: guild, token_id: "coin", amount: String(GUILD_FUND - STARTER_COIN), reason: "market guild fund" }, TICK_GAS, 0n));
+    fund = GUILD_FUND;
+    log.push(`market guild fund opened with ${GUILD_FUND} c`);
+  } else {
+    const rows = await view<[string, string][]>(provider, cfg.contractId, "get_balances", { account_id: guild });
+    fund = Number(rows.find(([t]) => t === "coin")?.[1] ?? 0);
+  }
+  for (const id of MERCHANTS) {
+    const m = st.merchants[id], acct = `${id}.${cfg.relayerId}`;
+    if (m.cash < GUILD_FLOAT && fund > 0) {
+      const amount = Math.min(GUILD_FLOAT - m.cash, fund);
+      if (!(await hit(cfg, `guild:${id}:${day}`, 1, Math.ceil(MARKET_DAY_MS / 1000)))) continue;
+      calls.push(...coinMove(guild, acct, amount, "market guild loan"));
+      fund -= amount; m.cash += amount;
+      log.push(`market guild lent ${id} ${amount} c (fund ${fund} c)`);
+    } else if (m.cash > GUILD_HEALTHY && fund < GUILD_FUND) {
+      const amount = Math.min(m.cash - GUILD_HEALTHY, GUILD_FUND - fund, GUILD_DUES);
+      if (!(await hit(cfg, `guild:${id}:${day}`, 1, Math.ceil(MARKET_DAY_MS / 1000)))) continue;
+      calls.push(...coinMove(acct, guild, amount, "market guild dues"));
+      fund += amount; m.cash -= amount;
+      log.push(`${id} paid ${amount} c guild dues (fund ${fund} c)`);
+    }
+  }
+  return calls;
+}
+
 /** One merchant turn on NEAR: each merchant reprices its own asks and bids from pricing.ts (signed with its own
  *  key), merchants fill each other's bids, and the operator records street shoppers, Tomas's harbor contract and
  *  Arin's kitchen. Idempotent enough to call often: throttled to one turn per minute across all players. */
@@ -450,18 +498,16 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
   const log: string[] = [];
   const txs: string[] = [];
 
-  // 0. The Market Guild keeps a small float in every open stall's till, once per market day, so a stall can always
-  // pay for the first delivery a newcomer brings (the tutorial's 3 mangoes at 6 c). Minted with a public reason in
-  // step 3; counted now so this turn's bids already use it.
+  // 0. The Market Guild: a fixed fund (seeded once) that lends a struggling stall enough to pay for a delivery and
+  // collects dues from healthy stalls until it is full again. Every move is a burn + mint pair with a public reason,
+  // so coin only moves between the fund and the stalls: the Guild never creates money after its seed.
   const day = Math.floor(Date.now() / MARKET_DAY_MS);
-  const floats: ReturnType<typeof actions.functionCall>[] = [];
-  for (const id of MERCHANTS) {
-    const m = st.merchants[id];
-    if (m.status !== "open" || m.cash >= GUILD_FLOAT) continue;
-    if (!(await hit(cfg, `float:${id}:${day}`, 1, Math.ceil(MARKET_DAY_MS / 1000)))) continue;
-    floats.push(actions.functionCall("operator_mint", { account_id: `${id}.${cfg.relayerId}`, token_id: "coin", amount: String(GUILD_FLOAT - m.cash), reason: "market guild float" }, TICK_GAS, 0n));
-    log.push(`market guild topped ${id}'s till up to ${GUILD_FLOAT} c`);
-    m.cash = GUILD_FLOAT;
+  const guildCalls = await guildTurn(cfg, provider, st, day, log);
+  if (guildCalls.length) {
+    // its own transaction, first: bids below use the new tills, and a refused Guild move touches nothing else
+    const r = outcome(await relayer.signAndSendTransaction({ receiverId: cfg.contractId, actions: guildCalls, throwOnFailure: false }));
+    txs.push(r.txHash);
+    if (!r.ok) { log.push(`guild FAILED: ${r.error}`); st.merchants = (await chainEconomy(provider, cfg)).merchants; }
   }
 
   // 1. Every merchant reprices (only orders that changed are sent).
@@ -522,7 +568,6 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
     op.push(actions.functionCall("operator_mint", { account_id: `tomas.${cfg.relayerId}`, token_id: "mango", amount: String(qty), reason: "harbor standing contract" }, TICK_GAS, 0n));
     log.push(`harbor delivered ${qty} mangoes to tomas`);
   }
-  op.push(...floats);
   const arin = st.merchants.arin;
   const batches = Math.min(arin.stock.mango, Math.max(0, Math.ceil((8 - arin.stock.lassi) / 4)));
   if (batches > 0) {
