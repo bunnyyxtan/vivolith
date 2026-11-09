@@ -11790,27 +11790,6 @@ const stockValue = (m) => m.sells.reduce((v, g) => v + m.stock[g] * m.baseCost[g
 const shelfGap = (m) => Math.max(0, Math.ceil((m.rent * REOPEN_SHARE - stockValue(m)) / Math.max(1, m.baseCost.mango)));
 /** Mangoes a stall that closes right now must be brought before it reopens (the relayer passes it to charge_rent). */
 const closingNeed = (state, id) => Math.max(1, shelfGap(state.merchants[id]));
-/** Each stall's share price, exact: `price` coins buy a pack of `per` shares (shares move in whole packs, so no coin
-*  is rounded). These are the v1 prices per share after the 15-for-1 split (5 c per 15 shares = 1 c per 3), so a
-*  share is worth what it was; the relayer posts the same packs on chain for sale and for buyback. */
-const SHARE_PACK = {
-	pema: {
-		price: 1,
-		per: 3
-	},
-	tomas: {
-		price: 3,
-		per: 5
-	},
-	mira: {
-		price: 7,
-		per: 15
-	},
-	arin: {
-		price: 2,
-		per: 5
-	}
-};
 // server/near/handlers.ts
 const MAX_BODY = 4096;
 const MAX_GAS = teraToGas("100");
@@ -11831,13 +11810,13 @@ const HAGGLE_CEILING = 1.5;
 const GUEST_FUNDING = "0.01";
 /** One on-chain market day settles every 10 real minutes (fast-forward previews run in the client sim). */
 const MARKET_DAY_MS = 6e5;
-/** The Market Guild fund: fixed size, seeded once; it only lends what it holds and refills from dues. */
-const GUILD_FUND = 200;
 /** A till under this borrows up to it (covers one tutorial delivery: 3 mangoes at 6 c). */
 const GUILD_FLOAT = 18;
-/** A till over this pays dues (at most GUILD_DUES a market day) while the fund is below GUILD_FUND. */
+/** A till over this repays its loan, then pays dues while the fund is below GUILD_FUND (at most GUILD_DUES a day). */
 const GUILD_HEALTHY = 80;
 const GUILD_DUES = 10;
+/** Tomas pays the harbor this per mango on his standing contract (the offline sim charges the same). */
+const HARBOR_COST = 2;
 const LIMITS = {
 	guest: {
 		max: 5,
@@ -11857,6 +11836,10 @@ const LIMITS = {
 	},
 	deal: {
 		max: 20,
+		windowSec: 60
+	},
+	claim: {
+		max: 6,
 		windowSec: 60
 	},
 	social: {
@@ -12037,6 +12020,37 @@ async function guest(cfg, req) {
 		status: "onchain",
 		accountId,
 		txHashes: txs
+	});
+}
+/** Re-registers an account this relayer created (a guest `g...` or signed-in `s...` sub-account that exists on chain)
+*  with the market contract, e.g. after the market's ledger was reset. Idempotent; never creates accounts. */
+async function register(cfg, req) {
+	if (!await hit(cfg, `guest:${clientIp(req)}`, LIMITS.guest.max, LIMITS.guest.windowSec)) throw new HttpError(429, "too many new players from this address, try later");
+	const body = await readJson(req);
+	const accountId = String(body.accountId ?? "");
+	const suffix = `.${cfg.relayerId}`;
+	if (!accountId.endsWith(suffix) || !/^[gs][0-9a-f]{16}$/.test(accountId.slice(0, -suffix.length))) throw new HttpError(400, "not a game account");
+	const { provider, relayer } = account(cfg);
+	if (!await provider.viewAccount({
+		accountId,
+		finality: "final"
+	}).then(() => true, () => false)) throw new HttpError(404, "no such account");
+	if (await view(provider, cfg.contractId, "is_registered", { account_id: accountId })) return json(200, {
+		status: "onchain",
+		accountId,
+		txHashes: []
+	});
+	const r = outcome(await relayer.callFunctionRaw({
+		contractId: cfg.contractId,
+		methodName: "register_player",
+		args: { account_id: accountId },
+		gas: MAX_GAS
+	}));
+	return json(r.ok ? 200 : 502, {
+		status: r.ok ? "onchain" : "failed",
+		accountId,
+		txHashes: [r.txHash],
+		message: r.error
 	});
 }
 /** Throws unless the delegate only calls player methods on our contract with zero deposit and bounded gas. */
@@ -12296,11 +12310,6 @@ async function social(cfg, req, env) {
 		txHashes: txs
 	});
 }
-/** Must match IDLE_MS in contracts/market/src/lib.rs: a holder this long without a trade may be bought out. */
-const IDLE_MS = 864e5;
-/** A stall with fewer unsold shares than this (or this many holders, the contract allows 64) redeems idle holders. */
-const IDLE_REDEEM_BELOW = 60;
-const IDLE_REDEEM_HOLDERS = 56;
 /** Game hours of street trade one tick represents (ticks run at most once a minute, globally). */
 const TICK_HOURS = 2;
 const TICK_GAS = teraToGas("30");
@@ -12313,6 +12322,10 @@ async function chainEconomy(provider, cfg) {
 		const id = s.merchant;
 		if (!st.merchants[id]) continue;
 		st.flags[`holders.${id}`] = s.holders;
+		st.flags[`supply.${id}`] = Number(s.supply);
+		st.flags[`debt.${id}`] = Number(s.debt);
+		st.flags[`lastSettled.${id}`] = s.last_settled ?? -1;
+		st.flags[`lastRent.${id}`] = s.last_rent ?? -1;
 		if (!s.open) {
 			st.merchants[id].status = "closed";
 			st.flags[`reopenNeed.${id}`] = Math.max(0, Number(s.need) - Number(s.delivered));
@@ -12328,60 +12341,40 @@ async function chainEconomy(provider, cfg) {
 			lassi: b.lassi ?? 0
 		};
 		m.cash = b.coin ?? 0;
-		st.flags[`treasury.${id}`] = b[`share:${id}`] ?? 0;
 	}));
 	return st;
 }
 const orderKey = (o) => `${o.merchant}|${o.side}|${o.token_id}`;
-const coinMove = (from, to, amount, reason) => [actions.functionCall("operator_burn", {
-	account_id: from,
-	token_id: "coin",
-	amount: String(amount),
-	reason
-}, TICK_GAS, 0n), actions.functionCall("operator_mint", {
-	account_id: to,
-	token_id: "coin",
-	amount: String(amount),
-	reason
-}, TICK_GAS, 0n)];
-/** The Guild's calls for this turn (loans to low tills, dues from healthy ones), each at most once per market day
-*  per stall. Adjusts `st` cash so this turn's bids already reflect them. The first turn registers and seeds it. */
+/** The Guild's calls for this turn, each at most once per market day per stall: a loan to a low till (the contract
+*  lends only what the fund holds and records the debt), or collection from a healthy till (loan repayment first, then
+*  dues while the fund is below its size). Adjusts `st` cash so this turn's bids already reflect them. */
 async function guildTurn(cfg, provider, st, day, log) {
-	const guild = `guild.${cfg.relayerId}`;
+	const guild = await view(provider, cfg.contractId, "get_guild", {});
+	const rows = await view(provider, cfg.contractId, "get_balances", { account_id: guild });
+	let fund = Number(rows.find(([t]) => t === "coin")?.[1] ?? 0);
 	const calls = [];
-	let fund;
-	if (!await view(provider, cfg.contractId, "is_registered", { account_id: guild })) {
-		calls.push(actions.functionCall("register_player", { account_id: guild }, TICK_GAS, 0n));
-		calls.push(actions.functionCall("operator_mint", {
-			account_id: guild,
-			token_id: "coin",
-			amount: String(175),
-			reason: "market guild fund"
-		}, TICK_GAS, 0n));
-		fund = GUILD_FUND;
-		log.push(`market guild fund opened with ${GUILD_FUND} c`);
-	} else {
-		const rows = await view(provider, cfg.contractId, "get_balances", { account_id: guild });
-		fund = Number(rows.find(([t]) => t === "coin")?.[1] ?? 0);
-	}
 	for (const id of MERCHANTS) {
-		const m = st.merchants[id], acct = `${id}.${cfg.relayerId}`;
+		const m = st.merchants[id], debt = Number(st.flags[`debt.${id}`] ?? 0);
 		const rescue = m.status === "open" ? 0 : Number(st.flags[`reopenNeed.${id}`] ?? 0) * (bidFor(st, id, "mango")?.price ?? 0);
 		const float = Math.max(GUILD_FLOAT, rescue);
 		if (m.cash < float && fund > 0) {
 			const amount = Math.min(float - m.cash, fund);
-			if (!await hit(cfg, `guild:${id}:${day}`, 1, Math.ceil(600))) continue;
-			calls.push(...coinMove(guild, acct, amount, "market guild loan"));
+			calls.push(actions.functionCall("guild_lend", {
+				merchant: id,
+				amount: String(amount)
+			}, TICK_GAS, 0n));
 			fund -= amount;
 			m.cash += amount;
-			log.push(`market guild lent ${id} ${amount} c (fund ${fund} c)`);
-		} else if (m.cash > GUILD_HEALTHY && fund < GUILD_FUND) {
-			const amount = Math.min(m.cash - GUILD_HEALTHY, GUILD_FUND - fund, GUILD_DUES);
+			log.push(`market guild lent ${id} ${amount} c (fund ${fund} c, ${id} owes ${debt + amount} c)`);
+		} else if (m.cash > GUILD_HEALTHY && (debt > 0 || fund < 200)) {
+			const amount = Math.min(m.cash - GUILD_HEALTHY, debt + GUILD_DUES);
 			if (!await hit(cfg, `guild:${id}:${day}`, 1, Math.ceil(600))) continue;
-			calls.push(...coinMove(acct, guild, amount, "market guild dues"));
-			fund += amount;
-			m.cash -= amount;
-			log.push(`${id} paid ${amount} c guild dues (fund ${fund} c)`);
+			calls.push(actions.functionCall("guild_collect", {
+				merchant: id,
+				amount: String(amount),
+				fill_to: String(200)
+			}, TICK_GAS, 0n));
+			log.push(`${id} pays the market guild up to ${amount} c (its ${debt} c debt first)`);
 		}
 	}
 	return calls;
@@ -12399,12 +12392,11 @@ async function tick(cfg, env) {
 	const { provider, relayer } = account(cfg);
 	const st = await chainEconomy(provider, cfg);
 	const posted = new Map((await view(provider, cfg.contractId, "get_offers", {})).map((o) => [orderKey(o), o]));
-	const postedShares = new Map((await view(provider, cfg.contractId, "get_share_offers", {})).map((o) => [`${o.merchant}|${o.side}`, o]));
 	const signerOf = (id) => new Account(`${id}.${cfg.relayerId}`, provider, new KeyPairSigner(merchantKey(id, secret)));
 	const log = [];
 	const txs = [];
 	const day = Math.floor(Date.now() / MARKET_DAY_MS);
-	if (await hit(cfg, `settled:${day - 1}`, 1, Math.ceil(600) * 2)) {
+	if (MERCHANTS.some((id) => Number(st.flags[`lastSettled.${id}`]) < day - 1) && await hit(cfg, `settled:${day - 1}`, 1, Math.ceil(600) * 2)) {
 		const r = outcome(await relayer.signAndSendTransaction({
 			receiverId: cfg.contractId,
 			actions: MERCHANTS.map((merchant) => actions.functionCall("settle_day", {
@@ -12419,7 +12411,7 @@ async function tick(cfg, env) {
 	const rentCalls = [];
 	for (const id of MERCHANTS) {
 		const m = st.merchants[id];
-		if (m.status !== "open" || day % m.rentEveryDays !== 0) continue;
+		if (m.status !== "open" || day % m.rentEveryDays !== 0 || Number(st.flags[`lastRent.${id}`]) >= day) continue;
 		if (!await hit(cfg, `rent:${id}:${day}`, 1, Math.ceil(600) * 2)) continue;
 		const need = closingNeed(st, id);
 		rentCalls.push(actions.functionCall("charge_rent", {
@@ -12482,29 +12474,7 @@ async function tick(cfg, env) {
 				price: String(price)
 			}, TICK_GAS, 0n));
 		};
-		const wantShares = (side, qty) => {
-			const { price, per } = SHARE_PACK[id], cur = postedShares.get(`${id}|${side}`), packs = Math.floor(qty / per) * per;
-			if (packs <= 0) {
-				if (cur) calls.push(actions.functionCall(side === "ask" ? "list" : "bid", {
-					token_id: `share:${id}`,
-					qty: "0",
-					price: "1"
-				}, TICK_GAS, 0n));
-				return;
-			}
-			if (cur && Number(cur.qty) === packs && Number(cur.price) === price && Number(cur.per) === per) return;
-			calls.push(actions.functionCall(side === "ask" ? "list" : "bid", {
-				token_id: `share:${id}`,
-				qty: String(packs),
-				price: String(price),
-				per: String(per)
-			}, TICK_GAS, 0n));
-		};
 		for (const good of m.sells) want("ask", good, m.status === "open" ? m.stock[good] : 0, quote(st, id, good, false).price);
-		const treasury = Number(st.flags[`treasury.${id}`] ?? 0);
-		wantShares("ask", treasury);
-		const spare = Math.max(0, m.cash - m.rent);
-		wantShares("bid", Math.min(300 - treasury, Math.floor(spare / SHARE_PACK[id].price) * SHARE_PACK[id].per));
 		for (const good of ["mango", "lemon"]) {
 			const b = bidFor(st, id, good);
 			want("bid", good, b ? Math.min(b.qty, Math.floor(m.cash / Math.max(1, b.price))) : 0, b?.price ?? 1);
@@ -12554,15 +12524,22 @@ async function tick(cfg, env) {
 		}
 	}
 	const tomas = st.merchants.tomas;
-	if (tomas.stock.mango < tomas.target.mango && await hit(cfg, `harbor:${day}`, 1, Math.ceil(600))) {
-		const qty = Math.round(tomas.target.mango * 1.4) - tomas.stock.mango;
+	const nearlyOut = tomas.stock.mango < 6;
+	const harborQty = tomas.status === "open" && (nearlyOut || tomas.stock.mango < tomas.target.mango) && (nearlyOut || await hit(cfg, `harbor:${day}`, 1, Math.ceil(600))) ? Math.min(Math.round(tomas.target.mango * 1.4) - tomas.stock.mango, Math.floor(tomas.cash / HARBOR_COST)) : 0;
+	if (harborQty > 0) {
+		op.push(actions.functionCall("operator_burn", {
+			account_id: `tomas.${cfg.relayerId}`,
+			token_id: "coin",
+			amount: String(harborQty * HARBOR_COST),
+			reason: "harbor freight"
+		}, TICK_GAS, 0n));
 		op.push(actions.functionCall("operator_mint", {
 			account_id: `tomas.${cfg.relayerId}`,
 			token_id: "mango",
-			amount: String(qty),
+			amount: String(harborQty),
 			reason: "harbor standing contract"
 		}, TICK_GAS, 0n));
-		log.push(`harbor delivered ${qty} mangoes to tomas`);
+		log.push(`harbor delivered ${harborQty} mangoes to tomas for ${harborQty * HARBOR_COST} c`);
 	}
 	const arin = st.merchants.arin;
 	const batches = Math.min(arin.stock.mango, Math.max(0, Math.ceil((8 - arin.stock.lassi) / 4)));
@@ -12590,29 +12567,35 @@ async function tick(cfg, env) {
 		txs.push(r.txHash);
 		if (!r.ok) log.push(`operator FAILED: ${r.error}`);
 	}
-	const redeem = [];
-	for (const id of MERCHANTS) {
-		const treasury = Number(st.flags[`treasury.${id}`] ?? 0), holders = Number(st.flags[`holders.${id}`] ?? 0);
-		if (treasury >= IDLE_REDEEM_BELOW && holders < IDLE_REDEEM_HOLDERS) continue;
-		const idle = (await view(provider, cfg.contractId, "get_holders", { merchant: id })).filter(([a, , last]) => !MERCHANTS.some((x) => a === `${x}.${cfg.relayerId}`) && Date.now() - Number(last) > IDLE_MS).slice(0, 2);
-		for (const [a] of idle) redeem.push(actions.functionCall("redeem_idle", {
-			merchant: id,
-			holder: a
-		}, TICK_GAS, 0n));
-	}
-	if (redeem.length) {
-		const r = outcome(await relayer.signAndSendTransaction({
-			receiverId: cfg.contractId,
-			actions: redeem,
-			throwOnFailure: false
-		}));
-		txs.push(r.txHash);
-		log.push(`bought back shares from ${redeem.length} idle holder(s)${r.ok ? "" : ` FAILED: ${r.error}`}`);
-	}
 	return json(200, {
 		status: "onchain",
 		txHashes: txs,
 		log
+	});
+}
+/** Pays a player the whole coins of dividends they are owed (the contract can only ever pay what is owed). Players'
+*  own trades claim too; this lets dividends land for someone who is only watching. */
+async function claim(cfg, req) {
+	const b = await readJson(req);
+	const player = String(b.account ?? "");
+	if (!/^[a-z0-9._-]{2,64}$/.test(player)) throw new HttpError(400, "bad account id");
+	if (!await hit(cfg, `claim:${player}`, LIMITS.claim.max, LIMITS.claim.windowSec)) throw new HttpError(429, "slow down");
+	const { provider, relayer } = account(cfg);
+	const coins = (await view(provider, cfg.contractId, "get_pending", { account_id: player })).reduce((n, p) => n + Number(p.coins), 0);
+	if (coins === 0) return json(200, {
+		status: "nothing",
+		coins: 0
+	});
+	const r = outcome(await relayer.signAndSendTransaction({
+		receiverId: cfg.contractId,
+		actions: [actions.functionCall("claim", { account_id: player }, TICK_GAS, 0n)],
+		throwOnFailure: false
+	}));
+	return json(r.ok ? 200 : 502, {
+		status: r.ok ? "onchain" : "failed",
+		coins,
+		txHash: r.txHash,
+		message: r.error
 	});
 }
 async function settle(cfg) {
@@ -12658,6 +12641,8 @@ async function handle(route, req, env) {
 		if (route === "deal") return await deal(cfg, req, env);
 		if (route === "tick") return await tick(cfg, env);
 		if (route === "social") return await social(cfg, req, env);
+		if (route === "claim") return await claim(cfg, req);
+		if (route === "register") return await register(cfg, req);
 		return json(404, {
 			status: "error",
 			message: "unknown route"
