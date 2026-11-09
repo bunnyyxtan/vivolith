@@ -1,7 +1,7 @@
 // Run: node src/economy/economy.check.ts   (asserts the Mango Crisis economics hold)
 import assert from "node:assert/strict";
 import { initialEconomy } from "./state.ts";
-import { advance, challengeStandingContract, invest, payReleaseFee, pemaBuysFromTomas, recordRestock, reopenGap, sellShares, shareSupply, teahouseForwardBuy, tryReopen } from "./sim.ts";
+import { accrueSale, advance, challengeStandingContract, invest, payReleaseFee, pemaBuysFromTomas, recordRestock, reopenGap, sellShares, shareSupply, teahouseForwardBuy, tryReopen } from "./sim.ts";
 import { bidFor, quote } from "./pricing.ts";
 
 // 0. A closed stall still bids for stock, and reopens the moment deliveries cover the gap (not before).
@@ -92,20 +92,23 @@ assert.equal(inv.player.coins, 500 - 25, "5 c a pack of 15");
 assert.equal(inv.merchants.pema.cash, till0 + 5, "1 c a pack is working capital");
 assert.equal(inv.flags["reserve.pema"], 20, "4 c a pack is held in reserve");
 assert.equal(invest(inv, "pema", 10).ok, false, "whole packs only");
-// dividends: 25% of the stall, 60 c revenue a day -> 30 declared -> 7.5 c: 7 now, the half carried, 15 over two days
+// dividends accrue at each sale: 25% of the stall, a 60 c sale -> 30 declared -> 7.5 c: 7 now, the half carried
 inv.merchants.pema.cash = 1000;
-for (const day of [1, 2]) {
-  inv.flags["rev.pema"] = 60;
+for (const sale of [1, 2]) {
   const coins = inv.player.coins;
-  inv.minute = day * 24 * 60 - 30; // 23:30, shops shut: only the midnight settlement runs
-  advance(inv, 30);
-  assert.equal(inv.player.coins - coins, day === 1 ? 7 : 8, `day ${day}: exact pro rata with the fraction carried`);
+  accrueSale(inv, "pema", 60);
+  assert.equal(inv.player.coins - coins, sale === 1 ? 7 : 8, `sale ${sale}: exact pro rata with the fraction carried`);
 }
 // odd revenue: the half coin of the declaration carries too
-inv.flags["rev.pema"] = 3;
-inv.minute = 3 * 24 * 60 - 30;
-advance(inv, 30);
+accrueSale(inv, "pema", 3);
 assert.equal(inv.flags["revRem.pema"], 5_000, "1.5 c declared: 1 now, half carried in basis points");
+// sniping: shares bought after a sale earn nothing from it
+const snipe = initialEconomy();
+snipe.player.coins = 500; snipe.merchants.pema.cash = 1000;
+accrueSale(snipe, "pema", 60);
+const c1 = snipe.player.coins;
+assert.ok(invest(snipe, "pema", 150).ok);
+assert.equal(snipe.player.coins, c1 - 50, "no dividend from the sale before the shares were bought");
 // selling back pays exactly the backing, whatever the till holds
 inv.merchants.pema.cash = 0;
 const c0 = inv.player.coins;

@@ -542,7 +542,7 @@ export async function createPlay(game: Game): Promise<Play> {
     const max = maxQty(id, "invest"), canSell = sharesToSell(id), supply = shareSupply(state, id);
     const pct = (k: number, of = supply): string => `${((k / of) * 100).toFixed(1).replace(/\.0$/, "")}%`;
     const packs = (n: number): string => `${n} ${n === 1 ? "share" : "shares"}`;
-    hud.panel.append(el("div", "tp-text", `Every evening half of ${m.shop}'s sales is shared out over all ${supply} shares. A pack of ${per} costs ${price} c: ${backing} c is held in the stall's reserve, so you can always sell the pack back for ${backing} c, and ${price - backing} c goes into the till.`));
+    hud.panel.append(el("div", "tp-text", `Half of every sale ${m.shop} makes is shared out, at that moment, over all ${supply} shares: you earn only from sales made while you hold. A pack of ${per} costs ${price} c: ${backing} c is held in the stall's reserve, so you can always sell the pack back for ${backing} c, and ${price - backing} c goes into the till.`));
     const facts = el("div", "tp-facts");
     const fact = (label: string, value: string): void => { const d = el("div"); d.append(el("span", "", label), el("b", "", value)); facts.append(d); };
     fact("Price", `${price} c per ${per}`);
@@ -572,7 +572,7 @@ export async function createPlay(game: Game): Promise<Play> {
         mine.style.width = pct(own);
         fill.style.width = pct(n);
         const next = Math.max(supply, own + n); // past the unsold float, new shares are issued
-        line.textContent = `You'd own ${own + n} of ${next} shares: ${pct(own + n, next)} of its daily payout.`;
+        line.textContent = `You'd own ${own + n} of ${next} shares: ${pct(own + n, next)} of every sale's payout.`;
         label.textContent = `Buy ${packs(n)} for ${shareCost(id, n)} c`;
       };
       const pick = (n: number): number => Math.max(per, Math.min(max, wholePacks(id, n) || per));
@@ -824,7 +824,7 @@ export async function createPlay(game: Game): Promise<Play> {
       const tips = el("ul");
       for (const x of ["Buy where goods are cheap and sell where they are missing. Chalkboards show prices; point at one to see why.",
         "Merchants who can't pay rent close their stall. Deliveries and shares keep them open.",
-        "Shares pay you part of a stall's sales every evening. Haggling can save a few coins, but impatient merchants walk away."]) tips.append(el("li", "", x));
+        "Shares pay you part of every sale a stall makes while you hold them. Haggling can save a few coins, but impatient merchants walk away."]) tips.append(el("li", "", x));
       tips.style.marginTop = "12px";
       sec.append(tips);
     }
@@ -888,7 +888,7 @@ export async function createPlay(game: Game): Promise<Play> {
     const part = el("section"); part.append(el("h4", "", "Your part"));
     const owned = TRADERS.filter((id) => state.player.shares[id] > 0);
     if (owned.length) for (const id of owned) part.append(el("p", "", `You own ${state.player.shares[id]} of ${shareSupply(state, id)} shares in ${state.merchants[id].shop}${state.merchants[id].status === "open" ? ", which stayed open" : ", which is closed for now: it reopens once its shelves are stocked again"}.`));
-    else part.append(el("p", "", "You don't own any stall shares yet. Partners earn from every day's sales."));
+    else part.append(el("p", "", "You don't own any stall shares yet. Partners earn from every sale the stall makes."));
     if (state.player.rep.pema >= 10) part.append(el("p", "", "Pema counts you as a regular: she gives you her family price."));
     card.append(part);
     // 3. your purse
@@ -917,11 +917,11 @@ export async function createPlay(game: Game): Promise<Play> {
       void settleDay().then(async (r) => {
         if (playerId()) await claimDividends(playerId()!);
         const got = (await chainReceipts(playerId()!).catch(() => [])).filter((x) => x.kind === "dividend").reduce((n, x) => n + Number(x.qty), 0);
-        line.textContent = r.status === "onchain" ? `Today's dividends were settled on NEAR for all four stalls. Paid to your account so far: ${got} c. ` : `NEAR settlement: ${String(r.message ?? "not available right now")}`;
+        line.textContent = r.status === "onchain" ? `Dividends are paid on NEAR sale by sale, and today's record is closed for all four stalls. Paid to your account so far: ${got} c. ` : `NEAR settlement: ${String(r.message ?? "not available right now")}`;
         if (r.status === "onchain" && typeof r.txHash === "string") { const a = el("a", "", "view"); a.href = `${EXPLORER_TX}${r.txHash}`; a.target = "_blank"; a.rel = "noopener"; line.append(a); }
         const id = playerId();
         if (id) await syncPlayer(id);
-        if (real) real.textContent = `A forecast: this week ran on your device from today's real market. Your NEAR wallet holds ${state.player.coins} c right now; real dividends land there every market day (10 minutes).`;
+        if (real) real.textContent = `A forecast: this week ran on your device from today's real market. Your NEAR wallet holds ${state.player.coins} c right now; real dividends land there with every sale the stall makes (claimed each market turn).`;
       });
     }
     footer(card, week ? "Back to the city" : "Next morning", () => closeReport(week, from));

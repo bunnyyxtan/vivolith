@@ -60,21 +60,28 @@ refuses transfers from or to the issuing stall. Every move therefore preserves t
 - No holder is ever forced out. There is no idle buyout and no holder cap.
 - Investing never sells out. The spread `P − R` is the cost of a round trip, and dividends are the return.
 
-## 4. Dividends: exact accumulator
+## 4. Dividends: revenue-event accrual
 
-Per stall, the contract keeps revenue `V`, the basis-point remainder `ρ`, arrears `A`, the accumulator `acc`, its
-remainder `α`, and the vault. Per holder and stall, it keeps a checkpoint `cp` and a carry `c` (owed fraction, in 1/K
-coin).
+Per stall, the contract keeps the day's revenue `V`, the basis-point remainder `ρ`, arrears `A`, the accumulator
+`acc`, its remainder `α`, and the vault. Per holder and stall, it keeps a checkpoint `cp` and a carry `c` (owed
+fraction, in 1/K coin).
 
-**Settlement for a day** (`settle_day`, at most once per day per stall):
+**At every sale** (`accrue`: a street sale, a posted buy, a signed deal or a merchant buying from a merchant), the
+coins `r` have just reached the till:
 ```
-units     = V·BPS + ρ
-declared  = ⌊units / 10000⌋            ρ ← units mod 10000          V ← 0
+units     = r·BPS + ρ
+declared  = ⌊units / 10000⌋            ρ ← units mod 10000          V += r
 due       = declared + A
-funded    = min(due, till)              A ← due − funded            (arrears are paid first next time)
+funded    = min(due, till)              A ← due − funded
 vault    += funded                      (moved from the till to the contract)
-acc      += ⌊(funded·K + α) / S⌋        α ← (funded·K + α) mod S
+acc      += ⌊(funded·K + α) / S⌋        α ← (funded·K + α) mod S     (S = the share supply at that moment)
 ```
+The till has just received `r ≥ declared`, so a sale always funds its own dividend. Arrears exist only from before
+this rule (section 9) and are paid first from the next sale.
+
+**Settlement** (`settle_day`, at most once per day per stall) moves no dividend. It retries any arrears and records
+the day: revenue `V`, declared `⌊(V·BPS + ρ_start)/10000⌋` (exactly the sum of the per-sale declarations, because
+remainders carry), funded, and arrears. Then `V ← 0`.
 
 **What a holder is owed:** `owed = b·(acc − cp) + c` (in 1/K coin), where `b` is the holder's balance. Before *any*
 change to `b` (buy, sell, transfer, account link), the contract pays `⌊owed/K⌋` whole coins from the vault, then sets
@@ -82,27 +89,32 @@ change to `b` (buy, sell, transfer, account link), the contract pays `⌊owed/K�
 
 **Properties:**
 
-1. **No dividend is lost on sale.** A sale changes `b`, so whatever the old balance earned is paid first.
-2. **No fraction is lost.**
+1. **A holder earns from exactly the sales made while they held.** `acc` rises only at a sale, and a holder's
+   checkpoint is reset before every balance change. So a holder's total is `Σ over sales i of b_i · funded_i / S_i`,
+   with `b_i` their balance at sale `i`, in proportion to their actual ownership during the earning period.
+   - Buying just before a settlement earns nothing that was sold earlier.
+   - Selling just after a sale keeps that sale's share.
+   - There is no snapshot to snipe.
+2. **No dividend is lost on sale.** A sale of shares changes `b`, so whatever the old balance earned is paid first.
+3. **No fraction is lost.**
    - `ρ` carries the declaration's fraction.
    - `α` carries the accumulator's division remainder.
    - `c` carries each holder's sub-coin fraction.
-   - Arrears carry anything the till could not fund.
    Because `K = 720720·10^18` is divisible by every supply of the form 15·n where n's prime factors are all ≤ 13 (300,
-   315, 330, 360, 450, 4500, ...), a settlement over such a supply is exact. Otherwise the remainder waits in `α` and
-   is distributed at a later settlement.
-3. **No new holder earns retroactively.** A first credit sets `cp = acc`, so newly issued shares earn only from their
+   315, 330, 360, 450, 4500, ...), an accrual over such a supply is exact. Otherwise the remainder waits in `α` for
+   the next sale.
+4. **No new holder earns retroactively.** A first credit sets `cp = acc`, so newly issued shares earn only from their
    issue on.
-4. **The vault is always solvent.**
-   - The shares in existence at a settlement add up to `S`, so all holders together are credited at most
-     `⌊(funded·K+α)/S⌋·S ≤ funded·K + α` units. The undistributed remainder `α` is carried and never credited twice.
-   - Each payout is the floor of what a holder is owed. The fraction stays in the vault as that holder's carry.
+5. **The vault is always solvent.**
+   - At each sale, the shares in existence add up to `S`, so all holders together are credited at most
+     `⌊(funded·K+α)/S⌋·S ≤ funded·K + α` units.
+   - Each payout is the floor of what a holder is owed.
    - So total payouts never exceed `total_funded`, and `vault = total_funded − total_paid ≥ 0`.
    - The leftover is only the sub-coin fractions still owed: at most about one coin per holder.
-5. **Constant cost.** Settlement touches no holder list, so its gas cost is the same for 1 or 1,000,000 holders. Each
-   holder's checkpoint is O(1) storage per stall held.
+6. **Constant cost.** A sale touches no holder list, so its gas cost is the same for 1 or 1,000,000 holders. Each
+   holder's checkpoint is O(1) storage per stall held. No new state fields were needed for this rule.
 
-The stall's own treasury shares earn like any other holder. That cut is returned to the till immediately, so only
+The stall's own treasury shares earn like any other holder. That cut returns to the till within the same sale, so only
 partners' shares take coin out of the stall.
 
 ## 5. Rent, closure, reopening, Guild
@@ -143,25 +155,36 @@ increase per merchant and player, so a signed deal is single-use with O(1) stora
 | Stall accounts | `get_stalls()`: supply, treasury, reserve, vault, arrears, debt, lifetime declared/funded/paid, last rent/settlement day |
 | Recent settlements | `get_settlements(merchant)` (last 24) |
 | Everything above, from public RPC | `node scripts/near/verify.mjs` |
-| Every rule, under test | `cargo test` in `contracts/market` (49 tests): exact pro rata with integer model, arrears, issuance, 300 holders, a randomized 2,000-move ledger with `audit` after every move, bounded storage |
-| Real transactions | `node scripts/near/e2e.ts`: fresh accounts, refused trades that move nothing, invest/sell back, settle and claim, `audit` after each step |
+| Every rule, under test | `cargo test --features upgrade` in `contracts/market` (55 tests): buying just before settlement earns nothing already sold; a holder earns exactly the sales made while holding; repeated trades between sales against an exact integer model; a long-term holder receives every declared coin; issuance; 300 holders; a randomized 2,000-move ledger with `audit` after every move; bounded storage; the upgrade's adoption of pending revenue |
+| Real transactions | `node scripts/near/e2e.ts`: fresh accounts, refused trades that move nothing, invest/sell back, settle and claim, a sniping attempt (buy before settlement, sell after: spread only, no dividend) next to a long-term holder whose dividend accrued at the sales, `audit` after each step |
 
 ## 8. Known limits (stated, not hidden)
 
-- **Snapshot dividends.** A day's dividend goes to whoever holds at settlement time. Buying `N` shares just before and
-  selling them just after costs the spread `(P − R)·N/15` and earns `pool·N/(S+N)`. The round trip pays only when
-  `pool > (P − R)·(S + N)/15`.
-  - Pema and Arin have a 1 c spread, so the break-even pool is above 20 c at S = 300.
-  - Tomas and Mira have a 2 c spread, so it is above 40 c.
-  - Measured live on 2026-11-09 (`verify.mjs`, last settlements): pools of Pema 17, Tomas 30, Mira 21 and Arin 32 c a
-    market day.
-  - So only Arin is above break-even. The best case there is about +1.4 c a market day: 75 shares earn 6.4 c and
-    cost 5 c of spread.
-  - Time-weighted dividends would remove the gap, at the cost of per-holder history. A 2 c spread at Arin would also
-    close it, but pack terms are fixed when a stall is founded.
-- **Arrears** are distributed over the supply at the time they are funded, not when they were declared.
+- **Arrears** from before section 9 are distributed over the supply at the time they are funded, not when they were
+  declared. The rule in section 4 never creates new ones.
 - **Guild surplus.** Before dues were bounded by assets, the Guild collected 21 c more than its 200 c size (on
   2026-11-09). It is not lent out beyond its holdings and it stops further dues. It stays in the fund.
 - **Storage.** About 0.2 KB to register a player, and at most about 5.1 KB per active player (20 receipts, holdings in
   two stalls), measured in the unit tests. The relayer pays for it from the contract's NEAR balance. Mainnet would
   need a storage deposit per player.
+
+## 9. The switch to revenue-event accrual (2026-11-09, no reset)
+
+Until 2026-11-09 the contract declared dividends at settlement, over whoever held shares at that moment. That let a
+player buy just before a settlement and sell just after. The live contract was switched in place by
+`scripts/near/upgrade-accrual.ts`, with no new state fields and no reset. ONE transaction from the contract account:
+
+1. Deploy the `--features upgrade` build.
+2. Call `adopt_pending_revenue`, which declares and accrues the revenue earned since the last settlement under the old
+   rule, once, over the shares held then.
+3. Deploy the real build.
+
+The three actions run in one receipt, so either all of them happen or none do, and no sale can land between them.
+
+The script checked:
+- the code hash before (`AJpMw5…`) and after;
+- that every non-coin balance and every player's coin were unchanged;
+- that `audit` held afterwards;
+- that every partner was owed at least what the old rule would have paid.
+
+Transaction: https://testnet.nearblocks.io/txns/FSAk796nxz1SC3YcqbmeJiXPLUzCuXUxzyRHAcKmNZLW

@@ -32,7 +32,7 @@ function sell(state: EconomyState, id: MerchantId, good: Good, wanted: number, p
   const units = Math.min(wanted, m.stock[good]);
   m.stock[good] -= units;
   m.cash += units * price;
-  if (good !== "lassi" || id === "arin") state.flags[`rev.${id}`] = Number(state.flags[`rev.${id}`] ?? 0) + units * price;
+  if ((good !== "lassi" || id === "arin") && units > 0) accrueSale(state, id, units * price);
   return units;
 }
 
@@ -186,29 +186,36 @@ function hourTick(state: EconomyState, hour: number): void {
   }
 }
 
-/** Midnight: the contract's settle_day, run locally (docs/ECONOMY_MATH.md). Each stall declares DIVIDEND_BPS of
- *  the day's revenue (the basis-point remainder carries), funds it plus any arrears from its till, and splits the funded
- *  coins pro rata over its whole share supply. The player's part is exact: whole coins now, the fraction carried. */
+/** The contract's revenue-event accrual, run locally (docs/ECONOMY_MATH.md): the moment a stall earns `revenue`,
+ *  DIVIDEND_BPS of it is declared (the basis-point remainder carries), funded from the till with any arrears, and
+ *  split over the shares that exist right now. The player's part is exact: whole coins now, the fraction carried. */
+export function accrueSale(state: EconomyState, id: MerchantId, revenue: number): void {
+  const m = state.merchants[id];
+  state.flags[`rev.${id}`] = Number(state.flags[`rev.${id}`] ?? 0) + revenue;
+  const units = Math.floor(revenue) * DIVIDEND_BPS + Number(state.flags[`revRem.${id}`] ?? 0);
+  const declared = Math.floor(units / 10_000);
+  state.flags[`revRem.${id}`] = units % 10_000;
+  const due = declared + Number(state.flags[`arrears.${id}`] ?? 0);
+  const funded = Math.max(0, Math.min(due, Math.floor(m.cash)));
+  state.flags[`arrears.${id}`] = due - funded;
+  const supply = shareSupply(state, id);
+  const owed = funded * state.player.shares[id] + Number(state.flags[`divDust.${id}`] ?? 0);
+  const paid = Math.floor(owed / supply);
+  state.flags[`divDust.${id}`] = owed - paid * supply; // in 1/supply coin: owed, never dropped
+  if (paid <= 0) return;
+  m.cash -= paid; // the stall's own shares' cut never leaves its till
+  state.player.coins += paid;
+  state.flags[`div.${id}`] = Number(state.flags[`div.${id}`] ?? 0) + paid;
+  state.flags[`divToday.${id}`] = Number(state.flags[`divToday.${id}`] ?? 0) + paid;
+}
+
+/** Midnight: the contract's settle_day closes the day's record (the dividends were paid sale by sale). */
 function payDividends(state: EconomyState, day: number): void {
   for (const id of MERCHANT_IDS) {
-    const m = state.merchants[id];
-    const revenue = Math.floor(Number(state.flags[`rev.${id}`] ?? 0));
+    const m = state.merchants[id], revenue = Math.floor(Number(state.flags[`rev.${id}`] ?? 0)), paid = Number(state.flags[`divToday.${id}`] ?? 0);
     state.flags[`rev.${id}`] = 0;
-    const units = revenue * DIVIDEND_BPS + Number(state.flags[`revRem.${id}`] ?? 0);
-    const declared = Math.floor(units / 10_000);
-    state.flags[`revRem.${id}`] = units % 10_000;
-    const due = declared + Number(state.flags[`arrears.${id}`] ?? 0);
-    const funded = Math.max(0, Math.min(due, Math.floor(m.cash)));
-    state.flags[`arrears.${id}`] = due - funded;
-    const supply = shareSupply(state, id);
-    const owed = funded * state.player.shares[id] + Number(state.flags[`divDust.${id}`] ?? 0);
-    const paid = Math.floor(owed / supply);
-    state.flags[`divDust.${id}`] = owed - paid * supply; // in 1/supply coin: owed, never dropped
-    if (paid <= 0) continue;
-    m.cash -= paid; // the stall's own shares' cut never leaves its till
-    state.player.coins += paid;
-    state.flags[`div.${id}`] = Number(state.flags[`div.${id}`] ?? 0) + paid;
-    log(state, "player", `+${paid} c dividend from ${m.shop} (day ${day}: ${revenue} c sales, ${state.player.shares[id]}/${supply} shares).`);
+    state.flags[`divToday.${id}`] = 0;
+    if (paid > 0) log(state, "player", `+${paid} c dividends from ${m.shop} (day ${day}: ${revenue} c sales, ${state.player.shares[id]}/${shareSupply(state, id)} shares).`);
   }
 }
 

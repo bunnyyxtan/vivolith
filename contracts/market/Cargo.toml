@@ -27,3 +27,6 @@ overflow-checks = true
 # One-off maintenance build (scripts/near/reset-state.ts): adds a private `clean` that deletes raw state keys so a
 # market with too much state to delete can be reset in place. Never deployed as the market's final code.
 cleanup = []
+# One-off upgrade build (scripts/near/upgrade-accrual.ts): declares revenue earned before the switch to revenue-event
+# accrual. Deployed, called and replaced by the real code within one transaction.
+upgrade = []

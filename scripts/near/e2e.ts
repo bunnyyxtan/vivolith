@@ -137,6 +137,32 @@ for (const who of [kavi, rin]) {
 }
 await audit("dividends");
 
+// 6b. Dividend sniping on NEAR: Rin has held Tomas shares since step 4. The market turn makes sales; they accrue to
+// holders at that moment. Sam buys a pack only afterwards, right before settlement, and sells right after: Sam must
+// get the 8 c backing back and no dividend, while Rin's owed dividend grew with the sales.
+const owedUnits = async (who: string, stall: string): Promise<bigint> => {
+  const p = (await view<{ merchant: string; coins: string; fraction: string }[]>("get_pending", { account_id: who })).find((x) => x.merchant === stall)!;
+  return BigInt(p.coins) * 720720n * 10n ** 18n + BigInt(p.fraction);
+};
+const sam = await newGuest();
+const rinBefore = await owedUnits(rin.accountId, "tomas");
+const turn = await call("tick", {});
+console.log("market turn:", turn.body.status, ((turn.body.log as string[] | undefined) ?? []).filter((l) => /tomas/.test(l) && /street|bought/.test(l)).join("; ") || "(no Tomas sales this turn)");
+await sleep(4000);
+const rinAfter = await owedUnits(rin.accountId, "tomas");
+console.log(`  rin (long-term holder) owed at Tomas: ${Number(rinBefore) / 720720e18} -> ${Number(rinAfter) / 720720e18} c, accrued at the sales`);
+const sam0 = (await settled(sam.accountId)).coin;
+const snipeBuy = await relayCall(sam, "buy", { seller: tomas, token_id: "share:tomas", qty: "15", max_price: "10" });
+assert.equal(snipeBuy.status, 200, JSON.stringify(snipeBuy.body));
+const snipeSettle = await call("settle", {});
+console.log("  sam bought 15 Tomas shares, then settlement:", snipeSettle.body.status, tx(snipeBuy.body.txHash));
+const snipeSell = await relayCall(sam, "sell", { buyer: tomas, token_id: "share:tomas", qty: "15", min_price: "8" });
+assert.equal(snipeSell.status, 200, JSON.stringify(snipeSell.body));
+const sam1 = (await settled(sam.accountId)).coin;
+assert.equal(sam1 - sam0, -10 + 8, "the sniper paid the spread and earned no dividend from sales made before buying");
+console.log(`  sam sold right after: coin ${sam0} -> ${sam1} (spread only, no dividend)`, tx(snipeSell.body.txHash));
+await audit("sniping check");
+
 // 7. A stored account from before a market reset re-registers (idempotent) and a foreign one is refused.
 const again = await call("register", { accountId: kavi.accountId });
 assert.equal(again.status, 200, JSON.stringify(again.body));

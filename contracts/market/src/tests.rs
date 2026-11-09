@@ -76,7 +76,8 @@ fn buy_moves_coin_and_goods_and_emits_nep245() {
     assert_eq!(bal(&m, "pema.t", "coin"), 16);
     assert_eq!(bal(&m, "pema.t", "mango"), 3);
     let logs = get_logs();
-    assert_eq!(logs.iter().filter(|l| l.starts_with("EVENT_JSON:") && l.contains("\"standard\":\"nep245\"") && l.contains("mt_transfer")).count(), 2);
+    // coin and goods, then the sale's dividend into the vault and the stall's own shares' cut back to its till
+    assert_eq!(logs.iter().filter(|l| l.starts_with("EVENT_JSON:") && l.contains("\"standard\":\"nep245\"") && l.contains("mt_transfer")).count(), 4);
     assert_eq!(m.get_offers()[0].qty.0, 3);
     assert_eq!(m.get_receipts(acc("kavi"))[0].kind, "bought");
     assert_eq!(m.get_revenue("pema".into()).0, 16);
@@ -369,21 +370,166 @@ fn selling_shares_pays_the_dividend_earned_first() {
 }
 
 #[test]
-fn a_short_till_records_arrears_and_pays_them_first() {
+fn a_dividend_is_funded_at_the_sale_so_a_later_empty_till_cannot_strand_it() {
     let mut m = market();
     give(&mut m, "kavi", 300);
     as_caller("kavi");
     m.buy(acc("pema.t"), "share:pema".into(), U128(300), U128(100)); // all of it; 20 c to the till
-    street(&mut m, "pema", 20, 3); // till 80, revenue 60 -> 30 declared
+    street(&mut m, "pema", 20, 3); // 60 revenue: 30 c moves to the vault at the sale
     as_caller("op");
-    m.operator_burn(acc("pema.t"), "coin".into(), U128(70), "a bad week".into()); // till 10
+    let till = bal(&m, "pema.t", "coin");
+    m.operator_burn(acc("pema.t"), "coin".into(), U128(till), "a bad week".into()); // till 0
     let s = m.settle_day(1, "pema".into());
-    assert_eq!((s.declared.0, s.funded.0, s.arrears.0), (30, 10, 20));
-    street(&mut m, "pema", 20, 3); // till 70, declared 30 + 20 arrears
+    assert_eq!((s.revenue.0, s.declared.0, s.funded.0, s.arrears.0), (60, 30, 30, 0));
+    assert_eq!(m.claim(acc("kavi")).0, 30, "every declared coin reached the only partner");
+    assert_audit(&m);
+}
+
+#[test]
+fn legacy_arrears_are_paid_first_from_the_next_sale() {
+    let mut m = market();
+    give(&mut m, "kavi", 300);
+    as_caller("kavi");
+    m.buy(acc("pema.t"), "share:pema".into(), U128(300), U128(100));
+    // arrears left by the old settlement rule (declared but unfunded): the next sale funds them first
+    let mut st = m.stall("pema");
+    st.arrears = 20;
+    st.total_declared += 20;
+    m.stalls.insert("pema".into(), st);
+    as_caller("op");
+    m.settle_day(1, "pema".into()); // the till (20 c from the investment) pays them now
+    street(&mut m, "pema", 10, 3); // 30 revenue -> 15 declared
     as_caller("op");
     let s = m.settle_day(2, "pema".into());
-    assert_eq!((s.funded.0, s.arrears.0), (50, 0));
-    assert_eq!(m.claim(acc("kavi")).0, 60, "every declared coin reached the only partner");
+    assert_eq!((s.declared.0, s.funded.0, s.arrears.0), (15, 15, 0));
+    assert_eq!(m.claim(acc("kavi")).0, 35);
+    assert_audit(&m);
+}
+
+// ---------- dividend sniping (revenue-event accrual) ----------
+
+/// Kavi holds a quarter of Pema from the start; Rin buys most of the stall just before the day's settlement and sells
+/// right after. Under revenue-event accrual Rin earned none of the day's sales: everything went to who held at each sale.
+#[test]
+fn buying_just_before_settlement_earns_nothing_already_sold() {
+    let mut m = market();
+    as_caller("op");
+    m.register_player(acc("rin"));
+    give(&mut m, "kavi", 100);
+    give(&mut m, "rin", 1000);
+    as_caller("kavi");
+    m.buy(acc("pema.t"), "share:pema".into(), U128(75), U128(25)); // 75 of 300
+    street(&mut m, "pema", 30, 2); // 60 revenue -> 30 declared -> 7.5 to kavi
+    let rin0 = bal(&m, "rin", "coin");
+    as_caller("rin");
+    m.buy(acc("pema.t"), "share:pema".into(), U128(225), U128(75)); // the rest of the float, right before settling
+    as_caller("op");
+    m.settle_day(1, "pema".into());
+    as_caller("rin");
+    m.sell(acc("pema.t"), "share:pema".into(), U128(225), U128(60));
+    assert_eq!(bal(&m, "rin", "coin"), rin0 - 75 + 60, "the round trip costs the spread and earns no dividend");
+    assert_eq!(pending(&m, "rin", "pema"), (0, 0));
+    assert_eq!(pending(&m, "kavi", "pema"), (7, ACC_SCALE / 2), "kavi keeps the whole of what the stall earned");
+    assert_audit(&m);
+}
+
+/// A holder who buys before a sale and sells right after earns exactly their share of that sale and nothing else.
+#[test]
+fn a_holder_earns_exactly_the_sales_made_while_holding() {
+    let mut m = market();
+    as_caller("op");
+    m.register_player(acc("rin"));
+    give(&mut m, "rin", 1000);
+    street(&mut m, "pema", 10, 3); // 30 revenue before rin buys: none of it is rin's
+    as_caller("rin");
+    m.buy(acc("pema.t"), "share:pema".into(), U128(150), U128(50)); // half the stall
+    let c0 = bal(&m, "rin", "coin");
+    street(&mut m, "pema", 20, 2); // 40 revenue -> 20 declared -> 10 to rin
+    as_caller("rin");
+    m.sell(acc("pema.t"), "share:pema".into(), U128(150), U128(40));
+    assert_eq!(bal(&m, "rin", "coin") - c0, 10 + 40, "half of that sale's 20 c, plus the 40 c backing");
+    street(&mut m, "pema", 20, 2); // after selling: none of it is rin's
+    as_caller("op");
+    m.settle_day(1, "pema".into());
+    assert_eq!(pending(&m, "rin", "pema"), (0, 0));
+    assert_audit(&m);
+}
+
+/// Three holders, repeated buys and sells interleaved with sales over several days, against an exact integer model:
+/// each holder is owed the sum over sales of floor(funded * K / supply) * balance at that sale.
+#[test]
+fn repeated_trades_between_sales_match_an_exact_model() {
+    let mut m = market();
+    let players = ["xx", "yy", "zz"];
+    as_caller("op");
+    for p in players {
+        m.register_player(acc(p));
+        give(&mut m, p, 2000);
+    }
+    let mut exact = [0u128; 3];
+    let mut divs = [0u128; 3];
+    // (who, packs: + buy / - sell, revenue units sold right after the trade)
+    let plan: [(usize, i32, u128); 14] = [(0, 4, 7), (1, 2, 0), (2, 1, 9), (0, -2, 3), (1, 3, 11), (2, 2, 0), (0, 1, 5),
+        (1, -5, 8), (2, -3, 13), (0, 6, 2), (1, 1, 17), (2, 4, 1), (0, -9, 6), (1, 2, 21)];
+    for (k, (who, packs, sold)) in plan.iter().enumerate() {
+        let p = players[*who];
+        let before = bal(&m, p, COIN);
+        as_caller(p);
+        if *packs > 0 {
+            let n = *packs as u128;
+            m.buy(acc("pema.t"), "share:pema".into(), U128(n * PACK), U128(1000));
+            divs[*who] += bal(&m, p, COIN) + n * 5 - before;
+        } else {
+            let n = (-*packs) as u128;
+            m.sell(acc("pema.t"), "share:pema".into(), U128(n * PACK), U128(0));
+            divs[*who] += bal(&m, p, COIN) - n * 4 - before;
+        }
+        if *sold > 0 {
+            let funded0 = stall(&m, "pema").total_funded.0;
+            let supply = stall(&m, "pema").supply.0;
+            street(&mut m, "pema", *sold, 3);
+            let funded = stall(&m, "pema").total_funded.0 - funded0;
+            for (i, q) in players.iter().enumerate() {
+                exact[i] += funded * ACC_SCALE * bal(&m, q, "share:pema") / supply;
+            }
+        }
+        if k % 4 == 3 {
+            as_caller("op");
+            m.settle_day(k as u32, "pema".into());
+        }
+        assert_audit(&m);
+    }
+    for (i, p) in players.iter().enumerate() {
+        let before = bal(&m, p, COIN);
+        as_caller("op");
+        m.claim(acc(p));
+        divs[i] += bal(&m, p, COIN) - before;
+        let (c, f) = pending(&m, p, "pema");
+        assert_eq!(c, 0);
+        let got = divs[i] * ACC_SCALE + f;
+        let err = exact[i].abs_diff(got);
+        assert!(err <= 14 * 1000, "holder {p}: got {got}, exact {}, diff {err} units of 1/K coin", exact[i]);
+    }
+}
+
+/// A long-term holder of every share earns every declared coin of every sale, across days and a supply change.
+#[test]
+fn a_long_term_holder_earns_every_declared_coin() {
+    let mut m = market();
+    give(&mut m, "kavi", 1000);
+    as_caller("kavi");
+    m.buy(acc("pema.t"), "share:pema".into(), U128(300), U128(100));
+    let c0 = bal(&m, "kavi", "coin");
+    for day in 1..=5u32 {
+        street(&mut m, "pema", 7, 3); // 21 revenue a day -> 10.5 declared
+        as_caller("op");
+        m.settle_day(day, "pema".into());
+    }
+    as_caller("op");
+    m.claim(acc("kavi"));
+    let declared = stall(&m, "pema").total_declared.0;
+    assert_eq!(declared, 52, "5 x 10.5 = 52.5: 52 declared, the half carried in basis points");
+    assert_eq!(bal(&m, "kavi", "coin") - c0, 52, "the only partner received every declared coin");
     assert_audit(&m);
 }
 
@@ -808,4 +954,28 @@ fn per_player_storage_is_bounded() {
     // after the log is full, only the second stall's holding (balance + checkpoint) is new
     assert!(total <= after_20 + 1_000, "storage stops growing once the receipt log is full (receipts capped at {MAX_RECEIPTS})");
     assert!(total < 6_000, "per-player storage must stay bounded, got {total}");
+}
+
+/// The one-off upgrade (`--features upgrade`): revenue earned under the old rule (declared only at settlement) is
+/// declared and accrued once, so no coin a holder already earned is lost in the switch.
+#[cfg(feature = "upgrade")]
+#[test]
+fn upgrade_adopts_revenue_earned_before_the_switch() {
+    let mut m = market();
+    give(&mut m, "kavi", 100);
+    as_caller("kavi");
+    m.buy(acc("pema.t"), "share:pema".into(), U128(150), U128(50)); // half
+    // simulate the old contract: 40 c of revenue in the till, recorded but not declared yet
+    m.mint(&acc("pema.t"), COIN, 40, "old sales");
+    let mut st = m.stall("pema");
+    st.revenue = 40;
+    m.stalls.insert("pema".into(), st);
+    testing_env!(VMContextBuilder::new().predecessor_account_id(env::current_account_id()).build());
+    let adopted = m.adopt_pending_revenue();
+    assert_eq!(adopted.iter().find(|(id, _)| id == "pema").unwrap().1 .0, 40);
+    assert_eq!(pending(&m, "kavi", "pema"), (10, 0), "half of the 20 c declared");
+    as_caller("op");
+    let s = m.settle_day(1, "pema".into());
+    assert_eq!((s.revenue.0, s.declared.0, s.funded.0), (40, 20, 20), "the day's record still shows it");
+    assert_audit(&m);
 }

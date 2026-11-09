@@ -11,13 +11,14 @@
 //!   A partner can always sell a pack back for exactly `pack_backing`, paid from the reserve. When the stall's own
 //!   unsold shares run out it issues new ones on the same terms, so investing never sells out and nobody's shares
 //!   are ever taken. Invariant: `reserve * PACK == pack_backing * (supply - treasury)`.
-//! * **Dividends.** At each settlement `DIVIDEND_BPS` of the stall's revenue is declared (the basis-point remainder
-//!   carries to the next day). The till pays what it can into the dividend vault; the rest is recorded as arrears
-//!   and paid first next time. Funded coin raises a per-share accumulator `acc` (scaled by `ACC_SCALE`, with the
-//!   division remainder carried), and each holder is owed `balance * (acc - checkpoint)`. Payouts happen before
+//! * **Dividends (revenue-event accrual).** The moment a stall earns revenue, `DIVIDEND_BPS` of it is declared (the
+//!   basis-point remainder carries to the next sale), moved from the till into the dividend vault, and added to a
+//!   per-share accumulator `acc` (scaled by `ACC_SCALE`, division remainder carried) over the shares that exist at
+//!   that moment. So a holder earns from exactly the sales made while they held: buying just before a settlement
+//!   earns nothing that was sold earlier. Each holder is owed `balance * (acc - checkpoint)`; payouts happen before
 //!   any change to a holder's balance, so selling never forfeits a dividend, and the sub-coin fraction is kept per
-//!   holder. Settling costs the same for 1 or 1,000,000 shareholders: there is no holder list and no holder limit.
-//!   Invariant: the vault always holds at least what every holder is owed.
+//!   holder. A sale costs the same for 1 or 1,000,000 shareholders: there is no holder list and no holder limit.
+//!   `settle_day` only closes the day's record. Invariant: the vault always holds at least what every holder is owed.
 //! * **Custody.** The contract's own coin balance is exactly the sum of every stall's reserve and vault.
 //! * **Guild.** A fixed fund lends to stalls (recorded as debt) and is repaid first from healthy tills.
 use near_sdk::json_types::{Base64VecU8, U128, U64};
@@ -356,7 +357,7 @@ impl Market {
         self.burn(&m.account_id, &token_id, qty.0, "street shoppers");
         if cost > 0 {
             self.mint(&m.account_id, COIN, cost, "street shoppers");
-            self.add_revenue(&m.id, cost);
+            self.accrue(&m.id, cost);
         }
     }
 
@@ -420,44 +421,33 @@ impl Market {
         open
     }
 
-    /// Settles a stall's dividends up to `day` (each day at most once; a later day includes any day nobody
-    /// settled). Declares DIVIDEND_BPS of revenue, funds it and any arrears from the till into the vault, and
-    /// raises the per-share accumulator. Costs the same whatever the number of shareholders.
+    /// Closes a stall's day record up to `day` (each day at most once; a later day includes any day nobody settled).
+    /// Dividends were already declared, funded and accrued sale by sale (`accrue`); this retries any arrears and
+    /// records the period: revenue, the coins declared and funded from it, and what is still owed by the till.
     pub fn settle_day(&mut self, day: u32, merchant: String) -> Settlement {
         self.only_operator();
         let m = self.merchant(&merchant).expect("unknown merchant").clone();
+        if self.stall(&m.id).last_settled.is_some_and(|d| d >= day) {
+            return self.stall(&m.id).history.iter().rev().find(|h| h.day == day).cloned().unwrap_or_else(|| env::panic_str("day already settled"));
+        }
+        self.accrue(&m.id, 0); // a till that was short at a sale pays its arrears now, if it can
         let mut s = self.stall(&m.id);
-        if s.last_settled.is_some_and(|d| d >= day) {
-            return s.history.iter().rev().find(|h| h.day == day).cloned().unwrap_or_else(|| env::panic_str("day already settled"));
-        }
         let supply = self.supply.get(&share_token(&m.id)).copied().unwrap_or(0);
-        let units = s.revenue.checked_mul(DIVIDEND_BPS).expect("overflow") + s.rev_rem;
-        let declared = units / BPS;
-        s.rev_rem = units % BPS;
-        let revenue = s.revenue;
+        // The period's declaration, exactly: carried remainders make the sum of per-sale declarations equal to
+        // floor((revenue * BPS + rem_start) / 10000), and rem_start follows from the remainder now.
+        let units = s.revenue.checked_mul(DIVIDEND_BPS).expect("overflow");
+        let rem_start = (s.rev_rem + BPS - units % BPS) % BPS;
+        let declared = (units + rem_start - s.rev_rem) / BPS;
+        let arrears_before = s.history.last().map_or(0, |h| h.arrears.0);
+        let funded = declared + arrears_before - s.arrears;
+        let row = Settlement { day, merchant: m.id.clone(), revenue: U128(s.revenue), declared: U128(declared), funded: U128(funded), arrears: U128(s.arrears), supply: U128(supply) };
         s.revenue = 0;
-        let due = declared + s.arrears;
-        let funded = due.min(self.bal(COIN, &m.account_id));
-        s.arrears = due - funded;
-        s.total_declared += declared;
-        s.total_funded += funded;
         s.last_settled = Some(day);
-        if funded > 0 {
-            let total = funded.checked_mul(ACC_SCALE).expect("overflow") + s.acc_rem;
-            s.acc = s.acc.checked_add(total / supply).expect("overflow");
-            s.acc_rem = total % supply;
-            s.vault += funded;
-        }
-        let row = Settlement { day, merchant: m.id.clone(), revenue: U128(revenue), declared: U128(declared), funded: U128(funded), arrears: U128(s.arrears), supply: U128(supply) };
         s.history.push(row.clone());
         if s.history.len() > MAX_HISTORY {
             s.history.remove(0);
         }
         self.stalls.insert(m.id.clone(), s);
-        if funded > 0 {
-            self.move_token(&m.account_id, &env::current_account_id(), COIN, funded, "dividend vault");
-            self.settle_holder(&m.id, &m.account_id); // the cut of its own unsold shares returns to the till
-        }
         row
     }
 
@@ -541,7 +531,7 @@ impl Market {
         Self::shrink(&mut self.asks, key, order, qty);
         self.restock(&buyer, &token_id, qty);
         if let Some(id) = self.merchant_of(&seller).map(|m| m.id.clone()) {
-            self.add_revenue(&id, cost);
+            self.accrue(&id, cost);
         }
         self.push_receipt(&seller, "sold", &token_id, qty, price, &buyer);
         self.push_receipt(&buyer, "bought", &token_id, qty, price, &seller)
@@ -599,7 +589,7 @@ impl Market {
         self.move_token(&buyer, &seller, COIN, cost, "deal");
         self.move_token(&seller, &buyer, &token_id, qty, "deal");
         if side == "buy" {
-            self.add_revenue(&m.id, cost);
+            self.accrue(&m.id, cost);
         } else {
             self.restock(&m.account_id, &token_id, qty);
         }
@@ -792,6 +782,27 @@ impl Market {
     }
 }
 
+/// Upgrade build only (`--features upgrade`), deployed and called in the same transaction as the switch to
+/// revenue-event accrual and then replaced by the real code: revenue earned before the switch was not declared yet
+/// (the old rule declared it at settlement), so it is declared and accrued now, once, over the shares held now.
+#[cfg(feature = "upgrade")]
+#[near]
+impl Market {
+    #[private]
+    pub fn adopt_pending_revenue(&mut self) -> Vec<(String, U128)> {
+        let mut out = Vec::new();
+        for id in self.merchant_ids() {
+            let mut s = self.stall(&id);
+            let pending = s.revenue;
+            s.revenue = 0;
+            self.stalls.insert(id.clone(), s);
+            self.accrue(&id, pending); // counted in the day's revenue again, now declared
+            out.push((id, U128(pending)));
+        }
+        out
+    }
+}
+
 /// Maintenance build only (`--features cleanup`): removes raw storage keys. Callable only by the contract account
 /// itself, and compiled out of the market's real code, so the live contract cannot wipe anyone's balances.
 #[cfg(feature = "cleanup")]
@@ -841,10 +852,33 @@ impl Market {
         self.balances.get(&(token.to_string(), account.clone())).copied().unwrap_or(0)
     }
 
-    fn add_revenue(&mut self, id: &str, amount: u128) {
+    /// Revenue-event accrual: `amount` coins of goods revenue just reached the stall's till. Declares DIVIDEND_BPS of
+    /// it (remainder carried), funds that plus any arrears from the till into the vault, and adds it to the
+    /// per-share accumulator over the shares that exist right now. `amount = 0` only retries arrears.
+    fn accrue(&mut self, id: &str, amount: u128) {
+        let acct = self.merchant(id).expect("unknown merchant").account_id.clone();
         let mut s = self.stall(id);
         s.revenue = s.revenue.checked_add(amount).expect("overflow");
+        let units = amount.checked_mul(DIVIDEND_BPS).expect("overflow") + s.rev_rem;
+        let declared = units / BPS;
+        s.rev_rem = units % BPS;
+        s.total_declared += declared;
+        let due = declared + s.arrears;
+        let funded = due.min(self.bal(COIN, &acct));
+        s.arrears = due - funded;
+        if funded > 0 {
+            let supply = self.supply.get(&share_token(id)).copied().unwrap_or(0);
+            let total = funded.checked_mul(ACC_SCALE).expect("overflow") + s.acc_rem;
+            s.acc = s.acc.checked_add(total / supply).expect("overflow");
+            s.acc_rem = total % supply;
+            s.vault += funded;
+            s.total_funded += funded;
+        }
         self.stalls.insert(id.to_string(), s);
+        if funded > 0 {
+            self.move_token(&acct, &env::current_account_id(), COIN, funded, "dividend vault");
+            self.settle_holder(id, &acct); // the cut of its own unsold shares returns to the till
+        }
     }
 
     /// Dividend owed to `who` for stall `id`, in 1/ACC_SCALE coin.

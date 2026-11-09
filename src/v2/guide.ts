@@ -66,11 +66,11 @@ export const STEPS: readonly Step[] = [
     detail: (s) => {
       const t = investTarget(s), { price, per } = SHARE_PACK[t];
       return s.player.coins >= price
-        ? `Open the Invest tab at ${NAMES[t]}'s stall and buy a pack of shares (${per} for ${price} c). Every evening you earn part of the stall's sales.`
+        ? `Open the Invest tab at ${NAMES[t]}'s stall and buy a pack of shares (${per} for ${price} c). You earn part of every sale the stall makes from then on.`
         : `A pack of ${NAMES[t]}'s shares costs ${price} c and you have ${s.player.coins} c. Trade a little more: buy from Tomas, sell to Pema or Arin.`;
     },
     done: (s) => ownsShares(s),
-    reward: "You're a partner now: every evening part of that stall's sales comes to you.",
+    reward: "You're a partner now: part of every sale that stall makes comes to you.",
   },
   {
     id: "week", title: "Fast-forward a week", target: null,
