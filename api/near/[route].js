@@ -12352,6 +12352,7 @@ async function guildTurn(cfg, provider, st, day, log) {
 	const guild = await view(provider, cfg.contractId, "get_guild", {});
 	const rows = await view(provider, cfg.contractId, "get_balances", { account_id: guild });
 	let fund = Number(rows.find(([t]) => t === "coin")?.[1] ?? 0);
+	let lent = MERCHANTS.reduce((n, id) => n + Number(st.flags[`debt.${id}`] ?? 0), 0);
 	const calls = [];
 	for (const id of MERCHANTS) {
 		const m = st.merchants[id], debt = Number(st.flags[`debt.${id}`] ?? 0);
@@ -12364,17 +12365,23 @@ async function guildTurn(cfg, provider, st, day, log) {
 				amount: String(amount)
 			}, TICK_GAS, 0n));
 			fund -= amount;
+			lent += amount;
 			m.cash += amount;
 			log.push(`market guild lent ${id} ${amount} c (fund ${fund} c, ${id} owes ${debt + amount} c)`);
-		} else if (m.cash > GUILD_HEALTHY && (debt > 0 || fund < 200)) {
-			const amount = Math.min(m.cash - GUILD_HEALTHY, debt + GUILD_DUES);
+		} else if (m.cash > GUILD_HEALTHY) {
+			const repay = Math.min(debt, m.cash - GUILD_HEALTHY);
+			const dues = Math.max(0, Math.min(m.cash - GUILD_HEALTHY - repay, GUILD_DUES, 200 - (fund + lent)));
+			if (repay + dues <= 0) continue;
 			if (!await hit(cfg, `guild:${id}:${day}`, 1, Math.ceil(600))) continue;
 			calls.push(actions.functionCall("guild_collect", {
 				merchant: id,
-				amount: String(amount),
+				amount: String(repay + dues),
 				fill_to: String(200)
 			}, TICK_GAS, 0n));
-			log.push(`${id} pays the market guild up to ${amount} c (its ${debt} c debt first)`);
+			fund += repay + dues;
+			lent -= repay;
+			m.cash -= repay + dues;
+			log.push(`${id} ${repay ? `repaid the market guild ${repay} c` : ""}${repay && dues ? " and " : ""}${dues ? `paid ${dues} c guild dues` : ""} (fund ${fund} c)`);
 		}
 	}
 	return calls;
