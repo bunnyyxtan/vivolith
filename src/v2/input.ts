@@ -27,6 +27,10 @@ export interface Input {
 
 /** An Escape this soon after the browser drops pointer lock is the same press (the keydown can land either side). */
 const ESC_UNLOCK_MS = 250;
+/** Soft look without the lock: the hidden cursor stops at the screen edge, so holding it in this edge band keeps
+ *  turning the camera (full 360), up to EDGE_TURN mouse pixels a second at the very edge. */
+const EDGE_BAND = 0.06; // of the window width
+const EDGE_TURN = 1400;
 const LOOK_CLASS = "vv-look";
 
 export function createInput(canvas: HTMLCanvasElement): Input {
@@ -94,16 +98,34 @@ body.${LOOK_CLASS} .hud, body.${LOOK_CLASS} .hud * { pointer-events: none !impor
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   // Embedded panes may refuse pointer lock for good: a held mouse button still drags the view.
   canvas.addEventListener("pointerdown", (e) => { if (ui) return; drag = true; canvas.setPointerCapture?.(e.pointerId); });
+  // Any button pressed in the game while the cursor is hidden is a gesture: ask for the real lock (unlimited turning).
+  window.addEventListener("pointerdown", () => { if (soft()) lock(); }, true);
   window.addEventListener("pointerup", () => { drag = false; });
+  let mx = -1, lastTake = performance.now(); // cursor x for the edge band; -1 when it left the window
   window.addEventListener("mousemove", (e) => {
+    mx = e.clientX;
     if (!ui && (isLocked() || drag || soft())) { dx += e.movementX; dy += e.movementY; }
   });
+  document.documentElement.addEventListener("mouseleave", () => { mx = -1; });
+  /** Edge turning in soft look: how far into the left (-1) or right (+1) band the hidden cursor sits. */
+  const edge = (): number => {
+    if (!soft() || mx < 0) return 0;
+    const band = Math.max(24, innerWidth * EDGE_BAND);
+    if (mx < band) return -(1 - mx / band);
+    if (mx > innerWidth - band) return (mx - (innerWidth - band)) / band;
+    return 0;
+  };
   canvas.addEventListener("wheel", (e) => { if (!ui) wheel += e.deltaY; e.preventDefault(); }, { passive: false });
 
   return {
     down: (c) => held.has(c),
     consumePress: (c) => pressed.delete(c),
-    takeLook() { const r = { dx, dy }; dx = dy = 0; return r; },
+    takeLook() {
+      const now = performance.now(), dt = Math.min(0.1, (now - lastTake) / 1000);
+      lastTake = now;
+      dx += edge() * EDGE_TURN * dt;
+      const r = { dx, dy }; dx = dy = 0; return r;
+    },
     takeWheel() { const w = wheel; wheel = 0; return w; },
     flush() { pressed.clear(); dx = dy = 0; wheel = 0; },
     get locked() { return isLocked(); },
