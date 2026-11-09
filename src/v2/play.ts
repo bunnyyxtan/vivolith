@@ -771,6 +771,7 @@ export async function createPlay(game: Game): Promise<Play> {
     mode = { kind: "card" };
     player.frozen = true;
     hud.card.innerHTML = "";
+    document.body.classList.add("card-open");
     build(hud.card);
     hud.back.style.display = "block";
     hud.card.style.display = "block";
@@ -784,6 +785,7 @@ export async function createPlay(game: Game): Promise<Play> {
     dismissed?.();
     hud.card.style.display = "none";
     hud.back.style.display = "none";
+    document.body.classList.remove("card-open");
     mode = { kind: "walk" };
     player.frozen = false;
   };

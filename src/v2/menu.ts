@@ -21,23 +21,26 @@ const CSS = /* css */ `
   background:linear-gradient(90deg, rgba(8,14,26,.86) 0%, rgba(8,14,26,.72) 30%, rgba(8,14,26,.28) 52%, rgba(8,14,26,0) 66%); }
 #menu.show { display:block; animation:menuIn .9s ease both; }
 @keyframes menuIn { from { opacity:0 } to { opacity:1 } }
-#menu .col { position:absolute; left:clamp(24px, 7.5vw, 144px); top:clamp(48px, 13vh, 128px); right:16px; max-width:560px; }
-#menu h1 { margin:0; font-weight:700; font-size:clamp(44px, 6.6vw, 96px); letter-spacing:.14em; line-height:1; text-shadow:0 2px 24px rgba(0,20,50,.35); }
-#menu .where { margin:18px 0 34px; font-size:clamp(14px, 1.25vw, 17px); color:rgba(255,255,255,.86); letter-spacing:.02em; text-shadow:0 1px 8px rgba(0,20,50,.5); }
+#menu .col { position:absolute; left:clamp(16px, 7.5vw, 144px); top:clamp(16px, 11vh, 128px); right:16px; max-width:560px;
+  bottom:calc(var(--foot-h) + clamp(10px, 3vh, 28px)); overflow-y:auto; overscroll-behavior:contain; padding:4px 8px 8px 0;
+  scrollbar-width:thin; scrollbar-color:rgba(255,255,255,.35) transparent; }
+#menu { --foot-h:28px; }
+#menu h1 { margin:0; font-weight:700; font-size:clamp(28px, min(6.6vw, 11vh), 96px); letter-spacing:.14em; line-height:1.05; text-shadow:0 2px 24px rgba(0,20,50,.35); overflow-wrap:anywhere; }
+#menu .where { margin:clamp(8px, 2.2vh, 18px) 0 clamp(10px, 4vh, 34px); font-size:clamp(13px, min(1.25vw, 2.6vh), 17px); color:rgba(255,255,255,.86); letter-spacing:.02em; text-shadow:0 1px 8px rgba(0,20,50,.5); overflow-wrap:anywhere; }
 #menu ul { list-style:none; margin:0; padding:0; }
-#menu li { position:relative; padding:7px 0 7px 34px; font-size:clamp(20px, 2vw, 28px); font-weight:600; color:rgba(255,255,255,.72); cursor:pointer;
+#menu li { position:relative; padding:clamp(3px, .9vh, 7px) 0 clamp(3px, .9vh, 7px) 34px; font-size:clamp(17px, min(2vw, 4.4vh), 28px); font-weight:600; color:rgba(255,255,255,.72); cursor:pointer;
   text-shadow:0 1px 10px rgba(0,20,50,.55); transition:color .15s, transform .15s; }
-#menu li::before { content:""; position:absolute; left:0; top:24px; width:18px; height:4px; background:#00ec97; transform:scaleX(0); transform-origin:left; transition:transform .18s ease; }
+#menu li::before { content:""; position:absolute; left:0; top:calc(clamp(3px, .9vh, 7px) + .6em); width:18px; height:4px; background:#00ec97; transform:scaleX(0); transform-origin:left; transition:transform .18s ease; }
 #menu li.on { color:#fff; transform:translateX(4px); }
 #menu li.on::before { transform:scaleX(1); }
-#menu li small { display:block; font-size:13px; font-weight:400; color:rgba(255,255,255,.7); margin-top:2px; letter-spacing:.02em; }
-#menu .sheet { margin-top:26px; max-width:440px; font-size:15px; line-height:1.55; color:rgba(255,255,255,.92); text-shadow:0 1px 8px rgba(0,20,50,.6); }
+#menu li small { display:block; font-size:13px; font-weight:400; color:rgba(255,255,255,.7); margin-top:2px; letter-spacing:.02em; overflow-wrap:anywhere; }
+#menu .sheet { margin-top:clamp(12px, 3vh, 26px); max-width:440px; font-size:clamp(13px, 2.4vh, 15px); line-height:1.5; color:rgba(255,255,255,.92); text-shadow:0 1px 8px rgba(0,20,50,.6); }
 #menu .sheet b { color:#fff; } #menu .sheet kbd { font:700 12px "Inter Tight",system-ui,sans-serif; background:#fff; color:#10151f; padding:1px 6px; border-radius:2px; margin-right:6px; }
-#menu .sheet .confirm { display:flex; gap:10px; }
+#menu .sheet .confirm { display:flex; flex-wrap:wrap; gap:10px; }
 #menu .sheet button { font:600 14px "Inter Tight",system-ui,sans-serif; color:#fff; background:rgba(10,20,40,.35); border:1px solid rgba(255,255,255,.7); padding:7px 12px 7px 8px; cursor:pointer; }
 #menu .sheet button:hover { background:#fff; color:#10151f; }
 #menu .sheet table { border-collapse:collapse; } #menu .sheet td { padding:3px 18px 3px 0; vertical-align:top; }
-#menu .foot { position:absolute; left:clamp(24px, 7.5vw, 144px); bottom:28px; right:16px; font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:rgba(255,255,255,.7); text-shadow:0 1px 6px rgba(0,20,50,.6); }
+#menu .foot { position:absolute; left:clamp(16px, 7.5vw, 144px); bottom:clamp(10px, 3vh, 28px); right:16px; height:var(--foot-h); line-height:var(--foot-h); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:rgba(255,255,255,.7); text-shadow:0 1px 6px rgba(0,20,50,.6); }
 body.in-menu .hud, body.in-menu #hint { display:none !important; }
 @media (max-width:640px) { #menu { background:linear-gradient(180deg, rgba(8,14,26,.6) 0%, rgba(8,14,26,.3) 55%, rgba(8,14,26,0) 80%); } }
 `;

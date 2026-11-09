@@ -76,9 +76,13 @@ const CSS = /* css */ `
 .hud-panel.talk .tp-acts > :only-child { grid-column:1 / -1; text-align:center; }
 .hud-panel.trade { --pt:150px; top:var(--pt); bottom:24px; margin:auto 0; height:fit-content; width:min(400px, calc(100vw - 48px)); max-height:calc(100vh - var(--pt) - 24px); }
 .hud-panel.trade.left { left:clamp(24px, 6vw, 96px); }
+/* a card (welcome, notebook, reports) covers the centre: the objective and corner pills step back behind it */
+body.card-open .hud-obj, body.card-open .hud-prompt, body.card-open .hud-hint, body.card-open .hud-mark, body.card-open .hud-tip { display:none !important; }
 body.panel-open .hud-prompt, body.panel-open .hud-hint, body.panel-open .hud-acct, body.panel-open .hud-mark, body.panel-open .hud-tip { display:none !important; }
 @media (max-width:760px), (max-height:520px) {
-  .hud-panel.trade, .hud-panel.talk { left:0 !important; right:0 !important; top:auto; bottom:12px; margin:0 auto; height:auto; width:min(520px, calc(100vw - 24px)); max-height:calc(100vh - 104px); --pt:0px; }
+  .hud-panel.trade, .hud-panel.talk { left:0 !important; right:0 !important; top:auto; bottom:12px; margin:0 auto; height:auto; width:min(520px, calc(100vw - 24px)); max-height:calc(100vh - 76px); --pt:0px; }
+  /* the panel sits over where the objective is: it steps aside while a panel is open (like the prompt and account) */
+  body.panel-open .hud-obj { display:none !important; }
   .hud-panel .tp-acts { position:sticky; bottom:0; background:var(--paper); padding:10px 14px 14px; gap:6px; box-shadow:0 -8px 12px -10px rgba(24,36,60,.25); }
   .hud-panel .tp-acts .full { grid-column:auto; } .hud-panel .tp-acts button { padding:9px 12px; } .hud-panel .tp-acts button small { display:none; }
   .hud-panel .tp-acts .tp-text { grid-column:1 / -1; padding:0; }
