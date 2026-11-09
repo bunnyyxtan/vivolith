@@ -6,6 +6,36 @@ The game was renamed from NEAR World to **VIVOLITH** on 2026-11-06 (identifiers 
 Status keys: NOT STARTED · IN PROGRESS · VERIFIED (evidence given) · BLOCKED (reason given) · ROADMAP.
 Deadline: 2026-11-14 23:59 UTC. Feature freeze target: 2026-11-13 12:00 UTC (rest = QA, recording, submission).
 
+## Market v3: fresh economy and verification (2026-11-09)
+
+The testnet ledger was reset in place (`scripts/near/reset-state.ts`). Before the reset it held 212 state keys: 46 balances
+across 13 guest accounts, 1 signed-in account, 4 merchants and the Guild, all test data. No NEAR account was touched.
+Contract v3 (`contracts/market`) was then deployed. The rules, with proofs, are in [ECONOMY_MATH.md](ECONOMY_MATH.md).
+
+| Item | Status | Evidence |
+|---|---|---|
+| Shares: 300 floated, never sold out, reserve-backed buyback, no forced buyouts | VERIFIED | Unit tests (issue past 300, sell back with an empty till or a closed stall); testnet invest and sell-back (`e2e.ts`); `audit.reserve_ok` live |
+| Dividends: exact, nothing lost on sale | VERIFIED | Integer-model test (error ≤ 10^-17 coin); randomized 2,000-move ledger; testnet claim of 1 c with 0.35 c carried |
+| No shareholder limit, bounded storage | VERIFIED | 300-holder test; 198 B per registration, ≤ 5.1 KB per active player (measured in tests) |
+| Guild loans as debt, repaid before dues, never past 200 c | VERIFIED | Unit tests; live audit 2026-11-09: 185 c held + 36 c lent (21 c surplus from before the fix, see ECONOMY_MATH.md §8) |
+| Rent and settlement idempotent across relayer restarts | VERIFIED | Bug found in testing (repeated logs after restart); fixed by reading `last_rent` / `last_settled` from chain; rerun clean |
+| First day completable by any new player | VERIFIED | Two fresh guests in the browser, every step on chain, game purse = chain purse after each step; newcomer price gives +9 c on the first delivery |
+| Stale balance read could undo a confirmed trade in the UI | FIXED, VERIFIED | Ledger-epoch guard plus a wallet re-read every market turn; second playthrough matched the chain at every step |
+| Townsfolk sinking into tree pits, sliding feet at slow speed | FIXED, MEASURED | 0 sink events in 336 checks after the fix; planted-foot slip median 0.105 m/s at 1.1 m/s walking |
+| Cursor: hidden while exploring, free for panels, Esc releases, click resumes | VERIFIED in the Browser pane | The pane refuses pointer lock (`WrongDocumentError`), so there it uses soft look and edge turning (496° in 3 s). Pointer lock in a normal Chrome tab: not yet verified |
+| Google/email sign-in | NOT TESTED | Needs the owner's own login |
+
+**Performance** (1920x1080 canvas, RTX 3050, visible pane on a 120 Hz display, `requestAnimationFrame` intervals, 2026-11-09):
+
+| Segment | Avg fps | p99 | Worst frame | Frames over 20 ms |
+|---|---|---|---|---|
+| Walking the avenue, 8 s | 108.3 | 16.7 ms | 16.8 ms | 0 |
+| Running the avenue, 5 s (30.6 m) | 113.6 | 16.7 ms | 16.7 ms | 0 |
+| Market square, standing (17 townsfolk on screen) | 117.6 | 16.7 ms | 16.7 ms | 0 |
+| Walking through the market | 119.0 | 8.5 ms | 16.7 ms | 0 |
+
+GPU-synchronized frame in the market view: 5.3 ms median (`__v2.frameTime(60)`).
+
 ## Reality audit (2026-11-06)
 
 - **Works (verified in browser):** Three.js 0.187 + Vite 8 game; Blender-built Saltlight Row GLB (Poly Haven CC0 kit,
@@ -76,9 +106,9 @@ Deadline: 2026-11-14 23:59 UTC. Feature freeze target: 2026-11-13 12:00 UTC (res
 
 | Thing | Where it lives |
 |---|---|
-| Prices, stock, cash, rent, closures, fast-forward | Local deterministic simulation (`src/economy/`), saved in localStorage |
-| Deal receipts | **Live on NEAR testnet**: harbor-fee receipt sent by the dev relay (key read server-side from the legacy keychain, never bundled/logged) as `add_message` on `guestbook.near-examples.testnet`. Without an account the UI says "kept locally" |
-| NEP-245 items | ROADMAP (needs Rust toolchain approval) |
+| Prices, stock, cash, rent, closures, fast-forward | On NEAR (contract v3): balances, rent, closures, reopening, shares, dividends, Guild loans. Prices come from `src/economy/pricing.ts`, posted by each merchant's own key. The fast-forward week is a local forecast, labelled as such |
+| Deal receipts | **Live on NEAR testnet**: every trade is a transaction on `market.bunnyy-nearworld.testnet` with NEP-245 events and an explorer link; the last 20 per account are kept in `get_receipts`. Quest beats that move no value are labelled "story event" |
+| NEP-245 items | **Live on NEAR testnet**: coin, mango, lemon, lassi and `share:<stall>` in one NEP-245 contract (`contracts/market`); players sign with function-call keys through the relayer (no popups) |
 | NEAR Intents | Not used: no testnet (HACKATHON.md Q-007) |
 
 ## Next actions (in order)

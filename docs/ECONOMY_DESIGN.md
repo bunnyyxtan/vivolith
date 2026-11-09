@@ -3,6 +3,8 @@
 This extends [CREATIVE_DIRECTION.md](CREATIVE_DIRECTION.md). The concept, district, art direction
 and engine stay the same. This file defines how the economy reacts.
 
+The exact rules (formulas, invariants with proofs, and how to check them live) are in [ECONOMY_MATH.md](ECONOMY_MATH.md).
+
 ## What the track guidance changed
 
 | Area | Before | Now |
