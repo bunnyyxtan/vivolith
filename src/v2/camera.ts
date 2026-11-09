@@ -107,5 +107,5 @@ export function createCameraRig(aspect: number, yaw: number): CameraRig {
 /** Input that never moves the camera: snapping, and while a panel or menu has the cursor. */
 export const NO_INPUT: Input = {
   down: () => false, consumePress: () => false, takeLook: () => ({ dx: 0, dy: 0 }), takeWheel: () => 0, flush: () => undefined, locked: false,
-  ui: false, setUi: () => undefined, escapeReleasedLock: false,
+  ui: false, free: false, setUi: () => undefined, escapeReleasedLock: false,
 };

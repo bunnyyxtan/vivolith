@@ -1,4 +1,10 @@
 // Keyboard + mouse state. Listens on window so synthetic KeyboardEvents (tests) work.
+//
+// The cursor follows one state machine, so it is never in the wrong place:
+//   look  exploring: cursor hidden, the mouse turns the camera (pointer lock; until the browser grants it, a "soft"
+//         look hides the cursor and reads raw mouse motion, and the next key or click upgrades it to the lock)
+//   ui    a panel or menu is up: cursor visible, camera parked. Closing it returns to look, by itself.
+//   free  the player pressed Esc while exploring: cursor visible, camera parked. Clicking the game returns to look.
 export interface Input {
   down(code: string): boolean;
   /** true once per press */
@@ -11,59 +17,86 @@ export interface Input {
   readonly locked: boolean;
   /** A panel or menu is up: the cursor is free for its buttons and the mouse does not turn the camera. */
   readonly ui: boolean;
+  /** The player released the cursor with Esc while exploring (a click on the game takes it back). */
+  readonly free: boolean;
   /** Enter or leave UI mode. Entering frees the cursor; leaving returns to mouse-look. */
   setUi(on: boolean): void;
-  /** The Escape key of the current (or last) keydown only released pointer lock: it must not close anything. */
+  /** The Escape key of the current (or last) keydown only released the cursor: it must not close or open anything. */
   readonly escapeReleasedLock: boolean;
 }
 
 /** An Escape this soon after the browser drops pointer lock is the same press (the keydown can land either side). */
 const ESC_UNLOCK_MS = 250;
+const LOOK_CLASS = "vv-look";
 
 export function createInput(canvas: HTMLCanvasElement): Input {
   const held = new Set<string>();
   const pressed = new Set<string>();
   let dx = 0, dy = 0, wheel = 0, drag = false;
-  let ui = false;
+  let ui = true; // until the game says otherwise (the loading screen and title menu keep the cursor)
+  let free = false; // Esc released the cursor during exploration
   let releasingForUi = false; // our own exitPointerLock: not the player asking for the cursor
   let unlockedAt = -Infinity, escReleased = false;
-  const isLocked = () => document.pointerLockElement === canvas;
+  const isLocked = (): boolean => document.pointerLockElement === canvas;
+  /** Exploring without the lock yet: the cursor is hidden and raw motion turns the camera. */
+  const soft = (): boolean => !ui && !free && !isLocked();
+
+  const style = document.createElement("style");
+  // Soft look behaves like the lock: no cursor, and the HUD is click-through (a blind click lands on the game and
+  // takes the lock instead of opening a pill the player cannot see).
+  style.textContent = `body.${LOOK_CLASS}, body.${LOOK_CLASS} * { cursor: none !important; }
+body.${LOOK_CLASS} .hud, body.${LOOK_CLASS} .hud * { pointer-events: none !important; }`;
+  document.head.append(style);
+  const refresh = (): void => { document.body.classList.toggle(LOOK_CLASS, soft()); };
+
   const lock = (): void => {
-    // Browsers refuse without a recent gesture or right after an Esc release: the next canvas click locks instead.
+    // Browsers grant the lock only during a user gesture (and never on an Escape keydown). A refusal is fine: soft
+    // look covers it, and the next key or click asks again.
     try { void Promise.resolve(canvas.requestPointerLock?.()).catch(() => undefined); } catch { /* not allowed now */ }
   };
-
   const releaseForUi = (): void => { releasingForUi = true; document.exitPointerLock(); };
+
   let lockSeen = false; // lock state as of the last pointerlockchange: an Esc keydown can beat the event
   document.addEventListener("pointerlockchange", () => {
     lockSeen = isLocked();
-    // a lock granted late (requested just before a panel opened) must not hide the cursor over the panel
-    if (isLocked()) { if (ui) releaseForUi(); return; }
-    if (!releasingForUi) unlockedAt = performance.now();
-    releasingForUi = false;
+    if (isLocked()) {
+      free = false;
+      if (ui) releaseForUi(); // a lock granted late (requested just before a panel opened) must not hide the cursor
+    } else {
+      if (!releasingForUi) { unlockedAt = performance.now(); if (!ui) free = true; } // the player's Esc (or the browser)
+      releasingForUi = false;
+    }
+    refresh();
   });
   window.addEventListener("keydown", (e) => {
     // typing into a panel field (the share count) is not a hotkey: digits would press buttons, "-" change amounts
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable) && e.code !== "Escape") return;
     if (e.code === "Escape") {
-      escReleased = isLocked() || lockSeen || performance.now() - unlockedAt < ESC_UNLOCK_MS;
+      // Esc while exploring only releases the cursor: locked (the browser unlocks), just unlocked, or in soft look
+      escReleased = isLocked() || lockSeen || performance.now() - unlockedAt < ESC_UNLOCK_MS || soft();
+      if (soft()) { free = true; refresh(); }
       if (escReleased) return;
-    }
+    } else if (soft() && !e.repeat) lock(); // any key is a gesture: upgrade soft look to the real lock
     if (!held.has(e.code)) pressed.add(e.code);
     held.add(e.code);
     if (e.code === "Space") e.preventDefault();
   });
   window.addEventListener("keyup", (e) => held.delete(e.code));
   window.addEventListener("blur", () => { held.clear(); drag = false; });
-  canvas.addEventListener("click", () => { if (!ui && !isLocked()) lock(); });
+  // Clicking the game takes the cursor back (after Esc) or upgrades soft look; never while a panel is up.
+  canvas.addEventListener("click", () => {
+    if (ui || isLocked()) return;
+    free = false;
+    refresh();
+    lock();
+  });
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-  // Look: pointer lock when the browser grants it; otherwise any held mouse button drags the view
-  // (embedded panes often refuse pointer lock, which made the camera feel stuck).
+  // Embedded panes may refuse pointer lock for good: a held mouse button still drags the view.
   canvas.addEventListener("pointerdown", (e) => { if (ui) return; drag = true; canvas.setPointerCapture?.(e.pointerId); });
   window.addEventListener("pointerup", () => { drag = false; });
   window.addEventListener("mousemove", (e) => {
-    if (!ui && (isLocked() || drag)) { dx += e.movementX; dy += e.movementY; }
+    if (!ui && (isLocked() || drag || soft())) { dx += e.movementX; dy += e.movementY; }
   });
   canvas.addEventListener("wheel", (e) => { if (!ui) wheel += e.deltaY; e.preventDefault(); }, { passive: false });
 
@@ -75,15 +108,16 @@ export function createInput(canvas: HTMLCanvasElement): Input {
     flush() { pressed.clear(); dx = dy = 0; wheel = 0; },
     get locked() { return isLocked(); },
     get ui() { return ui; },
+    get free() { return free; },
     get escapeReleasedLock() { return escReleased; },
     setUi(on) {
       if (on === ui) return;
       ui = on;
       drag = false;
       dx = dy = wheel = 0;
-      // closing any panel returns to mouse-look, even after an Esc release (a refusal leaves the next click to lock)
-      if (on && isLocked()) releaseForUi();
-      else if (!on && !isLocked()) lock();
+      if (on) { if (isLocked()) releaseForUi(); }
+      else { free = false; if (!isLocked()) lock(); } // closing any panel returns to mouse-look by itself
+      refresh();
     },
   };
 }

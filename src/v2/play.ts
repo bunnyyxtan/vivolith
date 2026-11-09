@@ -330,7 +330,7 @@ export async function createPlay(game: Game): Promise<Play> {
   const ndc = new THREE.Vector2();
   const renderTip = (): void => {
     if (mode.kind !== "walk") { hud.tip.style.display = "none"; return; }
-    if (input.locked || mouse.x < 0) ndc.set(0, 0);
+    if (!input.free || mouse.x < 0) ndc.set(0, 0); // cursor hidden (locked or soft look): aim at the screen centre
     else ndc.set((mouse.x / innerWidth) * 2 - 1, -(mouse.y / innerHeight) * 2 + 1);
     ray.setFromCamera(ndc, rig.camera);
     ray.far = 14;
