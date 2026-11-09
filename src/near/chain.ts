@@ -98,7 +98,13 @@ const authClient = (): Auth0Client => {
 /** Social/email sign-in: one Auth0 popup (from a click or key press). If the browser blocks popups, the page
  *  redirects to NEAR Auth instead and finishSocialRedirect() completes it on return. The guest account is parked
  *  and restored on sign-out. */
-export async function signInSocial(): Promise<{ accountId: string; label: string; merged: boolean }> {
+export interface SignedIn { readonly accountId: string; readonly label: string; readonly merged: boolean; readonly linked: boolean }
+/** The verified email/Google identity already has an account and this browser's guest has progress: nothing changed;
+ *  the player chooses with chooseSignIn ("merge" the guest in, or "separate"). */
+export interface SignInConflict { readonly conflict: true; readonly existing: Record<string, number>; readonly guestHoldings: Record<string, number> }
+export type SignInResult = SignedIn | SignInConflict;
+
+export async function signInSocial(): Promise<SignInResult> {
   try {
     await authClient().loginWithPopup({ authorizationParams: { prompt: "login" } });
   } catch (e) {
@@ -110,7 +116,7 @@ export async function signInSocial(): Promise<{ accountId: string; label: string
 }
 
 /** Completes a redirect sign-in when the page loads with Auth0's ?code&state. Returns null if not returning. */
-export async function finishSocialRedirect(): Promise<{ accountId: string; label: string; merged: boolean } | null> {
+export async function finishSocialRedirect(): Promise<SignInResult | null> {
   const q = new URLSearchParams(location.search);
   if (!q.has("code") || !q.has("state")) return null;
   await chainStatus();
@@ -133,10 +139,14 @@ async function guestProof(idToken: string): Promise<{ accountId: string; publicK
   return { accountId, publicKey: key.getPublicKey().toString(), signature: btoa(String.fromCharCode(...signature)) };
 }
 
-async function finishSignIn(): Promise<{ accountId: string; label: string; merged: boolean }> {
+/** Completes a sign-in the player just made a choice about (after a SignInConflict), with the same login token. */
+export const chooseSignIn = (choice: "merge" | "separate"): Promise<SignInResult> => finishSignIn(choice);
+
+async function finishSignIn(choice: "merge" | "separate" | null = null): Promise<SignInResult> {
   const claims = await authClient().getIdTokenClaims();
   if (!claims?.__raw) throw new Error("sign-in was cancelled");
-  const r = await post("social", { idToken: claims.__raw, guest: await guestProof(claims.__raw) });
+  const r = await post("social", { idToken: claims.__raw, guest: await guestProof(claims.__raw), choice });
+  if (r.status === "conflict") return { conflict: true, existing: (r.existing ?? {}) as Record<string, number>, guestHoldings: (r.guestHoldings ?? {}) as Record<string, number> };
   if (r.status !== "onchain" || typeof r.accountId !== "string" || typeof r.sessionKey !== "string") throw new Error(String(r.message ?? "sign-in failed"));
   if (!store.get(GUEST_KEY_STORE) && store.get(KEY_STORE) && !store.get(LABEL_STORE)) { // park the guest
     store.set(GUEST_KEY_STORE, store.get(KEY_STORE)!);
@@ -146,7 +156,7 @@ async function finishSignIn(): Promise<{ accountId: string; label: string; merge
   store.set(ACCOUNT_STORE, r.accountId);
   store.set(LABEL_STORE, String(r.label || r.accountId.split(".")[0]));
   player = new Account(r.accountId, provider, new KeyPairSigner(KeyPair.fromString(r.sessionKey as KeyPairString)));
-  return { accountId: r.accountId, label: String(r.label || r.accountId.split(".")[0]), merged: Boolean(r.merged) };
+  return { accountId: r.accountId, label: String(r.label || r.accountId.split(".")[0]), merged: Boolean(r.merged), linked: Boolean(r.linked) };
 }
 
 /** Back to the guest account this browser had before signing in (its key never left the browser). */
@@ -183,6 +193,38 @@ export async function connectGuest(): Promise<string | null> {
   }
   player = new Account(accountId, provider, new KeyPairSigner(key));
   return accountId;
+}
+
+// ---------- cloud save: the story (quests, position, receipts list) for signed-in players, on any device ----------
+
+const hex = async (s: string): Promise<string> =>
+  Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s))), (b) => b.toString(16).padStart(2, "0")).join("");
+
+/** A request signed by this browser's key for the active account; the relayer checks NEAR has that key on the account. */
+async function signedForSave(data: string): Promise<Record<string, unknown> | null> {
+  const secret = store.get(KEY_STORE), accountId = store.get(ACCOUNT_STORE);
+  if (!secret || !accountId) return null;
+  const key = KeyPair.fromString(secret as KeyPairString), ts = Date.now();
+  const { signature } = key.sign(new TextEncoder().encode(`vivolith-save|${accountId}|${ts}|${await hex(data)}`));
+  return { account: accountId, publicKey: key.getPublicKey().toString(), ts, signature: btoa(String.fromCharCode(...signature)) };
+}
+
+/** Uploads the save of a signed-in player (guests' saves stay in their browser). True when stored. */
+export async function cloudPut(data: string): Promise<boolean> {
+  if (!store.get(LABEL_STORE)) return false;
+  const auth = await signedForSave(data);
+  if (!auth) return false;
+  const r = await post("save", { ...auth, data }).catch(() => null);
+  return r?.status === "saved";
+}
+
+/** The signed-in player's save from any device, or null. */
+export async function cloudGet(): Promise<{ data: string; ts: number } | null> {
+  if (!store.get(LABEL_STORE)) return null;
+  const auth = await signedForSave("");
+  if (!auth) return null;
+  const r = await post("load", auth).catch(() => null);
+  return r?.status === "found" && typeof r.data === "string" ? { data: r.data, ts: Number(r.ts) } : null;
 }
 
 export async function view<T>(method: string, args: Record<string, unknown> = {}): Promise<T> {

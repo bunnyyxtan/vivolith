@@ -16,7 +16,7 @@ import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
 import {
   EXPLORER_ACCOUNT, EXPLORER_TX, balances, buyPosted, sellPosted, connectGuest, haggleDeal, marketTick, merchantAccount, playerId, playerLabel, receipts as chainReceipts,
-  settleDay, claimDividends, onAccountChange, socialAvailable, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
+  settleDay, claimDividends, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
 } from "../near/chain";
 
 const GAME_MIN_PER_SEC = 2.4; // 09:00 -> 21:00 in five real minutes
@@ -178,7 +178,24 @@ export async function createPlay(game: Game): Promise<Play> {
       const b = player.body; // the physics body is authoritative; the visual root lags a frame behind it
       Object.assign(state.flags, { px: Math.round(b.x * 100) / 100, py: Math.round(b.y * 100) / 100, pz: Math.round(b.z * 100) / 100, ph: Math.round(player.heading * 1000) / 1000 });
     }
+    state.flags.savedAt = Date.now();
     saveGame(state);
+    queueCloud();
+  };
+  /** Signed in: the story follows the account to any device (uploaded at most every 20 s, and on signing out). */
+  let cloudTimer = 0, cloudDirty = false;
+  const queueCloud = (): void => {
+    if (!playerLabel()) return;
+    cloudDirty = true;
+    if (cloudTimer) return;
+    cloudTimer = window.setTimeout(() => { cloudTimer = 0; if (cloudDirty) { cloudDirty = false; void cloudPut(JSON.stringify(state)); } }, 20_000);
+  };
+  /** Swap this browser's story for another one (a signed-in account's cloud save, or the guest's own again): reloads. */
+  const GUEST_SAVE = "nearworld.save.guest";
+  const adoptSave = (json: string): void => {
+    resetting = true; // the reload's pagehide must not write the old story back
+    try { localStorage.setItem("nearworld.save.v1", json); } catch { /* storage blocked */ }
+    location.reload();
   };
   let autosaveIn = AUTOSAVE_SEC;
   const saveNow = (): void => { if (entered) save(); };
@@ -759,7 +776,12 @@ export async function createPlay(game: Game): Promise<Play> {
     hud.card.style.display = "block";
     hud.card.scrollTop = 0;
   };
+  /** Runs once if the open card is closed any other way than its own buttons (Esc): a choice card counts it as cancel. */
+  let onCardDismiss: (() => void) | null = null;
   const closeOverlay = (): void => {
+    const dismissed = onCardDismiss;
+    onCardDismiss = null;
+    dismissed?.();
     hud.card.style.display = "none";
     hud.back.style.display = "none";
     mode = { kind: "walk" };
@@ -1194,14 +1216,58 @@ export async function createPlay(game: Game): Promise<Play> {
     if (label) return; // signed in: sign-out is in the menu (Esc), behind a confirmation
     hud.acct.append(button(signingIn ? "Signing in…" : "Sign in", "primary", () => { void signIn(); }));
   };
+  /** The verified email already has an account and this browser's guest has progress: the player decides. */
+  const askConflict = (c: SignInConflict): Promise<"merge" | "separate" | "cancel"> => new Promise((done) => {
+    const sum = (h: Record<string, number>): string => {
+      const parts = [`${h.coin ?? 0} coins`];
+      for (const g of ["mango", "lemon", "lassi"]) if (h[g]) parts.push(`${h[g]} ${g}`);
+      const shares = Object.entries(h).filter(([t]) => t.startsWith("share:")).reduce((n, [, v]) => n + v, 0);
+      if (shares) parts.push(`${shares} shares`);
+      return parts.join(", ");
+    };
+    openCard((card) => {
+      card.append(el("h2", "", "This email already has a VIVOLITH account"));
+      const s = el("section");
+      s.append(el("p", "", `That account holds ${sum(c.existing)}. The guest game in this browser holds ${sum(c.guestHoldings)}.`));
+      s.append(el("p", "", "Nothing has moved. Choose what happens to the guest game:"));
+      card.append(s);
+      const pick = (v: "merge" | "separate" | "cancel"): void => { onCardDismiss = null; closeOverlay(); done(v); };
+      const acts = el("div", "tp-acts");
+      acts.append(
+        button("Move the guest game into that account (one starter purse is kept)", "primary", () => pick("merge"), "1"),
+        button("Sign in, and keep the guest game in this browser", "full", () => pick("separate"), "2"),
+        button("Stay a guest for now", "ghost full", () => pick("cancel"), "Esc"),
+      );
+      card.append(acts);
+    });
+    onCardDismiss = () => done("cancel"); // Esc: nothing changes
+  });
+  /** After any sign-in: the story stays (it is uploaded to the account), or the account's own story is restored. */
+  const afterSignIn = async (r: SignInResult): Promise<void> => {
+    if ("conflict" in r) {
+      const c = await askConflict(r);
+      if (c === "cancel") { hud.toast("Still playing as a guest. Nothing changed."); return; }
+      return afterSignIn(await chooseSignIn(c));
+    }
+    hud.toast(`Signed in as ${r.label}${r.merged ? ". Your guest progress came with you." : ""}`, true);
+    await syncPlayer(r.accountId);
+    renderAcct();
+    if (r.merged) { save(); await cloudPut(JSON.stringify(state)); return; } // this story is the account's story now
+    const cloud = await cloudGet();
+    if (cloud && cloud.data !== JSON.stringify(state)) {
+      try { localStorage.setItem(GUEST_SAVE, JSON.stringify(state)); } catch { /* storage blocked */ } // back on sign-out
+      hud.toast("Restoring this account's saved game…", true);
+      adoptSave(cloud.data);
+      return;
+    }
+    save(); await cloudPut(JSON.stringify(state)); // a first save for an account with none yet
+  };
   const signIn = async (): Promise<void> => {
     if (signingIn || playerLabel()) return;
     signingIn = true; renderAcct();
     save(); // a popup-blocked browser redirects to the login page and back: keep the market as it is
     try {
-      const r = await signInSocial();
-      hud.toast(`Signed in as ${r.label || r.accountId.split(".")[0]}${r.merged ? ". Your progress came with you." : ""}`, true);
-      await syncPlayer(r.accountId);
+      await afterSignIn(await signInSocial());
     } catch (e) {
       const msg = e instanceof Error ? e.message : "cancelled";
       if (!/redirecting/.test(msg)) hud.toast("Sign-in didn't finish. You're still playing as a guest.");
@@ -1210,8 +1276,12 @@ export async function createPlay(game: Game): Promise<Play> {
     }
   };
   const signOut = async (): Promise<void> => {
+    if (cloudDirty) { cloudDirty = false; await cloudPut(JSON.stringify(state)); } // the account keeps its latest story
     const id = await signOutSocial();
     renderAcct();
+    let parked: string | null = null;
+    try { parked = localStorage.getItem(GUEST_SAVE); localStorage.removeItem(GUEST_SAVE); } catch { /* storage blocked */ }
+    if (parked) { adoptSave(parked); return; } // this browser's own guest story, as it was before signing in
     if (id) { hud.toast("Signed out. Back to this browser's guest game."); await syncPlayer(id); }
   };
 
@@ -1224,17 +1294,25 @@ export async function createPlay(game: Game): Promise<Play> {
     const id = playerId();
     if (id) void syncPlayer(id);
   });
-  void finishSocialRedirect().then((r) => {
-    if (r) hud.toast(`Signed in as ${r.label || r.accountId.split(".")[0]}${r.merged ? ". Your progress came with you." : ""}`, true);
-    return r;
-  }).catch(() => {
+  // Boot: finish a returning sign-in redirect first, then restore whoever is signed in (never a new guest before that).
+  void finishSocialRedirect().catch(() => {
     hud.toast("Sign-in didn't finish. You're still playing as a guest.");
     return null;
-  }).then(() => connectGuest()).then(async (id) => {
+  }).then(async (redirected) => {
+    const id = await connectGuest();
     renderAcct();
     if (!id) return;
     void syncMerchants();
     await syncPlayer(id); // NEAR is authoritative: the save only mirrors what the account holds
+    if (redirected) { await afterSignIn(redirected); return; }
+    if (!playerLabel() || entered) return;
+    // Signed in on this device before, or on another one: the account's newest story wins (only before play starts).
+    const cloud = await cloudGet();
+    if (!cloud || entered) return;
+    let cloudAt = 0;
+    try { cloudAt = Number((JSON.parse(cloud.data) as EconomyState).flags.savedAt ?? 0); } catch { return; }
+    const localAt = Number(state.flags.savedAt ?? 0);
+    if (cloudAt > localAt || (state.flags.account !== id && state.flags.played !== true)) adoptSave(cloud.data);
   });
 
   const play: Play = {

@@ -51,6 +51,12 @@ custody balance. Coin supply is exactly the mints minus the burns, readable at a
   - A new account counts against a per-address limit of 5 an hour (repeats and refused attempts do not count).
   - A signed-in account can absorb at most 3 guests' progress per 30 days. Guests cannot transfer coin themselves
     (their keys are limited to buy, sell and deal).
+- **Signing in keeps one purse:**
+  - A guest that signs in with a new email or Google identity moves into that identity's account in one atomic
+    transaction (register, move, burn the new account's own purse). The coin supply is unchanged (checked by
+    `scripts/near/link-check.ts`).
+  - An identity that already has an account takes in a guest only with the player's explicit consent. The merge then
+    burns up to one purse (40 c) of the guest's coin.
 - **Ceiling on farming:** 5 accounts × 40 c = 200 c of in-game coin per address per hour, with no monetary value.
   Merging it into one account is capped at 120 c a month.
 

@@ -64,6 +64,7 @@ const LIMITS = {
   // per signed-in account: guests whose progress (and starter purse) may merge into it. Each new guest gets the
   // starter grant once; this keeps "make guests, merge them into one account" from multiplying it.
   merge: { max: 3, windowSec: 30 * 24 * 3600 },
+  save: { max: 20, windowSec: 60 }, // per account: cloud save reads and writes
 } as const;
 
 export function readConfig(env: RelayEnv): Config {
@@ -118,6 +119,18 @@ async function hit(cfg: Config, bucket: string, max: number, windowSec: number):
   return e.n <= max;
 }
 
+const kvMemory = new Map<string, string>();
+/** GET / SET one value: Upstash Redis REST when configured (persistent), else per-instance memory (dev only). */
+async function kv(cfg: Config, cmd: ["GET", string] | ["SET", string, string]): Promise<string | null> {
+  if (cfg.redisUrl && cfg.redisToken) {
+    const r = await fetch(cfg.redisUrl, { method: "POST", headers: { authorization: `Bearer ${cfg.redisToken}`, "content-type": "application/json" }, body: JSON.stringify(cmd) });
+    if (!r.ok) throw new HttpError(503, "save storage unavailable");
+    return ((await r.json()) as { result: string | null }).result;
+  }
+  if (cmd[0] === "SET") { kvMemory.set(cmd[1], cmd[2]); return "OK"; }
+  return kvMemory.get(cmd[1]) ?? null;
+}
+
 // ---------- helpers ----------
 
 const json = (status: number, body: unknown): Response =>
@@ -125,9 +138,9 @@ const json = (status: number, body: unknown): Response =>
 
 const clientIp = (req: Request): string => (req.headers.get("x-forwarded-for") ?? "local").split(",")[0].trim().slice(0, 64);
 
-async function readJson(req: Request): Promise<Record<string, unknown>> {
+async function readJson(req: Request, max = MAX_BODY): Promise<Record<string, unknown>> {
   const raw = await req.text();
-  if (raw.length > MAX_BODY) throw new HttpError(413, "body too large");
+  if (raw.length > max) throw new HttpError(413, "body too large");
   try {
     const v = JSON.parse(raw || "{}") as unknown;
     if (typeof v !== "object" || v === null || Array.isArray(v)) throw new Error();
@@ -424,54 +437,141 @@ function guestFromProof(link: GuestLink, idToken: string, cfg: Config): string |
   }
 }
 
-/** Signs a player in with Google or email. The verified identity always maps to the same game account, created on
- *  first sign-in with a function-call session key for buy/sell/deal (derived per identity, so every device gets the
- *  same key). If the browser proves it owns a guest account, the guest's coins, goods and shares move into it. */
+/** Contract STARTER_COIN: what register_player mints, once per account. */
+const STARTER = 40;
+
+type Holdings = Record<string, number>;
+const holdingsOf = async (provider: JsonRpcProvider, cfg: Config, accountId: string): Promise<Holdings> =>
+  Object.fromEntries((await view<[string, string][]>(provider, cfg.contractId, "get_balances", { account_id: accountId })).map(([t, v]) => [t, Number(v)]));
+/** A guest that has done nothing yet holds exactly its starter purse. */
+const untouched = (h: Holdings): boolean => Object.keys(h).every((t) => t === "coin") && (h.coin ?? 0) === STARTER;
+
+/** Signs a player in with Google or email. The verified identity always maps to the same game account, whose
+ *  function-call session key is derived from the identity, so the same account and key are recovered on any device.
+ *
+ *  A browser that proves it owns a guest account (a signature over this very login token) brings that guest along:
+ *  - The identity has no account yet: one transaction registers it, moves everything the guest holds into it and
+ *    burns the new account's own starter purse, so the player keeps exactly the guest's holdings and one purse in all.
+ *    The transaction is atomic: an interrupted sign-in leaves the guest untouched, and a retry runs it again.
+ *  - The identity already has an account and the guest has progress: nothing moves until the player chooses
+ *    (`choice`): "merge" moves the guest in (one starter purse is burned, so the player still has one in all),
+ *    "separate" signs in and leaves the guest in this browser, anything else changes nothing and returns `conflict`.
+ *    Only the browser holding the guest key can make that choice (the proof is bound to the login token). */
 async function social(cfg: Config, req: Request, env: RelayEnv): Promise<Response> {
   if (!cfg.auth0Domain || !cfg.auth0ClientId) throw new HttpError(503, "sign-in is not configured");
   if (!(await hit(cfg, `social:${clientIp(req)}`, LIMITS.social.max, LIMITS.social.windowSec))) throw new HttpError(429, "too many sign-ins from this address, try later");
   const body = await readJson(req);
   if (typeof body.idToken !== "string" || body.idToken.length > 4000) throw new HttpError(400, "idToken required");
   const claims = await verifyIdToken(body.idToken, cfg);
-  const identity = identityOf(claims);
   const secret = (env.NEAR_MERCHANT_SECRET ?? "").trim();
   if (!secret) throw new HttpError(503, "session keys not configured");
+  const guestId = guestFromProof(body.guest as GuestLink, body.idToken, cfg);
+  const r = await linkIdentity(cfg, req, identityOf(claims), secret, guestId, typeof body.choice === "string" ? body.choice : null);
+  if (r.status === "conflict") return json(409, r);
+  return json(200, { ...r, label: (claims.email ?? claims.name ?? "").slice(0, 80) });
+}
+
+/** The sign-in after the login token was verified (exported for the testnet link check, scripts/near/link-check.ts). */
+export async function linkIdentity(cfg: Config, req: Request, identity: string, secret: string, guestId: string | null, choice: string | null): Promise<Record<string, unknown>> {
   const { provider, relayer } = account(cfg);
   const session = keyPairFromSeed(createHash("sha256").update(`vivolith-session:${identity}:${secret}`).digest());
   const accountId = `s${createHash("sha256").update(`vivolith-account:${identity}`).digest("hex").slice(0, 16)}.${cfg.relayerId}`;
+  const signedIn = (extra: Record<string, unknown>): Record<string, unknown> => ({ status: "onchain", accountId, sessionKey: session.toString(), ...extra });
+  const txs: string[] = [];
   const exists = await provider.viewAccount({ accountId, finality: "final" }).then(() => true, () => false);
   const registered = exists && (await view<boolean>(provider, cfg.contractId, "is_registered", { account_id: accountId }));
-  if (registered) return json(200, { status: "onchain", accountId, txHashes: [] }); // a repeat: nothing to create or grant
-  // Only a new account (an account, NEAR for its key, and a starter purse) counts against the per-address limit.
-  if (!(await hit(cfg, `guest:${clientIp(req)}`, LIMITS.guest.max, LIMITS.guest.windowSec))) throw new HttpError(429, "too many new players from this address, try later");
-  const txs: string[] = [];
+  const guest = guestId && guestId !== accountId && (await view<boolean>(provider, cfg.contractId, "is_registered", { account_id: guestId })) ? guestId : null;
+  // One mutating link per guest at a time: two tabs or a double click can never move or burn twice (the contract's
+  // transactions are atomic; this stops two of them racing on the same guest).
+  const lockGuest = async (): Promise<void> => {
+    if (!(await hit(cfg, `link:${guest}`, 1, 30))) throw new HttpError(409, "sign-in already in progress, try again in a moment");
+  };
+
   if (!exists) {
+    if (!(await hit(cfg, `guest:${clientIp(req)}`, LIMITS.guest.max, LIMITS.guest.windowSec))) throw new HttpError(429, "too many new players from this address, try later");
     const r = outcome(await relayer.signAndSendTransaction({
       receiverId: accountId,
       actions: [actions.createAccount(), actions.transfer(nearToYocto(GUEST_FUNDING)), actions.addFunctionCallAccessKey(session.getPublicKey(), cfg.contractId, [...PLAYER_METHODS])],
       throwOnFailure: false,
     }));
-    if (!r.ok) return json(502, { status: "failed", message: r.error });
+    if (!r.ok) return { status: "failed", message: r.error };
     txs.push(r.txHash);
   }
-  if (!(await view<boolean>(provider, cfg.contractId, "is_registered", { account_id: accountId }))) {
-    const r = outcome(await relayer.callFunctionRaw({ contractId: cfg.contractId, methodName: "register_player", args: { account_id: accountId }, gas: MAX_GAS }));
-    if (!r.ok) return json(502, { status: "failed", message: r.error });
+
+  if (!registered) {
+    // First sign-in for this identity. With a guest: register + move the guest in + burn the new purse, atomically.
+    const calls = [actions.functionCall("register_player", { account_id: accountId }, MAX_GAS, 0n)];
+    if (guest) {
+      await lockGuest();
+      calls.push(actions.functionCall("migrate_player", { from: guest, to: accountId }, MAX_GAS, 0n));
+      calls.push(actions.functionCall("operator_burn", { account_id: accountId, token_id: "coin", amount: String(STARTER), reason: "one starter purse per player: the guest's came along" }, MAX_GAS, 0n));
+    }
+    const r = outcome(await relayer.signAndSendTransaction({ receiverId: cfg.contractId, actions: calls, throwOnFailure: false }));
+    if (!r.ok) return { status: "failed", message: r.error };
     txs.push(r.txHash);
+    return signedIn({ merged: guest, linked: Boolean(guest), txHashes: txs });
   }
-  let merged: string | null = null;
-  const guest = guestFromProof(body.guest as GuestLink, body.idToken, cfg);
-  const canMerge = guest && guest !== accountId && (await view<boolean>(provider, cfg.contractId, "is_registered", { account_id: guest }));
-  if (canMerge && (await hit(cfg, `merge:${accountId}`, LIMITS.merge.max, LIMITS.merge.windowSec))) {
-    const r = outcome(await relayer.signAndSendTransaction({
-      receiverId: cfg.contractId,
-      actions: [actions.functionCall("migrate_player", { from: guest, to: accountId }, MAX_GAS, 0n)],
-      throwOnFailure: false,
-    }));
-    if (r.ok) { merged = guest; txs.push(r.txHash); }
+
+  // The identity already has an account.
+  if (!guest) return signedIn({ merged: null, txHashes: txs });
+  const g = await holdingsOf(provider, cfg, guest);
+  if (Object.keys(g).length === 0) return signedIn({ merged: null, txHashes: txs }); // nothing left in it (moved before)
+  if (untouched(g) || choice === "separate") return signedIn({ merged: null, keptGuest: guest, txHashes: txs });
+  if (choice !== "merge") {
+    // Never merge without the player's say: describe both sides and change nothing.
+    return { status: "conflict", accountId, guest, existing: await holdingsOf(provider, cfg, accountId), guestHoldings: g };
   }
-  const label = (claims.email ?? claims.name ?? "").slice(0, 80);
-  return json(200, { status: "onchain", accountId, sessionKey: session.toString(), label, merged, txHashes: txs });
+  if (!(await hit(cfg, `merge:${accountId}`, LIMITS.merge.max, LIMITS.merge.windowSec))) throw new HttpError(429, "this account has taken in enough guest games for now");
+  await lockGuest();
+  const calls = [actions.functionCall("migrate_player", { from: guest, to: accountId }, MAX_GAS, 0n)];
+  const burn = Math.min(STARTER, g.coin ?? 0); // two accounts, one player: one starter purse
+  if (burn > 0) calls.push(actions.functionCall("operator_burn", { account_id: accountId, token_id: "coin", amount: String(burn), reason: "one starter purse per player: merged a guest" }, MAX_GAS, 0n));
+  const r = outcome(await relayer.signAndSendTransaction({ receiverId: cfg.contractId, actions: calls, throwOnFailure: false }));
+  if (!r.ok) return { status: "failed", message: r.error };
+  txs.push(r.txHash);
+  return signedIn({ merged: guest, txHashes: txs });
+}
+
+// ---------- cloud save (story progress for signed-in players, readable on any device) ----------
+
+const SAVE_MAX = 256 * 1024;
+const SAVE_SKEW_MS = 10 * 60 * 1000;
+
+/** The request is signed by a key that NEAR shows on `account` (its session or guest key, limited to our contract):
+ *  only whoever holds that account's key can read or write its save. */
+async function saveAuth(cfg: Config, b: Record<string, unknown>, data: string): Promise<string> {
+  const accountId = String(b.account ?? ""), publicKey = String(b.publicKey ?? ""), ts = Number(b.ts), sig = String(b.signature ?? "");
+  const suffix = `.${cfg.relayerId}`;
+  if (!accountId.endsWith(suffix) || !/^[gs][0-9a-f]{16}$/.test(accountId.slice(0, -suffix.length))) throw new HttpError(400, "not a game account");
+  if (!Number.isFinite(ts) || Math.abs(Date.now() - ts) > SAVE_SKEW_MS) throw new HttpError(401, "stale request");
+  let pk: PublicKey;
+  try { pk = PublicKey.fromString(publicKey); } catch { throw new HttpError(400, "invalid public key"); }
+  const msg = `vivolith-save|${accountId}|${ts}|${createHash("sha256").update(data).digest("hex")}`;
+  let ok = false;
+  try { ok = pk.verify(new TextEncoder().encode(msg), Buffer.from(sig, "base64")); } catch { ok = false; }
+  if (!ok) throw new HttpError(401, "bad signature");
+  const { provider } = account(cfg);
+  const key = await provider.viewAccessKey({ accountId, publicKey: pk, finality: "final" }).catch(() => null) as { permission?: unknown } | null;
+  const perm = key?.permission as { FunctionCall?: { receiver_id?: string } } | string | undefined;
+  if (!key || typeof perm !== "object" || perm?.FunctionCall?.receiver_id !== cfg.contractId) throw new HttpError(403, "key does not belong to this account");
+  if (!(await hit(cfg, `save:${accountId}`, LIMITS.save.max, LIMITS.save.windowSec))) throw new HttpError(429, "slow down");
+  return accountId;
+}
+
+async function cloudSave(cfg: Config, req: Request): Promise<Response> {
+  const b = await readJson(req, SAVE_MAX + 2048);
+  const data = typeof b.data === "string" ? b.data : "";
+  if (!data || data.length > SAVE_MAX) throw new HttpError(400, "save missing or too large");
+  const accountId = await saveAuth(cfg, b, data);
+  await kv(cfg, ["SET", `vivolith:save:${accountId}`, JSON.stringify({ data, ts: Number(b.ts) })]);
+  return json(200, { status: "saved" });
+}
+
+async function cloudLoad(cfg: Config, req: Request): Promise<Response> {
+  const b = await readJson(req);
+  const accountId = await saveAuth(cfg, b, "");
+  const v = await kv(cfg, ["GET", `vivolith:save:${accountId}`]);
+  return json(200, v ? { status: "found", ...(JSON.parse(v) as { data: string; ts: number }) } : { status: "none" });
 }
 
 // ---------- the merchants' autonomous turn ----------
@@ -730,6 +830,8 @@ export async function handle(route: string, req: Request, env: RelayEnv): Promis
     if (route === "social") return await social(cfg, req, env);
     if (route === "claim") return await claim(cfg, req);
     if (route === "register") return await register(cfg, req);
+    if (route === "save") return await cloudSave(cfg, req);
+    if (route === "load") return await cloudLoad(cfg, req);
     return json(404, { status: "error", message: "unknown route" });
   } catch (e) {
     if (e instanceof HttpError) return json(e.status, { status: "error", message: e.message });
