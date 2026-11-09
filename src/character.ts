@@ -331,8 +331,11 @@ export async function loadCharacter(url: string, height: number, clipSource?: st
       runA.setEffectiveWeight(w * r * locoWeight);
       // stride matched to ground speed (no sliding); both clips advance on one phase. The blended feet cover the
       // blended distance per cycle, so the rate is speed over that distance (summing the two rates ran ~8% fast).
+      // Below 80% of the walk speed the idle blend shrinks every stride to w of its length (feet sit between the
+      // idle stance and the walk pose), so the cadence is speed / (w * cycle): a steady step rate with shorter
+      // steps. The old floor of 35% of the walk speed stepped too slowly and slid the feet at every slow turn.
       const cycle = (1 - r) * walkGait.natural * walk!.duration + r * runGait.natural * run!.duration;
-      phaseRate = Math.max(speed, walkGait.natural * 0.35) / cycle;
+      phaseRate = speed / (cycle * Math.max(w, 1e-3));
       walkA.timeScale = 0; runA.timeScale = 0; // driven by phase in update()
       return;
     }

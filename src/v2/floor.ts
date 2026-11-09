@@ -5,7 +5,9 @@ import * as THREE from "three";
 import type { Footprint } from "../character";
 
 /** Meshes people walk on (by name), and never furniture or awnings. */
-const WALKWAY = /(brick|paver|curb|paint|asphalt|promenade|floor|walk|deck|plaza|lawn|grass|step|tile|road|path)/i;
+/** Soil and stone are the tops of tree pits and low flower beds: people crossing one stand on it, never sunk into it
+ *  (MAX_STEP still ignores the raised planters, which have colliders). */
+const WALKWAY = /(brick|paver|curb|paint|asphalt|promenade|floor|walk|deck|plaza|lawn|grass|step|tile|road|path|soil|stone)/i;
 const NOT_WALKWAY = /(bench|fabric|stall|roof|wall|canopy|awning|planter|outline)/i;
 /** A visible floor counts only this close above the collision ground (higher means a bench, a stall, a roof). */
 const MAX_STEP = 0.35;
