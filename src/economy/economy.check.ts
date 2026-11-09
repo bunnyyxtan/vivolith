@@ -1,7 +1,7 @@
 // Run: node src/economy/economy.check.ts   (asserts the Mango Crisis economics hold)
 import assert from "node:assert/strict";
 import { initialEconomy } from "./state.ts";
-import { advance, challengeStandingContract, payReleaseFee, pemaBuysFromTomas, recordRestock, reopenGap, teahouseForwardBuy, tryReopen } from "./sim.ts";
+import { advance, challengeStandingContract, invest, payReleaseFee, pemaBuysFromTomas, recordRestock, reopenGap, sellShares, shareSupply, teahouseForwardBuy, tryReopen } from "./sim.ts";
 import { bidFor, quote } from "./pricing.ts";
 
 // 0. A closed stall still bids for stock, and reopens the moment deliveries cover the gap (not before).
@@ -82,6 +82,41 @@ advance(a, hours(24 * 7));
 for (let i = 0; i < 7 * 24 * 6; i++) advance(b, 10); // same span, different step size
 assert.deepEqual(JSON.stringify(a.merchants), JSON.stringify(b.merchants));
 assert.ok(a.history.length >= 6, "daily history recorded");
+
+// 5. Shares and dividends follow the contract's rules (docs/ECONOMY_MATH.md).
+const inv = initialEconomy();
+inv.player.coins = 500;
+const till0 = inv.merchants.pema.cash;
+assert.ok(invest(inv, "pema", 75).ok);
+assert.equal(inv.player.coins, 500 - 25, "5 c a pack of 15");
+assert.equal(inv.merchants.pema.cash, till0 + 5, "1 c a pack is working capital");
+assert.equal(inv.flags["reserve.pema"], 20, "4 c a pack is held in reserve");
+assert.equal(invest(inv, "pema", 10).ok, false, "whole packs only");
+// dividends: 25% of the stall, 60 c revenue a day -> 30 declared -> 7.5 c: 7 now, the half carried, 15 over two days
+inv.merchants.pema.cash = 1000;
+for (const day of [1, 2]) {
+  inv.flags["rev.pema"] = 60;
+  const coins = inv.player.coins;
+  inv.minute = day * 24 * 60 - 30; // 23:30, shops shut: only the midnight settlement runs
+  advance(inv, 30);
+  assert.equal(inv.player.coins - coins, day === 1 ? 7 : 8, `day ${day}: exact pro rata with the fraction carried`);
+}
+// odd revenue: the half coin of the declaration carries too
+inv.flags["rev.pema"] = 3;
+inv.minute = 3 * 24 * 60 - 30;
+advance(inv, 30);
+assert.equal(inv.flags["revRem.pema"], 5_000, "1.5 c declared: 1 now, half carried in basis points");
+// selling back pays exactly the backing, whatever the till holds
+inv.merchants.pema.cash = 0;
+const c0 = inv.player.coins;
+assert.ok(sellShares(inv, "pema", 30).ok);
+assert.equal(inv.player.coins - c0, 8);
+assert.equal(inv.flags["reserve.pema"], 12);
+// past the float, new shares are issued on the same terms: investing never sells out
+const big = initialEconomy();
+big.player.coins = 10_000;
+for (let i = 0; i < 25; i++) assert.ok(invest(big, "tomas", 15).ok);
+assert.equal(shareSupply(big, "tomas"), 375);
 
 console.log("economy checks passed", {
   idleClosedWithCash: idle.merchants.pema.cash,

@@ -1,6 +1,7 @@
-// End-to-end relayer check against testnet, exercising the same handlers the browser hits:
-// guest account -> haggled deal signed by Pema -> player's meta-transaction relayed -> balances on both sides change.
-// Also checks that a forbidden method is refused. Run: node scripts/near/e2e.ts
+// End-to-end check against testnet through the same relayer handlers the browser hits, with real transactions:
+// two fresh guest accounts; a haggled deal signed by a merchant; posted buys; investing (reserve + till split); a
+// sale back at the backing; refused moves that must change nothing; dividends settled and claimed; a re-register of
+// an existing account; and the contract's own `audit` after every step. Run: node scripts/near/e2e.ts
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { Account, JsonRpcProvider, KeyPair, KeyPairSigner, actions, encodeSignedDelegate, teraToGas } from "near-api-js";
@@ -11,6 +12,7 @@ const env: RelayEnv = Object.fromEntries(
 );
 const cfg = readConfig(env);
 const provider = new JsonRpcProvider({ url: cfg.rpcUrl });
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 async function call(route: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
   const req = new Request(`http://localhost/api/near/${route}`, { method: body === undefined ? "GET" : "POST", body: body === undefined ? undefined : JSON.stringify(body) });
@@ -18,8 +20,26 @@ async function call(route: string, body?: unknown): Promise<{ status: number; bo
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 
+const view = async <T>(method: string, args: Record<string, unknown> = {}): Promise<T> =>
+  (await provider.callFunction({ contractId: cfg.contractId, method, args, finality: "final" })) as unknown as T;
 const balances = async (accountId: string): Promise<Record<string, number>> =>
-  Object.fromEntries(((await provider.callFunction({ contractId: cfg.contractId, method: "get_balances", args: { account_id: accountId }, finality: "final" })) as unknown as [string, string][]).map(([t, v]) => [t, Number(v)]));
+  Object.fromEntries((await view<[string, string][]>("get_balances", { account_id: accountId })).map(([t, v]) => [t, Number(v)]));
+/** Balances once "final" has caught up with a just-landed transaction (two equal reads 2 s apart). */
+async function settled(accountId: string): Promise<Record<string, number>> {
+  let prev = JSON.stringify(await balances(accountId));
+  for (let i = 0; i < 8; i++) {
+    await sleep(2000);
+    const next = JSON.stringify(await balances(accountId));
+    if (next === prev) return JSON.parse(next) as Record<string, number>;
+    prev = next;
+  }
+  return JSON.parse(prev) as Record<string, number>;
+}
+async function audit(step: string): Promise<void> {
+  const a = await view<{ ok: boolean; custody_ok: boolean; contract_coin: string; reserves_and_vaults: string; stalls: { merchant: string; reserve_ok: boolean; vault_ok: boolean }[] }>("audit");
+  assert.equal(a.ok, true, `audit failed after ${step}: ${JSON.stringify(a)}`);
+  console.log(`  audit ok after ${step}: contract holds ${a.contract_coin} c = reserves + vaults ${a.reserves_and_vaults} c`);
+}
 
 async function relayCall(player: Account, method: string, args: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }> {
   for (let i = 0; ; i++) {
@@ -28,54 +48,108 @@ async function relayCall(player: Account, method: string, args: Record<string, u
       return await call("relay", { signedDelegate: Buffer.from(encodeSignedDelegate(signedDelegate)).toString("base64") });
     } catch (e) {
       if (i >= 5) throw e; // a just-created access key can take a block or two to become visible
-      await new Promise((r) => setTimeout(r, 1500));
+      await sleep(1500);
     }
   }
 }
 
 const tx = (h: unknown): string => `https://testnet.nearblocks.io/txns/${String(h)}`;
 
+async function newGuest(): Promise<Account> {
+  const key = KeyPair.fromRandom("ed25519");
+  const guest = await call("guest", { publicKey: key.getPublicKey().toString() });
+  assert.equal(guest.status, 200, JSON.stringify(guest.body));
+  const accountId = String(guest.body.accountId);
+  console.log("guest", accountId, (guest.body.txHashes as string[]).map(tx).join(" "));
+  return new Account(accountId, provider, new KeyPairSigner(key));
+}
+
 const status = await call("status");
-console.log("status", status.body.configured, status.body.contractId, status.body.rateLimit);
 assert.equal(status.body.configured, true);
+console.log("status", status.body.contractId, status.body.rateLimit);
+await audit("opening");
 
-const key = KeyPair.fromRandom("ed25519");
-const guest = await call("guest", { publicKey: key.getPublicKey().toString() });
-assert.equal(guest.status, 200, JSON.stringify(guest.body));
-const accountId = String(guest.body.accountId);
-console.log("guest", accountId, (guest.body.txHashes as string[]).map(tx).join(" "));
-const player = new Account(accountId, provider, new KeyPairSigner(key));
-const pema = `pema.${cfg.relayerId}`;
+const [kavi, rin] = [await newGuest(), await newGuest()];
+const pema = `pema.${cfg.relayerId}`, tomas = `tomas.${cfg.relayerId}`;
+assert.equal((await settled(kavi.accountId)).coin, 25, "starter purse");
 
-const before = { you: await balances(accountId), pema: await balances(pema) };
-const signed = await call("deal", { merchant: "pema", side: "buy", token: "mango", qty: 1, unit: 15, player: accountId });
-assert.equal(signed.status, 200, JSON.stringify(signed.body));
-const dealt = await relayCall(player, "deal", signed.body.args as Record<string, unknown>);
-assert.equal(dealt.status, 200, JSON.stringify(dealt.body));
-console.log("deal (haggled 1 mango at 15 c, Pema-signed)", tx(dealt.body.txHash));
-
-const bought = await relayCall(player, "buy", { seller: pema, token_id: "lemon", qty: "2", max_price: "4" });
+// 1. Buy 3 mangoes from Tomas at his posted price (tutorial step 3).
+const offers = await view<{ merchant: string; token_id: string; side: string; qty: string; price: string }[]>("get_offers");
+const ask = offers.find((o) => o.merchant === "tomas" && o.token_id === "mango" && o.side === "ask");
+assert.ok(ask && Number(ask.qty) >= 3, "Tomas has mangoes on offer");
+const bought = await relayCall(kavi, "buy", { seller: tomas, token_id: "mango", qty: "3", max_price: ask.price });
 assert.equal(bought.status, 200, JSON.stringify(bought.body));
-console.log("buy (2 lemons at Pema's posted 4 c)", tx(bought.body.txHash));
+console.log(`buy 3 mangoes from Tomas at ${ask.price} c`, tx(bought.body.txHash));
 
-const after = { you: await balances(accountId), pema: await balances(pema) };
-console.log("you  ", JSON.stringify(before.you), "->", JSON.stringify(after.you));
-console.log("pema ", JSON.stringify(before.pema), "->", JSON.stringify(after.pema));
-assert.equal(after.you.coin, before.you.coin - 15 - 8);
-assert.equal(after.you.mango, 1);
-assert.equal(after.you.lemon, 2);
-assert.equal(after.pema.coin, before.pema.coin + 23);
-assert.equal(after.pema.mango, before.pema.mango - 1);
+// 2. A refused move changes nothing: price limit below the ask.
+const before = await settled(kavi.accountId);
+const refused = await relayCall(kavi, "buy", { seller: tomas, token_id: "mango", qty: "1", max_price: String(Number(ask.price) - 1) });
+assert.equal(refused.status, 422, JSON.stringify(refused.body));
+assert.deepEqual(await settled(kavi.accountId), before, "a failed trade moves nothing");
+console.log("refused (price limit):", refused.body.message, tx(refused.body.txHash));
 
-const tooCheap = await call("deal", { merchant: "pema", side: "buy", token: "mango", qty: 1, unit: 2, player: accountId });
-assert.equal(tooCheap.status, 409);
-console.log("lowball refused:", tooCheap.body.message);
+// 3. Deliver to Pema with a haggled deal she signs (tutorial step 4): 3 at 6 c.
+const signed = await call("deal", { merchant: "pema", side: "sell", token: "mango", qty: 3, unit: 6, player: kavi.accountId });
+assert.equal(signed.status, 200, JSON.stringify(signed.body));
+const dealt = await relayCall(kavi, "deal", signed.body.args as Record<string, unknown>);
+assert.equal(dealt.status, 200, JSON.stringify(dealt.body));
+console.log("deal: sold 3 mangoes to Pema at 6 c (Pema-signed)", tx(dealt.body.txHash));
+const replay = await relayCall(kavi, "deal", signed.body.args as Record<string, unknown>);
+assert.notEqual(replay.status, 200, "a signed deal is single use");
+console.log("replayed deal refused:", replay.body.message ?? replay.body.status);
+const stalls = await view<{ merchant: string; open: boolean }[]>("get_stalls");
+console.log("pema open after the delivery:", stalls.find((s) => s.merchant === "pema")?.open);
 
-const { signedDelegate } = await player.createSignedMetaTransaction({ receiverId: cfg.contractId, actions: [actions.functionCall("register_player", { account_id: accountId }, teraToGas("30"), 0n)], blockHeightTtl: 120 });
+// 4. Invest: 2 packs of Pema (5 c each: 4 c reserve, 1 c till), and Rin 1 pack of Tomas.
+const pemaBefore = await settled(pema);
+const inv = await relayCall(kavi, "buy", { seller: pema, token_id: "share:pema", qty: "30", max_price: "10" });
+assert.equal(inv.status, 200, JSON.stringify(inv.body));
+console.log("invest 30 Pema shares for 10 c", tx(inv.body.txHash));
+const inv2 = await relayCall(rin, "buy", { seller: tomas, token_id: "share:tomas", qty: "15", max_price: "10" });
+assert.equal(inv2.status, 200, JSON.stringify(inv2.body));
+console.log("invest 15 Tomas shares for 10 c", tx(inv2.body.txHash));
+const k1 = await settled(kavi.accountId);
+assert.equal(k1["share:pema"], 30);
+assert.equal((await settled(pema)).coin - pemaBefore.coin, 2, "1 c a pack to the till");
+await audit("investing");
+
+// 5. Sell one pack back: exactly the 4 c backing, whatever Pema's till holds.
+const sold = await relayCall(kavi, "sell", { buyer: pema, token_id: "share:pema", qty: "15", min_price: "4" });
+assert.equal(sold.status, 200, JSON.stringify(sold.body));
+const k2 = await settled(kavi.accountId);
+assert.equal(k2.coin - k1.coin, 4);
+assert.equal(k2["share:pema"], 15);
+console.log("sold 15 Pema shares back for 4 c", tx(sold.body.txHash));
+const oversell = await relayCall(kavi, "sell", { buyer: pema, token_id: "share:pema", qty: "30", min_price: "0" });
+assert.equal(oversell.status, 422);
+console.log("refused (selling shares not owned):", oversell.body.message);
+await audit("selling back");
+
+// 6. Dividends: settle today for every stall, then claim. What is owed comes from the contract's own view.
+const settle = await call("settle", {});
+console.log("settle", settle.status, settle.body.status, tx(settle.body.txHash));
+await sleep(3000);
+for (const who of [kavi, rin]) {
+  const owed = await view<{ merchant: string; shares: string; coins: string; fraction: string }[]>("get_pending", { account_id: who.accountId });
+  console.log(`  ${who.accountId.slice(0, 8)} owed:`, owed.filter((p) => p.shares !== "0" || p.coins !== "0").map((p) => `${p.merchant} ${p.coins} c + ${(Number(p.fraction) / 720720e18).toFixed(4)}`).join(", ") || "nothing");
+  const c = await call("claim", { account: who.accountId });
+  console.log(`  claim -> ${c.body.status} ${c.body.coins ?? ""}`, c.body.txHash ? tx(c.body.txHash) : "");
+}
+await audit("dividends");
+
+// 7. A stored account from before a market reset re-registers (idempotent) and a foreign one is refused.
+const again = await call("register", { accountId: kavi.accountId });
+assert.equal(again.status, 200, JSON.stringify(again.body));
+const foreign = await call("register", { accountId: "someone-else.testnet" });
+assert.equal(foreign.status, 400);
+console.log("re-register: existing account ok, foreign account refused:", foreign.body.message);
+
+// 8. A forbidden method is refused by the relayer before it reaches NEAR.
+const { signedDelegate } = await kavi.createSignedMetaTransaction({ receiverId: cfg.contractId, actions: [actions.functionCall("register_player", { account_id: kavi.accountId }, teraToGas("30"), 0n)], blockHeightTtl: 120 });
 const forbidden = await call("relay", { signedDelegate: Buffer.from(encodeSignedDelegate(signedDelegate)).toString("base64") });
 assert.equal(forbidden.status, 403);
 console.log("forbidden method refused:", forbidden.body.message);
 
-const receipts = (await provider.callFunction({ contractId: cfg.contractId, method: "get_receipts", args: { account_id: accountId }, finality: "final" })) as unknown as { kind: string; token_id: string; qty: string; price: string }[];
+const receipts = await view<{ kind: string; token_id: string; qty: string; price: string }[]>("get_receipts", { account_id: kavi.accountId });
 console.log("receipts on chain:", receipts.map((r) => `${r.kind} ${r.qty} ${r.token_id} @${r.price}`).join(", "));
 console.log("E2E OK");

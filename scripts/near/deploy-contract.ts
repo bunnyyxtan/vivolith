@@ -8,8 +8,11 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Account, JsonRpcProvider, KeyPairSigner, actions, nearToYocto, teraToGas, type KeyPairString } from "near-api-js";
+import { Account, JsonRpcProvider, actions, nearToYocto, teraToGas, type KeyPairString } from "near-api-js";
 import { MERCHANTS, merchantKey, type MerchantId } from "../../server/near/keys.ts";
+import { GUILD_FUND } from "../../server/near/handlers.ts";
+import { SHARE_PACK } from "../../src/economy/sim.ts";
+import { initialEconomy } from "../../src/economy/state.ts";
 
 const OWNER = "bunnyy-nearworld.testnet";
 const CONTRACT = `market.${OWNER}`;
@@ -27,13 +30,10 @@ const RULES: Record<MerchantId, string> = {
   arin: "Steady: wants reliable supply, pays a fair steady bid, keeps a buffer, avoids risk.",
 };
 
-/** Starting inventory: Pema is nearly out of mangoes, Tomas sits on a surplus, Mira has cash, Arin is balanced. */
-const SEED: Record<MerchantId, { mint: [string, number][]; asks: [string, number, number][]; bids: [string, number, number][] }> = {
-  pema: { mint: [["mango", 3], ["lemon", 12], ["coin", 20]], asks: [["mango", 3, 22], ["lemon", 12, 4], ["share:pema", 10, 5]], bids: [["mango", 20, 9]] },
-  tomas: { mint: [["mango", 40], ["coin", 30]], asks: [["mango", 40, 12], ["share:tomas", 6, 9]], bids: [] },
-  mira: { mint: [["coin", 150]], asks: [["share:mira", 6, 7]], bids: [["mango", 20, 6], ["lemon", 20, 2]] },
-  arin: { mint: [["mango", 10], ["lemon", 10], ["lassi", 12], ["coin", 60]], asks: [["lassi", 12, 6], ["share:arin", 6, 6]], bids: [["mango", 10, 8]] },
-};
+/** Opening stock and tills come from the game's own starting state (src/economy/state.ts), so the chain and the
+ *  offline sim start from the same city: Pema nearly out of mangoes, Tomas on a surplus, Mira with cash, Arin balanced.
+ *  Orders are not seeded: the first merchant turn (scripts/near/tick.ts) prices and posts them from pricing.ts. */
+const START = initialEconomy().merchants;
 
 function ownerKey(): KeyPairString {
   const file = path.join(os.homedir(), ".near-credentials", "testnet", `${OWNER}.json`);
@@ -85,7 +85,8 @@ async function main(): Promise<void> {
   console.log(`deployed code: ${deployed}`);
   const state = await market.getContractState().catch(() => ({ values: [] as unknown[] }));
   if (!state.values.some((v) => (v as { key: string }).key === Buffer.from("STATE").toString("base64"))) {
-    console.log(`init: ${txOf(await market.callFunctionRaw({ contractId: CONTRACT, methodName: "new", args: { operator: OWNER }, gas: GAS }))}`);
+    const args = { operator: OWNER, guild: `guild.${OWNER}`, guild_fund: String(GUILD_FUND) };
+    console.log(`init: ${txOf(await market.callFunctionRaw({ contractId: CONTRACT, methodName: "new", args, gas: GAS }))}`);
   }
 
   const secret = merchantSecret();
@@ -108,18 +109,14 @@ async function main(): Promise<void> {
       console.log(`created ${accountId}: ${txOf(r)}`);
     }
     if (known.has(id)) continue;
-    const seed = SEED[id];
     const dealKey = key.getPublicKey().toString();
-    await owner.callFunctionRaw({ contractId: CONTRACT, methodName: "add_merchant", args: { id, account_id: accountId, rule: RULES[id], deal_key: dealKey }, gas: GAS });
-    for (const [token_id, amount] of seed.mint) {
-      await owner.callFunctionRaw({ contractId: CONTRACT, methodName: "operator_mint", args: { account_id: accountId, token_id, amount: String(amount), reason: "opening stock" }, gas: GAS });
+    const { price, backing } = SHARE_PACK[id];
+    await owner.callFunctionRaw({ contractId: CONTRACT, methodName: "add_merchant", args: { id, account_id: accountId, rule: RULES[id], deal_key: dealKey, pack_price: String(price), pack_backing: String(backing) }, gas: GAS });
+    const start = START[id];
+    for (const [token_id, amount] of Object.entries(start.stock)) {
+      if (amount > 0) await owner.callFunctionRaw({ contractId: CONTRACT, methodName: "operator_mint", args: { account_id: accountId, token_id, amount: String(amount), reason: "opening stock" }, gas: GAS });
     }
-    const merchant = new Account(accountId, provider, new KeyPairSigner(key));
-    for (const [method, orders] of [["list", seed.asks], ["bid", seed.bids]] as const) {
-      for (const [token_id, qty, price] of orders) {
-        await merchant.callFunctionRaw({ contractId: CONTRACT, methodName: method, args: { token_id, qty: String(qty), price: String(price) }, gas: GAS });
-      }
-    }
+    await owner.callFunctionRaw({ contractId: CONTRACT, methodName: "seed_till", args: { merchant: id, amount: String(start.cash) }, gas: GAS });
     console.log(`merchant ${id} registered and stocked`);
   }
   console.log(`owner after: ${near(await owner.getBalance())} NEAR`);

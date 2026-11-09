@@ -22,3 +22,8 @@ lto = true
 debug = false
 panic = "abort"
 overflow-checks = true
+
+[features]
+# One-off maintenance build (scripts/near/reset-state.ts): adds a private `clean` that deletes raw state keys so a
+# market with too much state to delete can be reset in place. Never deployed as the market's final code.
+cleanup = []

@@ -22,8 +22,9 @@ export interface Quote {
   readonly factors: readonly PriceFactor[];
 }
 
-/** Share of a day's goods revenue a stall pays its shareholders (the contract uses the same 50%). */
-export const DIVIDEND_SHARE = 0.5;
+/** Share of a day's goods revenue a stall declares for its shareholders, in basis points (the contract's DIVIDEND_BPS). */
+export const DIVIDEND_BPS = 5_000;
+/** Shares each stall floats at launch (the contract's FLOAT); more are issued on the same terms once these are sold. */
 export const SHARES_PER_STALL = 300;
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));

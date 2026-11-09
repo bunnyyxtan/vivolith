@@ -8,15 +8,15 @@ import { createHud, el, type Hud } from "./hud";
 import { createGuide, DELIVERY_PRICE, GOALS, inTutorial, investTarget, STEPS, stepIndex, titleOf, tutorSeller, unlocked } from "./guide";
 import { loadGame, saveGame, clearSave } from "../economy/save";
 import { calibrateSoles } from "./soles";
-import { advance, invest, payReleaseFee, recordRestock, REOPEN_SHARE, reopenGap, SHARE_PACK, shareCost, tryReopen, UPGRADE_AT } from "../economy/sim";
-import { bidFor, quote, lassiPrice, stallPull, SHARES_PER_STALL, type Quote } from "../economy/pricing";
+import { advance, invest, MAX_PACKS, payReleaseFee, recordRestock, REOPEN_SHARE, reopenGap, sellShares, SHARE_PACK, shareCost, shareRefund, shareSupply, tryReopen, UPGRADE_AT } from "../economy/sim";
+import { bidFor, quote, lassiPrice, stallPull, type Quote } from "../economy/pricing";
 import { clockOf, dayOf, MERCHANT_IDS, MINUTES_PER_DAY, type EconomyState, type Good, type MerchantId, type Receipt } from "../economy/state";
 import { applyTactic, closeDeal, dealTotal, dealUnit, isLocked, lockKey, openHaggle, thoughts, tickPatience, modeFor, PERSONALITY, TACTICS, type HaggleSession, type Tactic } from "../economy/haggle";
 import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
 import {
   EXPLORER_ACCOUNT, EXPLORER_TX, balances, buyPosted, sellPosted, connectGuest, haggleDeal, marketTick, merchantAccount, playerId, playerLabel, receipts as chainReceipts,
-  settleDay, socialAvailable, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
+  settleDay, claimDividends, socialAvailable, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
 } from "../near/chain";
 
 const GAME_MIN_PER_SEC = 2.4; // 09:00 -> 21:00 in five real minutes
@@ -276,13 +276,18 @@ export async function createPlay(game: Game): Promise<Play> {
    *  once the chain has, `refused` explains a refusal (nothing was charged). Either way the wallet is then re-read
    *  from the chain, and an attempt with no final answer is settled by that re-read instead of a guess. */
   let inFlight = 0; // value moves sent this session and not yet answered
+  /** Bumped when a value move is sent and when it is answered: a chain read that started before either is stale (it
+   *  may predate the move) and is dropped, so a slow read can never undo a trade NEAR already confirmed. */
+  let ledgerEpoch = 0;
   const record = (kind: string, summary: string, tx: Promise<TxOutcome>, confirmed: () => void, refused: (message: string | null) => void): void => {
     const r: Receipt = { id: `${kind}-${state.minute}-${state.receipts.length}`, kind, minute: state.minute, summary, status: "pending" };
     state.receipts.push(r);
     inFlight++;
+    ledgerEpoch++;
     nearNote((n) => n.append(document.createTextNode("Processing on NEAR…")));
     void tx.then((o) => {
       inFlight--;
+      ledgerEpoch++;
       Object.assign(r, { status: o.status === "unknown" ? "unconfirmed" : o.status, txHash: o.txHash, message: o.message, accountId: playerId() ?? undefined });
       if (o.status === "onchain" || o.status === "local") confirmed();
       if (o.status === "failed") {
@@ -389,6 +394,13 @@ export async function createPlay(game: Game): Promise<Play> {
 
   // ---------------------------------------------------------------- trading ----
   const goodFor = (id: MerchantId, tab: Tab): Good => (tab === "buy" && id === "arin" ? "lassi" : "mango");
+  /** What a merchant asks this player. On the first day's buying step the tutorial seller gives a newcomer's price
+   *  (DELIVERY_PRICE - 2, never above his posted price and never below the 55% the relayer lets a merchant sign), so
+   *  three mangoes always fit the 25 c starter purse and always sell to Pema at a profit, whatever the live market. */
+  const buyUnit = (id: MerchantId): number => {
+    const p = priceOf(state, id).price;
+    return stepIndex(state) === 2 && id === tutorSeller(state) ? Math.min(p, Math.max(Math.ceil(p * 0.55), DELIVERY_PRICE - 2)) : p;
+  };
   const sellPrice = (id: MerchantId): number | null => {
     if (id === "pema" && stepIndex(state) === 3) return DELIVERY_PRICE;
     return bidFor(state, id, "mango")?.price ?? null;
@@ -400,17 +412,14 @@ export async function createPlay(game: Game): Promise<Play> {
     if (unlocked(state, "invest") || state.player.shares[id] > 0) t.push("invest");
     return t;
   };
-  /** Shares the stall still sells: its posted ask on NEAR (the contract sells no more than that), or, offline, all
-   *  the shares the player does not own yet. `shareBid` is the stall's standing buyback on NEAR. */
-  const shareAsk: Partial<Record<MerchantId, number>> = {};
-  const shareBid: Partial<Record<MerchantId, number>> = {};
+  /** Shares never sell out: the stall's unsold shares go first, then the contract issues new ones on the same terms
+   *  (at most MAX_PACKS packs a transaction). Selling back is always possible: the reserve pays the backing. */
   const wholePacks = (id: MerchantId, n: number): number => Math.floor(Math.max(0, n) / SHARE_PACK[id].per) * SHARE_PACK[id].per;
-  const sharesForSale = (id: MerchantId): number => wholePacks(id, shareAsk[id] ?? (playerId() ? 0 : SHARES_PER_STALL - state.player.shares[id]));
-  /** Shares the player can sell back right now: whole packs of what they own, within the stall's buyback. */
-  const sharesToSell = (id: MerchantId): number => wholePacks(id, Math.min(state.player.shares[id], shareBid[id] ?? (playerId() ? 0 : state.merchants[id].cash / SHARE_PACK[id].price * SHARE_PACK[id].per)));
+  const sharesForSale = (id: MerchantId): number => MAX_PACKS * SHARE_PACK[id].per;
+  const sharesToSell = (id: MerchantId): number => Math.min(sharesForSale(id), wholePacks(id, state.player.shares[id]));
   const maxQty = (id: MerchantId, tab: Tab): number => {
     const m = state.merchants[id];
-    if (tab === "buy") { const g = goodFor(id, tab); return Math.min(MAX_QTY, m.stock[g], Math.floor(state.player.coins / Math.max(1, priceOf(state, id).price))); }
+    if (tab === "buy") { const g = goodFor(id, tab); return Math.min(MAX_QTY, m.stock[g], Math.floor(state.player.coins / Math.max(1, buyUnit(id)))); }
     if (tab === "sell") { const p = sellPrice(id) ?? 1; return Math.min(MAX_QTY, state.player.inventory.mango, Math.floor(m.cash / p)); }
     const { price, per } = SHARE_PACK[id];
     return Math.min(sharesForSale(id), Math.floor(state.player.coins / price) * per);
@@ -426,7 +435,9 @@ export async function createPlay(game: Game): Promise<Play> {
     const q = Math.max(1, Math.min(3, maxQty(id, tab)));
     frame(npc);
     const closed = state.merchants[id].status !== "open";
+    const newcomer = tab === "buy" && buyUnit(id) < priceOf(state, id).price;
     const say = id === "pema" && stepIndex(state) === 3 ? `Are those for me? ${DELIVERY_PRICE} coins each, as promised!`
+      : newcomer ? `New in town? ${buyUnit(id)} c a mango, just this once. The board says ${priceOf(state, id).price}.`
       : closed ? "The shutters are down: I couldn't make rent. Bring me stock and I can open again." : WHO[id].hello;
     mode = { kind: "trade", npc, id, tab, qty: q, say, tone: closed ? "bad" : "", why: false, h: null, done: 0 };
     renderTrade();
@@ -467,7 +478,7 @@ export async function createPlay(game: Game): Promise<Play> {
       hud.panel.append(el("div", "tp-text tp-note", `${PERSONALITY[id].name.split(" ").pop()} isn't buying mangoes this minute: ${id === "arin" ? "the kitchen is stocked" : "the shelves are full"}. Bids come back as stock sells; try again in a few minutes or sell elsewhere.`));
     }
     const good = goodFor(id, tab);
-    const unit = tab === "buy" ? priceOf(state, id).price : sellPrice(id) ?? 0;
+    const unit = tab === "buy" ? buyUnit(id) : sellPrice(id) ?? 0;
     const max = maxQty(id, tab);
     const item = el("div", "tp-item");
     const left = el("div");
@@ -498,7 +509,7 @@ export async function createPlay(game: Game): Promise<Play> {
     }
     const acts = el("div", "tp-acts");
     if (mode.done > 0) { /* the result line is showing */ }
-    else if (max <= 0) acts.append(el("div", "tp-text full", tab === "buy" ? (m.stock[good] <= 0 ? "Sold out for now." : `You need ${unit} c for one. You have ${state.player.coins} c.`) : (state.player.inventory.mango <= 0 ? "You have no mangoes to sell. Buy some first." : `${PERSONALITY[id].name.split(" ").pop()} has ${Math.floor(m.cash)} c, not enough for one at ${unit} c. The Market Guild tops up low tills every market day (about 10 minutes): come back soon, or sell to another stall.`)));
+    else if (max <= 0) acts.append(el("div", "tp-text full", tab === "buy" ? (m.stock[good] <= 0 ? "Sold out for now." : `You need ${unit} c for one. You have ${state.player.coins} c.`) : (state.player.inventory.mango <= 0 ? "You have no mangoes to sell. Buy some first." : `${PERSONALITY[id].name.split(" ").pop()} has ${Math.floor(m.cash)} c, not enough for one at ${unit} c. The Market Guild lends low tills coins within a minute or two: come back soon, or sell to another stall.`)));
     else {
       acts.append(button(`${tab === "buy" ? "Buy" : "Sell"} ${goodName(good, mode.qty)} for ${total} c`, "primary", () => simpleDeal(), "1"));
       if (unlocked(state, "haggle") && m.status === "open" && modeFor(state, id) === tab && good === "mango") {
@@ -527,22 +538,20 @@ export async function createPlay(game: Game): Promise<Play> {
 
   const renderInvestBody = (id: MerchantId): void => {
     if (mode.kind !== "trade") return;
-    const m = state.merchants[id], { price, per } = SHARE_PACK[id], own = state.player.shares[id], coins = state.player.coins;
-    const forSale = sharesForSale(id), max = maxQty(id, "invest"), canSell = sharesToSell(id);
-    const pct = (k: number): string => `${((k / SHARES_PER_STALL) * 100).toFixed(1).replace(/\.0$/, "")}%`;
+    const m = state.merchants[id], { price, backing, per } = SHARE_PACK[id], own = state.player.shares[id], coins = state.player.coins;
+    const max = maxQty(id, "invest"), canSell = sharesToSell(id), supply = shareSupply(state, id);
+    const pct = (k: number, of = supply): string => `${((k / of) * 100).toFixed(1).replace(/\.0$/, "")}%`;
     const packs = (n: number): string => `${n} ${n === 1 ? "share" : "shares"}`;
-    hud.panel.append(el("div", "tp-text", `${m.shop} is split into ${SHARES_PER_STALL} shares. Every evening half of the day's sales is shared out among the owners, so each share earns 1/${SHARES_PER_STALL} of that. Shares come in packs of ${per} for ${price} c, and ${m.name.split(" ").pop()} buys them back at the same price whenever the till allows.`));
+    hud.panel.append(el("div", "tp-text", `Every evening half of ${m.shop}'s sales is shared out over all ${supply} shares. A pack of ${per} costs ${price} c: ${backing} c is held in the stall's reserve, so you can always sell the pack back for ${backing} c, and ${price - backing} c goes into the till.`));
     const facts = el("div", "tp-facts");
     const fact = (label: string, value: string): void => { const d = el("div"); d.append(el("span", "", label), el("b", "", value)); facts.append(d); };
     fact("Price", `${price} c per ${per}`);
+    fact("Sells back for", `${backing} c per ${per}`);
     fact("Your coins", `${coins} c`);
-    fact("You own", `${own} · ${pct(own)}${own >= UPGRADE_AT ? " · upgraded" : ""}`);
-    fact("For sale now", playerId() && shareAsk[id] === undefined ? "checking…" : packs(forSale));
+    fact("You own", `${own} of ${supply} · ${pct(own)}${own >= UPGRADE_AT ? " · upgraded" : ""}`);
     hud.panel.append(facts);
     const acts = el("div", "tp-acts");
     if (mode.done > 0) { /* the result line is showing */ }
-    else if (playerId() && shareAsk[id] === undefined) acts.append(el("div", "tp-text full", "Checking NEAR for shares on sale…"));
-    else if (forSale <= 0) acts.append(el("div", "tp-text full", `No shares of ${m.shop} are for sale this minute. The stall buys back shares from partners who left; check again soon, or invest in another stall.`));
     else if (max <= 0) acts.append(el("div", "tp-text full", `A pack of ${per} costs ${price} c and you have ${coins} c. Sell some goods first, then come back.`));
     else {
       const qty = Math.max(per, Math.min(max, wholePacks(id, mode.qty) || per));
@@ -562,7 +571,8 @@ export async function createPlay(game: Game): Promise<Play> {
         after.textContent = `${n / per} × ${price} c · your coins after: ${coins - shareCost(id, n)} c`;
         mine.style.width = pct(own);
         fill.style.width = pct(n);
-        line.textContent = `You'd own ${own + n} of ${SHARES_PER_STALL} shares: ${pct(own + n)} of the stall and of its daily payout.`;
+        const next = Math.max(supply, own + n); // past the unsold float, new shares are issued
+        line.textContent = `You'd own ${own + n} of ${next} shares: ${pct(own + n, next)} of its daily payout.`;
         label.textContent = `Buy ${packs(n)} for ${shareCost(id, n)} c`;
       };
       const pick = (n: number): number => Math.max(per, Math.min(max, wholePacks(id, n) || per));
@@ -582,9 +592,9 @@ export async function createPlay(game: Game): Promise<Play> {
       hud.panel.append(q, stake);
       acts.append(buy);
       show(qty);
-      if (max < forSale) acts.append(el("div", "tp-text full tp-note", `Your coins cover ${packs(max)} of the ${forSale} for sale.`));
+
     }
-    if (mode.done <= 0 && canSell > 0) acts.append(button(`Sell ${packs(canSell)} back for ${shareCost(id, canSell)} c`, "full", () => cashOut(id, canSell), "2"));
+    if (mode.done <= 0 && canSell > 0) acts.append(button(`Sell ${packs(canSell)} back for ${shareRefund(id, canSell)} c`, "full", () => cashOut(id, canSell), "2"));
     acts.append(button("Leave", "ghost full", () => endPanel(), "Esc"));
     hud.panel.append(acts);
   };
@@ -632,7 +642,7 @@ export async function createPlay(game: Game): Promise<Play> {
   const simpleDeal = (): void => {
     if (mode.kind !== "trade" || mode.done > 0) return;
     const { id, tab } = mode;
-    const unit = tab === "buy" ? priceOf(state, id).price : sellPrice(id);
+    const unit = tab === "buy" ? buyUnit(id) : sellPrice(id);
     if (!unit || maxQty(id, tab) < 1) return;
     const qty = Math.min(mode.qty, maxQty(id, tab));
     settleDeal({ merchant: id, good: goodFor(id, tab), mode: tab === "buy" ? "buy" : "sell", qty, unit, open: unit, limit: unit, patience: 100, used: {}, moves: 0, over: "deal" });
@@ -785,7 +795,7 @@ export async function createPlay(game: Game): Promise<Play> {
       slot("mango", String(p.inventory.mango), "mangoes");
       if (p.inventory.lemon) slot("lemon", String(p.inventory.lemon), "lemons");
       if (p.inventory.lassi) slot("lassi", String(p.inventory.lassi), "lassi");
-      for (const id of MERCHANT_IDS) if (p.shares[id]) slot("share", `${p.shares[id]}/${SHARES_PER_STALL}`, `shares of ${state.merchants[id].shop}`);
+      for (const id of MERCHANT_IDS) if (p.shares[id]) slot("share", `${p.shares[id]}/${shareSupply(state, id)}`, `shares of ${state.merchants[id].shop}`);
       sec.append(bag);
       const p2 = el("p", "why", "Mangoes in your bag sell to anyone who is buying: Pema when her shelves are low, Arin for his lassi, Mira when someone has too many.");
       p2.style.marginTop = "12px";
@@ -877,7 +887,7 @@ export async function createPlay(game: Game): Promise<Play> {
     // 2. your part
     const part = el("section"); part.append(el("h4", "", "Your part"));
     const owned = TRADERS.filter((id) => state.player.shares[id] > 0);
-    if (owned.length) for (const id of owned) part.append(el("p", "", `You own ${state.player.shares[id]} of ${SHARES_PER_STALL} shares in ${state.merchants[id].shop}${state.merchants[id].status === "open" ? ", which stayed open" : ", which is closed for now: it reopens once its shelves are stocked again"}.`));
+    if (owned.length) for (const id of owned) part.append(el("p", "", `You own ${state.player.shares[id]} of ${shareSupply(state, id)} shares in ${state.merchants[id].shop}${state.merchants[id].status === "open" ? ", which stayed open" : ", which is closed for now: it reopens once its shelves are stocked again"}.`));
     else part.append(el("p", "", "You don't own any stall shares yet. Partners earn from every day's sales."));
     if (state.player.rep.pema >= 10) part.append(el("p", "", "Pema counts you as a regular: she gives you her family price."));
     card.append(part);
@@ -905,6 +915,7 @@ export async function createPlay(game: Game): Promise<Play> {
       const near = el("details"); near.append(el("summary", "", "Dividends on NEAR"));
       const line = el("p", "why", "Settling today's dividends on NEAR…"); near.append(line); card.append(near);
       void settleDay().then(async (r) => {
+        if (playerId()) await claimDividends(playerId()!);
         const got = (await chainReceipts(playerId()!).catch(() => [])).filter((x) => x.kind === "dividend").reduce((n, x) => n + Number(x.qty), 0);
         line.textContent = r.status === "onchain" ? `Today's dividends were settled on NEAR for all four stalls. Paid to your account so far: ${got} c. ` : `NEAR settlement: ${String(r.message ?? "not available right now")}`;
         if (r.status === "onchain" && typeof r.txHash === "string") { const a = el("a", "", "view"); a.href = `${EXPLORER_TX}${r.txHash}`; a.target = "_blank"; a.rel = "noopener"; line.append(a); }
@@ -1060,7 +1071,14 @@ export async function createPlay(game: Game): Promise<Play> {
       else if (input.consumePress("KeyL") && !playerLabel() && socialAvailable()) void signIn();
     }
     tickIn -= dt;
-    if (tickIn <= 0 && playerId()) { tickIn = TICK_EVERY_SEC; void marketTick().then(syncMerchants); }
+    if (tickIn <= 0 && playerId()) {
+      tickIn = TICK_EVERY_SEC;
+      const me = playerId()!;
+      void marketTick().then(syncMerchants).then(() => claimDividends(me)).then((r) => {
+        if (Number(r.coins) > 0 && r.status === "onchain") hud.toast(`+${String(r.coins)} c in dividends, paid on NEAR`, true);
+        return syncPlayer(me); // every turn re-reads the wallet, so the purse can never drift from the chain for long
+      });
+    }
     if (input.consumePress("Escape")) { if (mode.kind === "trade" || mode.kind === "talk") endPanel(); else if (mode.kind === "card") closeOverlay(); }
     if (input.consumePress("Enter") && mode.kind === "card") hud.card.querySelector<HTMLButtonElement>("footer button")?.click();
     if (input.consumePress("Minus")) setQty(-1);
@@ -1099,35 +1117,34 @@ export async function createPlay(game: Game): Promise<Play> {
     if (mode.kind === "trade") { mode = { ...mode, say: `Buying ${n} ${n === 1 ? "share" : "shares"} for ${cost} c. Recording it on NEAR…`, tone: "", done: AWAITING }; renderTrade(); }
     record("invest", `Bought ${n} ${n === 1 ? "share" : "shares"} of ${m.shop} for ${cost} c`, buyPosted(id, `share:${id}`, n, cost), () => applyInvest(id, n), refusedAt(id));
   };
-  /** Sells shares back into the stall's standing buyback; coins and shares move once NEAR confirms. */
+  /** Sells shares back to the stall: its reserve pays exactly the backing. Coins and shares move once NEAR confirms. */
   const cashOut = (id: MerchantId, n: number): void => {
     if (mode.kind === "trade" && mode.done > 0) return;
-    if (n <= 0 || n > sharesToSell(id)) { hud.toast("The stall can't buy that many back right now."); return; }
-    const m = state.merchants[id], pay = shareCost(id, n);
+    if (n <= 0 || n > sharesToSell(id)) { hud.toast("You don't own that many shares."); return; }
+    const m = state.merchants[id], pay = shareRefund(id, n);
     if (mode.kind === "trade") { mode = { ...mode, say: `Selling ${n} shares back for ${pay} c. Recording it on NEAR…`, tone: "", done: AWAITING }; renderTrade(); }
     record("invest", `Sold ${n} shares of ${m.shop} back for ${pay} c`, sellPosted(id, `share:${id}`, n, pay), () => {
-      state.player.shares[id] -= n; state.player.coins += pay; m.cash -= pay;
-      if (shareBid[id] !== undefined) shareBid[id] = Math.max(0, shareBid[id]! - n);
+      sellShares(state, id, n);
       if (mode.kind === "trade") { mode = { ...mode, say: `Done: ${pay} c for ${n} shares. You still own ${state.player.shares[id]}.`, tone: "good", done: RESULT_HOLD }; renderTrade(); }
       drawBoards(); save();
     }, refusedAt(id));
   };
   const applyInvest = (id: MerchantId, n: number): void => {
     invest(state, id, n);
-    if (shareAsk[id] !== undefined) shareAsk[id] = Math.max(0, shareAsk[id]! - n); // until the next sync re-reads it
     // Pema spends part of her partner's money on the harbor's storage fee: her held crates are finally on the way.
     const released = id === "pema" && payReleaseFee(state, "pema-mangoes", "merchant").ok;
     market.say(id, released ? "A partner! I've paid the harbor. My crates are coming!" : id === "pema" ? "A partner! That's tonight's rent, and a new awning." : "Partner! Let's make it worth it.", 4);
-    if (mode.kind === "trade") { mode = { ...mode, say: `You now own ${state.player.shares[id]} of ${SHARES_PER_STALL} shares.${state.player.shares[id] >= UPGRADE_AT ? " Look at the stall!" : ""}`, tone: "good", done: RESULT_HOLD }; renderTrade(); }
+    if (mode.kind === "trade") { mode = { ...mode, say: `You now own ${state.player.shares[id]} of ${shareSupply(state, id)} shares.${state.player.shares[id] >= UPGRADE_AT ? " Look at the stall!" : ""}`, tone: "good", done: RESULT_HOLD }; renderTrade(); }
     drawBoards(); afterProgress(); save();
   };
 
   // ---------------------------------------------------------------- account: guest or social/email ----
   /** The chain is the truth for what the player owns: their purse, bag and shares follow the active account. */
   const syncPlayer = async (id: string): Promise<void> => {
+    const epoch = ledgerEpoch;
     const b = await balances(id).catch(() => null);
-    // a trade sent while this read was in flight would be overwritten by the older balances: its own answer wins
-    if (!b || playerId() !== id || inFlight > 0) return;
+    // a trade sent or answered while this read was in flight would be overwritten by older balances: drop the read
+    if (!b || playerId() !== id || inFlight > 0 || epoch !== ledgerEpoch) return;
     state.player.coins = b.coin ?? 0;
     state.player.inventory = { mango: b.mango ?? 0, lemon: b.lemon ?? 0, lassi: b.lassi ?? 0 };
     for (const m of TRADERS) state.player.shares[m] = b[`share:${m}`] ?? 0;
@@ -1136,21 +1153,13 @@ export async function createPlay(game: Game): Promise<Play> {
   };
   /** Merchants' coins and goods follow the chain too, so a stall never offers a deal its wallet can't settle. */
   const syncMerchants = async (): Promise<void> => {
-    const [all, offers, stalls] = await Promise.all([
+    const epoch = ledgerEpoch;
+    const [all, stalls] = await Promise.all([
       Promise.all(TRADERS.map((id) => balances(merchantAccount(id)).catch(() => null))),
-      view<{ merchant: string; side: string; qty: string }[]>("get_share_offers").catch(() => null),
-      view<{ merchant: string; open: boolean; need: string; delivered: string }[]>("get_stalls").catch(() => null),
+      view<{ merchant: string; open: boolean; need: string; delivered: string; supply: string }[]>("get_stalls").catch(() => null),
     ]);
-    if (offers) for (const id of TRADERS) {
-      shareAsk[id] = Number(offers.find((o) => o.merchant === id && o.side === "ask")?.qty ?? 0);
-      shareBid[id] = Number(offers.find((o) => o.merchant === id && o.side === "bid")?.qty ?? 0);
-    }
-    if (offers) { // point the invest lesson at a stall that still has shares to sell (see investTarget)
-      const most = [...TRADERS].sort((a, b) => (shareAsk[b] ?? 0) - (shareAsk[a] ?? 0))[0];
-      state.flags.investAt = (shareAsk.pema ?? 0) > 0 ? "pema" : most;
-      if ((shareAsk[most] ?? 0) > 0) delete state.flags.investNone; else state.flags.investNone = true;
-    }
-    if (ff) return; // a fast-forward forecast runs on the local model; the next sync after it restores the chain's
+    for (const s of stalls ?? []) if ((TRADERS as readonly string[]).includes(s.merchant)) state.flags[`supply.${s.merchant}`] = Number(s.supply);
+    if (ff || epoch !== ledgerEpoch) return; // a forecast runs on the local model; a read older than a trade is stale
     TRADERS.forEach((id, i) => {
       const b = all[i];
       if (!b) return;

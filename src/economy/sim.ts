@@ -2,7 +2,7 @@
 // Time advances in game minutes; rules fire on hour boundaries. Called every frame with real dt,
 // and by fast-forward with large spans. ponytail: mutates state in place (one owner, hot loop).
 import { clockOf, dayOf, MERCHANT_IDS, MINUTES_PER_DAY, type EconomyState, type Good, type Merchant, type MerchantId } from "./state.ts";
-import { DIVIDEND_SHARE, SHARES_PER_STALL, lassiPrice, planMerchantTrades, quote, type MerchantTrade } from "./pricing.ts";
+import { DIVIDEND_BPS, SHARES_PER_STALL, lassiPrice, planMerchantTrades, quote, type MerchantTrade } from "./pricing.ts";
 
 /** Shoppers per open hour wanting each good across the whole market, at a fair price. */
 const HOURLY_DEMAND: Record<Good, number> = { mango: 1.6, lemon: 1.2, lassi: 2.4 };
@@ -186,22 +186,29 @@ function hourTick(state: EconomyState, hour: number): void {
   }
 }
 
-/** Midnight: each stall pays DIVIDEND_SHARE of the day's revenue to its shareholders, exactly pro rata: whole coins
- *  now, the fraction carried to the next day (the same rule as the contract's settle_day). */
+/** Midnight: the contract's settle_day, run locally (docs/ECONOMY_MATH.md). Each stall declares DIVIDEND_BPS of
+ *  the day's revenue (the basis-point remainder carries), funds it plus any arrears from its till, and splits the funded
+ *  coins pro rata over its whole share supply. The player's part is exact: whole coins now, the fraction carried. */
 function payDividends(state: EconomyState, day: number): void {
   for (const id of MERCHANT_IDS) {
     const m = state.merchants[id];
     const revenue = Math.floor(Number(state.flags[`rev.${id}`] ?? 0));
     state.flags[`rev.${id}`] = 0;
-    const pool = Math.min(Math.floor(revenue * DIVIDEND_SHARE), Math.floor(m.cash));
-    const units = pool * state.player.shares[id] + Number(state.flags[`divDust.${id}`] ?? 0);
-    const paid = Math.floor(units / SHARES_PER_STALL);
-    state.flags[`divDust.${id}`] = units - paid * SHARES_PER_STALL;
+    const units = revenue * DIVIDEND_BPS + Number(state.flags[`revRem.${id}`] ?? 0);
+    const declared = Math.floor(units / 10_000);
+    state.flags[`revRem.${id}`] = units % 10_000;
+    const due = declared + Number(state.flags[`arrears.${id}`] ?? 0);
+    const funded = Math.max(0, Math.min(due, Math.floor(m.cash)));
+    state.flags[`arrears.${id}`] = due - funded;
+    const supply = shareSupply(state, id);
+    const owed = funded * state.player.shares[id] + Number(state.flags[`divDust.${id}`] ?? 0);
+    const paid = Math.floor(owed / supply);
+    state.flags[`divDust.${id}`] = owed - paid * supply; // in 1/supply coin: owed, never dropped
     if (paid <= 0) continue;
-    m.cash -= paid;
+    m.cash -= paid; // the stall's own shares' cut never leaves its till
     state.player.coins += paid;
     state.flags[`div.${id}`] = Number(state.flags[`div.${id}`] ?? 0) + paid;
-    log(state, "player", `+${paid} c dividend from ${m.shop} (day ${day}: ${revenue} c sales, ${state.player.shares[id]}/${SHARES_PER_STALL} shares).`);
+    log(state, "player", `+${paid} c dividend from ${m.shop} (day ${day}: ${revenue} c sales, ${state.player.shares[id]}/${supply} shares).`);
   }
 }
 
@@ -329,28 +336,52 @@ export function note(state: EconomyState, text: string): void {
   log(state, "quest", text);
 }
 
-/** Each stall's share price, exact: `price` coins buy a pack of `per` shares (shares move in whole packs, so no coin
- *  is rounded). These are the v1 prices per share after the 15-for-1 split (5 c per 15 shares = 1 c per 3), so a
- *  share is worth what it was; the relayer posts the same packs on chain for sale and for buyback. */
-export const SHARE_PACK: Record<MerchantId, { readonly price: number; readonly per: number }> = {
-  pema: { price: 1, per: 3 }, tomas: { price: 3, per: 5 }, mira: { price: 7, per: 15 }, arin: { price: 2, per: 5 },
+/** Each stall's share terms, fixed in the contract (add_merchant): a pack of `per` shares costs `price` coins, of
+ *  which `backing` goes into the stall's reserve and is paid back on demand when the pack is sold to the stall; the
+ *  rest is working capital for the till. Shares move in whole packs, so no coin is ever rounded. */
+export const SHARE_PACK: Record<MerchantId, { readonly price: number; readonly backing: number; readonly per: number }> = {
+  pema: { price: 5, backing: 4, per: 15 }, tomas: { price: 10, backing: 8, per: 15 },
+  mira: { price: 10, backing: 8, per: 15 }, arin: { price: 5, backing: 4, per: 15 },
 };
+/** Most packs one transaction may buy or sell (the contract's MAX_PACKS). */
+export const MAX_PACKS = 20;
 /** Coins for `shares` shares of a stall (`shares` must be whole packs). */
 export const shareCost = (id: MerchantId, shares: number): number => (shares / SHARE_PACK[id].per) * SHARE_PACK[id].price;
-/** Shares at which a stall is upgraded (awning, lights, fuller shelves): a fifth of the stall. */
+/** Coins the stall's reserve pays for `shares` sold back (whole packs). */
+export const shareRefund = (id: MerchantId, shares: number): number => (shares / SHARE_PACK[id].per) * SHARE_PACK[id].backing;
+/** All shares of a stall in existence: the 300 floated plus any issued once those were sold (offline: tracked here;
+ *  on NEAR: the contract's supply, synced into the same flag). */
+export const shareSupply = (state: EconomyState, id: MerchantId): number => Math.max(SHARES_PER_STALL, Number(state.flags[`supply.${id}`] ?? SHARES_PER_STALL));
+/** Shares at which a stall is upgraded (awning, lights, fuller shelves): a fifth of its float. */
 export const UPGRADE_AT = 60;
 
-/** The player buys stall shares: coins go to the merchant (capital, not revenue). */
+/** The player buys stall shares: the backing goes to the stall's reserve, the rest to its till (capital, not
+ *  revenue). Unsold shares go first; past them the stall issues new ones on the same terms. */
 export function invest(state: EconomyState, id: MerchantId, shares: number): ActionResult {
-  const m = state.merchants[id];
-  if (shares <= 0 || shares % SHARE_PACK[id].per !== 0) return { ok: false, message: `Shares come in packs of ${SHARE_PACK[id].per}.` };
+  const m = state.merchants[id], { per, backing } = SHARE_PACK[id];
+  if (shares <= 0 || shares % per !== 0) return { ok: false, message: `Shares come in packs of ${per}.` };
+  if (shares / per > MAX_PACKS) return { ok: false, message: `At most ${MAX_PACKS * per} shares at once.` };
   const cost = shareCost(id, shares);
   if (state.player.coins < cost) return { ok: false, message: `${shares} shares cost ${cost} c.` };
   state.player.coins -= cost;
-  m.cash += cost;
-  const before = state.player.shares[id];
+  m.cash += cost - (shares / per) * backing;
+  state.flags[`reserve.${id}`] = Number(state.flags[`reserve.${id}`] ?? 0) + (shares / per) * backing;
+  const before = state.player.shares[id], supply = shareSupply(state, id);
   state.player.shares[id] += shares;
+  if (state.player.shares[id] > supply) state.flags[`supply.${id}`] = state.player.shares[id]; // offline the player is the only partner
   log(state, "player", `You bought ${shares} shares of ${m.shop} for ${cost} c.`);
   if (before < UPGRADE_AT && state.player.shares[id] >= UPGRADE_AT) log(state, "trade", `${m.shop} used the investment to upgrade the stall.`);
   return { ok: true, message: `Bought ${shares} shares for ${cost} c.` };
+}
+
+/** The player sells shares back: the reserve pays exactly the backing, whatever the till holds or the stall's state. */
+export function sellShares(state: EconomyState, id: MerchantId, shares: number): ActionResult {
+  const { per } = SHARE_PACK[id];
+  if (shares <= 0 || shares % per !== 0 || shares > state.player.shares[id]) return { ok: false, message: "You don't own those shares." };
+  const pay = shareRefund(id, shares);
+  state.player.shares[id] -= shares;
+  state.player.coins += pay;
+  state.flags[`reserve.${id}`] = Math.max(0, Number(state.flags[`reserve.${id}`] ?? 0) - pay);
+  log(state, "player", `You sold ${shares} shares of ${state.merchants[id].shop} back for ${pay} c.`);
+  return { ok: true, message: `Sold ${shares} shares for ${pay} c.` };
 }

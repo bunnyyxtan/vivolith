@@ -2,7 +2,8 @@
 // (api/near/[route].ts) and the Vite dev server (server/near-relay.ts). Keys stay on the server; responses never
 // echo key material or stack traces.
 //
-// Routes: GET status | POST guest {publicKey} | POST relay {signedDelegate: base64} | POST settle
+// Routes: GET status | POST guest {publicKey} | POST relay {signedDelegate: base64} | POST settle | POST deal | POST tick
+//         | POST social {idToken, guest?} | POST claim {account}
 import { createHash, createPublicKey, verify as verifySignature, type JsonWebKey } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -11,8 +12,7 @@ import { deserialize } from "borsh";
 import { Account, JsonRpcProvider, KeyPairSigner, PublicKey, SCHEMA, actions, nearToYocto, teraToGas, type KeyPairString } from "near-api-js";
 import { MERCHANTS, keyPairFromSeed, merchantKey, type MerchantId } from "./keys.ts";
 import { bidFor, planMerchantTrades, quote } from "../../src/economy/pricing.ts";
-import { closingNeed, SHARE_PACK, shopperWant } from "../../src/economy/sim.ts";
-import { SHARES_PER_STALL } from "../../src/economy/pricing.ts";
+import { closingNeed, shopperWant } from "../../src/economy/sim.ts";
 import { initialEconomy, type EconomyState } from "../../src/economy/state.ts";
 
 export interface RelayEnv {
@@ -42,15 +42,16 @@ const HAGGLE_CEILING = 1.5; // merchant pays at most 150% of its bid
 const GUEST_FUNDING = "0.01"; // account + key storage; guests never pay gas (meta-transactions)
 /** One on-chain market day settles every 10 real minutes (fast-forward previews run in the client sim). */
 export const MARKET_DAY_MS = 10 * 60 * 1000;
-/** The Market Guild fund: fixed size, seeded once; it only lends what it holds and refills from dues. */
-const GUILD_FUND = 200;
+/** The Market Guild fund: minted once when the contract opens (`new`); it only lends what it holds, records every
+ *  loan as the stall's debt, and is repaid (then refilled by dues) from healthy tills. deploy-contract.ts seeds it. */
+export const GUILD_FUND = 200;
 /** A till under this borrows up to it (covers one tutorial delivery: 3 mangoes at 6 c). */
 const GUILD_FLOAT = 18;
-/** A till over this pays dues (at most GUILD_DUES a market day) while the fund is below GUILD_FUND. */
+/** A till over this repays its loan, then pays dues while the fund is below GUILD_FUND (at most GUILD_DUES a day). */
 const GUILD_HEALTHY = 80;
 const GUILD_DUES = 10;
-/** Must match STARTER_COIN in contracts/market/src/lib.rs (register_player mints it). */
-const STARTER_COIN = 25;
+/** Tomas pays the harbor this per mango on his standing contract (the offline sim charges the same). */
+const HARBOR_COST = 2;
 
 const LIMITS = {
   guest: { max: 5, windowSec: 3600 }, // per IP
@@ -58,6 +59,7 @@ const LIMITS = {
   relayIp: { max: 60, windowSec: 60 }, // per IP
   settle: { max: 6, windowSec: 60 }, // global
   deal: { max: 20, windowSec: 60 }, // per player account
+  claim: { max: 6, windowSec: 60 }, // per player account
   social: { max: 10, windowSec: 3600 }, // per IP
 } as const;
 
@@ -220,6 +222,21 @@ async function guest(cfg: Config, req: Request): Promise<Response> {
     txs.push(r.txHash);
   }
   return json(200, { status: "onchain", accountId, txHashes: txs });
+}
+
+/** Re-registers an account this relayer created (a guest `g...` or signed-in `s...` sub-account that exists on chain)
+ *  with the market contract, e.g. after the market's ledger was reset. Idempotent; never creates accounts. */
+async function register(cfg: Config, req: Request): Promise<Response> {
+  if (!(await hit(cfg, `guest:${clientIp(req)}`, LIMITS.guest.max, LIMITS.guest.windowSec))) throw new HttpError(429, "too many new players from this address, try later");
+  const body = await readJson(req);
+  const accountId = String(body.accountId ?? "");
+  const suffix = `.${cfg.relayerId}`;
+  if (!accountId.endsWith(suffix) || !/^[gs][0-9a-f]{16}$/.test(accountId.slice(0, -suffix.length))) throw new HttpError(400, "not a game account");
+  const { provider, relayer } = account(cfg);
+  if (!(await provider.viewAccount({ accountId, finality: "final" }).then(() => true, () => false))) throw new HttpError(404, "no such account");
+  if (await view<boolean>(provider, cfg.contractId, "is_registered", { account_id: accountId })) return json(200, { status: "onchain", accountId, txHashes: [] });
+  const r = outcome(await relayer.callFunctionRaw({ contractId: cfg.contractId, methodName: "register_player", args: { account_id: accountId }, gas: MAX_GAS }));
+  return json(r.ok ? 200 : 502, { status: r.ok ? "onchain" : "failed", accountId, txHashes: [r.txHash], message: r.error });
 }
 
 interface DecodedDelegate {
@@ -447,17 +464,11 @@ async function social(cfg: Config, req: Request, env: RelayEnv): Promise<Respons
 
 // ---------- the merchants' autonomous turn ----------
 
-/** Must match IDLE_MS in contracts/market/src/lib.rs: a holder this long without a trade may be bought out. */
-const IDLE_MS = 24 * 60 * 60 * 1000;
-/** A stall with fewer unsold shares than this (or this many holders, the contract allows 64) redeems idle holders. */
-const IDLE_REDEEM_BELOW = 60;
-const IDLE_REDEEM_HOLDERS = 56;
 /** Game hours of street trade one tick represents (ticks run at most once a minute, globally). */
 const TICK_HOURS = 2;
 const TICK_GAS = teraToGas("30");
 
-interface StallRow { merchant: string; open: boolean; need: string; delivered: string; holders: number }
-interface ShareOfferRow { merchant: string; side: "ask" | "bid"; qty: string; price: string; per: string }
+interface StallRow { merchant: string; open: boolean; need: string; delivered: string; holders: number; supply: string; debt: string; last_settled: number | null; last_rent: number | null }
 
 /** Rebuilds the four merchants from their on-chain balances and stall status so the shared rules in src/economy run
  *  on real state (a closed stall is closed for the planner, the pricing and the Guild alike). */
@@ -468,6 +479,10 @@ async function chainEconomy(provider: JsonRpcProvider, cfg: Config): Promise<Eco
     const id = s.merchant as MerchantId;
     if (!st.merchants[id]) continue;
     st.flags[`holders.${id}`] = s.holders;
+    st.flags[`supply.${id}`] = Number(s.supply);
+    st.flags[`debt.${id}`] = Number(s.debt);
+    st.flags[`lastSettled.${id}`] = s.last_settled ?? -1;
+    st.flags[`lastRent.${id}`] = s.last_rent ?? -1;
     if (!s.open) {
       st.merchants[id].status = "closed";
       st.flags[`reopenNeed.${id}`] = Math.max(0, Number(s.need) - Number(s.delivered));
@@ -479,7 +494,6 @@ async function chainEconomy(provider: JsonRpcProvider, cfg: Config): Promise<Eco
     const m = st.merchants[id];
     m.stock = { mango: b.mango ?? 0, lemon: b.lemon ?? 0, lassi: b.lassi ?? 0 };
     m.cash = b.coin ?? 0;
-    st.flags[`treasury.${id}`] = b[`share:${id}`] ?? 0; // stall shares the merchant still holds
   }));
   return st;
 }
@@ -492,39 +506,31 @@ const coinMove = (from: string, to: string, amount: number, reason: string): Cal
   actions.functionCall("operator_mint", { account_id: to, token_id: "coin", amount: String(amount), reason }, TICK_GAS, 0n),
 ];
 
-/** The Guild's calls for this turn (loans to low tills, dues from healthy ones), each at most once per market day
- *  per stall. Adjusts `st` cash so this turn's bids already reflect them. The first turn registers and seeds it. */
+/** The Guild's calls for this turn, each at most once per market day per stall: a loan to a low till (the contract
+ *  lends only what the fund holds and records the debt), or collection from a healthy till (loan repayment first, then
+ *  dues while the fund is below its size). Adjusts `st` cash so this turn's bids already reflect them. */
 async function guildTurn(cfg: Config, provider: JsonRpcProvider, st: EconomyState, day: number, log: string[]): Promise<Call[]> {
-  const guild = `guild.${cfg.relayerId}`;
+  const guild = await view<string>(provider, cfg.contractId, "get_guild", {});
+  const rows = await view<[string, string][]>(provider, cfg.contractId, "get_balances", { account_id: guild });
+  let fund = Number(rows.find(([t]) => t === "coin")?.[1] ?? 0);
   const calls: Call[] = [];
-  let fund: number;
-  if (!(await view<boolean>(provider, cfg.contractId, "is_registered", { account_id: guild }))) {
-    // register_player mints the starter purse; the seed tops the fund up to its fixed size, once, ever
-    calls.push(actions.functionCall("register_player", { account_id: guild }, TICK_GAS, 0n));
-    calls.push(actions.functionCall("operator_mint", { account_id: guild, token_id: "coin", amount: String(GUILD_FUND - STARTER_COIN), reason: "market guild fund" }, TICK_GAS, 0n));
-    fund = GUILD_FUND;
-    log.push(`market guild fund opened with ${GUILD_FUND} c`);
-  } else {
-    const rows = await view<[string, string][]>(provider, cfg.contractId, "get_balances", { account_id: guild });
-    fund = Number(rows.find(([t]) => t === "coin")?.[1] ?? 0);
-  }
   for (const id of MERCHANTS) {
-    const m = st.merchants[id], acct = `${id}.${cfg.relayerId}`;
+    const m = st.merchants[id], debt = Number(st.flags[`debt.${id}`] ?? 0);
     // A closed stall can only reopen if it can pay for the mangoes players bring: the Guild covers that whole gap.
     const rescue = m.status === "open" ? 0 : Number(st.flags[`reopenNeed.${id}`] ?? 0) * (bidFor(st, id, "mango")?.price ?? 0);
     const float = Math.max(GUILD_FLOAT, rescue);
     if (m.cash < float && fund > 0) {
+      // Loans may come every merchant turn (ticks run at most once a minute): a till that fell short mid-day, e.g.
+      // Pema after paying for a delivery, can pay the next player within a minute, not the next market day.
       const amount = Math.min(float - m.cash, fund);
-      if (!(await hit(cfg, `guild:${id}:${day}`, 1, Math.ceil(MARKET_DAY_MS / 1000)))) continue;
-      calls.push(...coinMove(guild, acct, amount, "market guild loan"));
+      calls.push(actions.functionCall("guild_lend", { merchant: id, amount: String(amount) }, TICK_GAS, 0n));
       fund -= amount; m.cash += amount;
-      log.push(`market guild lent ${id} ${amount} c (fund ${fund} c)`);
-    } else if (m.cash > GUILD_HEALTHY && fund < GUILD_FUND) {
-      const amount = Math.min(m.cash - GUILD_HEALTHY, GUILD_FUND - fund, GUILD_DUES);
+      log.push(`market guild lent ${id} ${amount} c (fund ${fund} c, ${id} owes ${debt + amount} c)`);
+    } else if (m.cash > GUILD_HEALTHY && (debt > 0 || fund < GUILD_FUND)) {
+      const amount = Math.min(m.cash - GUILD_HEALTHY, debt + GUILD_DUES);
       if (!(await hit(cfg, `guild:${id}:${day}`, 1, Math.ceil(MARKET_DAY_MS / 1000)))) continue;
-      calls.push(...coinMove(acct, guild, amount, "market guild dues"));
-      fund += amount; m.cash -= amount;
-      log.push(`${id} paid ${amount} c guild dues (fund ${fund} c)`);
+      calls.push(actions.functionCall("guild_collect", { merchant: id, amount: String(amount), fill_to: String(GUILD_FUND) }, TICK_GAS, 0n));
+      log.push(`${id} pays the market guild up to ${amount} c (its ${debt} c debt first)`);
     }
   }
   return calls;
@@ -540,17 +546,17 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
   const { provider, relayer } = account(cfg);
   const st = await chainEconomy(provider, cfg);
   const posted = new Map((await view<OfferRow[]>(provider, cfg.contractId, "get_offers", {})).map((o) => [orderKey(o), o]));
-  const postedShares = new Map((await view<ShareOfferRow[]>(provider, cfg.contractId, "get_share_offers", {})).map((o) => [`${o.merchant}|${o.side}`, o]));
   const signerOf = (id: MerchantId): Account => new Account(`${id}.${cfg.relayerId}`, provider, new KeyPairSigner(merchantKey(id, secret)));
   const log: string[] = [];
   const txs: string[] = [];
 
-  // 0. The Market Guild: a fixed fund (seeded once) that lends a struggling stall enough to pay for a delivery and
-  // collects dues from healthy stalls until it is full again. Every move is a burn + mint pair with a public reason,
-  // so coin only moves between the fund and the stalls: the Guild never creates money after its seed.
+  // 0. The Market Guild (contract methods guild_lend / guild_collect): coin only moves between the fund and the
+  // stalls, every loan is recorded as debt, and repayment comes before dues. It never creates money after its seed.
   const day = Math.floor(Date.now() / MARKET_DAY_MS);
   // Yesterday's dividends, once (settle_day is idempotent too). Its own transaction: 60 Tgas per stall.
-  if (await hit(cfg, `settled:${day - 1}`, 1, Math.ceil(MARKET_DAY_MS / 1000) * 2)) {
+  // The chain says which days already ran (rate-limit memory resets on a cold start; the contract's record does not).
+  const unsettled = MERCHANTS.some((id) => Number(st.flags[`lastSettled.${id}`]) < day - 1);
+  if (unsettled && (await hit(cfg, `settled:${day - 1}`, 1, Math.ceil(MARKET_DAY_MS / 1000) * 2))) {
     const r = outcome(await relayer.signAndSendTransaction({ receiverId: cfg.contractId, actions: MERCHANTS.map((merchant) => actions.functionCall("settle_day", { day: day - 1, merchant }, teraToGas("60"), 0n)), throwOnFailure: false }));
     txs.push(r.txHash);
     log.push(`dividends for market day ${day - 1} settled${r.ok ? "" : ` FAILED: ${r.error}`}`);
@@ -560,7 +566,7 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
   const rentCalls: Call[] = [];
   for (const id of MERCHANTS) {
     const m = st.merchants[id];
-    if (m.status !== "open" || day % m.rentEveryDays !== 0) continue;
+    if (m.status !== "open" || day % m.rentEveryDays !== 0 || Number(st.flags[`lastRent.${id}`]) >= day) continue;
     if (!(await hit(cfg, `rent:${id}:${day}`, 1, Math.ceil(MARKET_DAY_MS / 1000) * 2))) continue;
     const need = closingNeed(st, id);
     rentCalls.push(actions.functionCall("charge_rent", { day, merchant: id, rent: String(m.rent), reopen_need: String(need) }, TICK_GAS, 0n));
@@ -590,20 +596,9 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
       if (cur && Number(cur.qty) === qty && Number(cur.price) === price) return;
       calls.push(actions.functionCall(side === "ask" ? "list" : "bid", { token_id: token, qty: String(qty), price: String(price) }, TICK_GAS, 0n));
     };
-    const wantShares = (side: "ask" | "bid", qty: number): void => {
-      const { price, per } = SHARE_PACK[id], cur = postedShares.get(`${id}|${side}`), packs = Math.floor(qty / per) * per;
-      if (packs <= 0) { if (cur) calls.push(actions.functionCall(side === "ask" ? "list" : "bid", { token_id: `share:${id}`, qty: "0", price: "1" }, TICK_GAS, 0n)); return; }
-      if (cur && Number(cur.qty) === packs && Number(cur.price) === price && Number(cur.per) === per) return;
-      calls.push(actions.functionCall(side === "ask" ? "list" : "bid", { token_id: `share:${id}`, qty: String(packs), price: String(price), per: String(per) }, TICK_GAS, 0n));
-    };
     // a closed stall sells nothing until it reopens (the contract refuses those sales anyway)
     for (const good of m.sells) want("ask", good, m.status === "open" ? m.stock[good] : 0, quote(st, id, good, false).price);
-    // Unsold shares stay on offer at the stall's exact pack price, so new partners can always buy in; the stall buys
-    // shares back at the same price with what its till can spare above next rent, so partners can always cash out.
-    const treasury = Number(st.flags[`treasury.${id}`] ?? 0);
-    wantShares("ask", treasury);
-    const spare = Math.max(0, m.cash - m.rent);
-    wantShares("bid", Math.min(SHARES_PER_STALL - treasury, Math.floor(spare / SHARE_PACK[id].price) * SHARE_PACK[id].per));
+    // Shares need no orders: their terms are fixed in the contract, which issues and buys back on demand.
     for (const good of ["mango", "lemon"] as const) {
       const b = bidFor(st, id, good);
       want("bid", good, b ? Math.min(b.qty, Math.floor(m.cash / Math.max(1, b.price))) : 0, b?.price ?? 1);
@@ -643,12 +638,18 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
       if (units > 0) log.push(`street shoppers bought ${units} ${good} from ${id}`);
     }
   }
+  // The harbor's standing contract: once a market day when Tomas runs below his normal stock, and on any turn he is
+  // nearly out (so no new player finds the market without mangoes for long). He pays HARBOR_COST a mango; the coin
+  // leaves the economy as freight, as in the offline sim.
   const tomas = st.merchants.tomas;
-  const harborDue = tomas.stock.mango < tomas.target.mango && (await hit(cfg, `harbor:${day}`, 1, Math.ceil(MARKET_DAY_MS / 1000)));
-  if (harborDue) {
-    const qty = Math.round(tomas.target.mango * 1.4) - tomas.stock.mango;
-    op.push(actions.functionCall("operator_mint", { account_id: `tomas.${cfg.relayerId}`, token_id: "mango", amount: String(qty), reason: "harbor standing contract" }, TICK_GAS, 0n));
-    log.push(`harbor delivered ${qty} mangoes to tomas`);
+  const nearlyOut = tomas.stock.mango < 6;
+  const harborDue = tomas.status === "open" && (nearlyOut || tomas.stock.mango < tomas.target.mango)
+    && (nearlyOut || (await hit(cfg, `harbor:${day}`, 1, Math.ceil(MARKET_DAY_MS / 1000))));
+  const harborQty = harborDue ? Math.min(Math.round(tomas.target.mango * 1.4) - tomas.stock.mango, Math.floor(tomas.cash / HARBOR_COST)) : 0;
+  if (harborQty > 0) {
+    op.push(actions.functionCall("operator_burn", { account_id: `tomas.${cfg.relayerId}`, token_id: "coin", amount: String(harborQty * HARBOR_COST), reason: "harbor freight" }, TICK_GAS, 0n));
+    op.push(actions.functionCall("operator_mint", { account_id: `tomas.${cfg.relayerId}`, token_id: "mango", amount: String(harborQty), reason: "harbor standing contract" }, TICK_GAS, 0n));
+    log.push(`harbor delivered ${harborQty} mangoes to tomas for ${harborQty * HARBOR_COST} c`);
   }
   const arin = st.merchants.arin;
   const batches = Math.min(arin.stock.mango, Math.max(0, Math.ceil((8 - arin.stock.lassi) / 4)));
@@ -663,22 +664,22 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
     if (!r.ok) log.push(`operator FAILED: ${r.error}`);
   }
 
-  // 4. Shares held by players who left: when a stall runs low on shares to sell (or near its holder limit), it buys
-  // back from holders idle for a day, at its posted buyback price rounded up in their favour (redeem_idle).
-  const redeem: Call[] = [];
-  for (const id of MERCHANTS) {
-    const treasury = Number(st.flags[`treasury.${id}`] ?? 0), holders = Number(st.flags[`holders.${id}`] ?? 0);
-    if (treasury >= IDLE_REDEEM_BELOW && holders < IDLE_REDEEM_HOLDERS) continue;
-    const rows = await view<[string, string, string][]>(provider, cfg.contractId, "get_holders", { merchant: id });
-    const idle = rows.filter(([a, , last]) => !MERCHANTS.some((x) => a === `${x}.${cfg.relayerId}`) && Date.now() - Number(last) > IDLE_MS).slice(0, 2);
-    for (const [a] of idle) redeem.push(actions.functionCall("redeem_idle", { merchant: id, holder: a }, TICK_GAS, 0n));
-  }
-  if (redeem.length) {
-    const r = outcome(await relayer.signAndSendTransaction({ receiverId: cfg.contractId, actions: redeem, throwOnFailure: false }));
-    txs.push(r.txHash);
-    log.push(`bought back shares from ${redeem.length} idle holder(s)${r.ok ? "" : ` FAILED: ${r.error}`}`);
-  }
   return json(200, { status: "onchain", txHashes: txs, log });
+}
+
+/** Pays a player the whole coins of dividends they are owed (the contract can only ever pay what is owed). Players'
+ *  own trades claim too; this lets dividends land for someone who is only watching. */
+async function claim(cfg: Config, req: Request): Promise<Response> {
+  const b = await readJson(req);
+  const player = String(b.account ?? "");
+  if (!/^[a-z0-9._-]{2,64}$/.test(player)) throw new HttpError(400, "bad account id");
+  if (!(await hit(cfg, `claim:${player}`, LIMITS.claim.max, LIMITS.claim.windowSec))) throw new HttpError(429, "slow down");
+  const { provider, relayer } = account(cfg);
+  const owed = await view<{ coins: string }[]>(provider, cfg.contractId, "get_pending", { account_id: player });
+  const coins = owed.reduce((n, p) => n + Number(p.coins), 0);
+  if (coins === 0) return json(200, { status: "nothing", coins: 0 });
+  const r = outcome(await relayer.signAndSendTransaction({ receiverId: cfg.contractId, actions: [actions.functionCall("claim", { account_id: player }, TICK_GAS, 0n)], throwOnFailure: false }));
+  return json(r.ok ? 200 : 502, { status: r.ok ? "onchain" : "failed", coins, txHash: r.txHash, message: r.error });
 }
 
 async function settle(cfg: Config): Promise<Response> {
@@ -710,6 +711,8 @@ export async function handle(route: string, req: Request, env: RelayEnv): Promis
     if (route === "deal") return await deal(cfg, req, env);
     if (route === "tick") return await tick(cfg, env);
     if (route === "social") return await social(cfg, req, env);
+    if (route === "claim") return await claim(cfg, req);
+    if (route === "register") return await register(cfg, req);
     return json(404, { status: "error", message: "unknown route" });
   } catch (e) {
     if (e instanceof HttpError) return json(e.status, { status: "error", message: e.message });

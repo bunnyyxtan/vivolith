@@ -5,7 +5,7 @@ import * as THREE from "three";
 import type { Game } from "./game";
 import type { Play } from "./play";
 import { clockOf, MERCHANT_IDS } from "../economy/state";
-import { SHARES_PER_STALL } from "../economy/pricing";
+import { shareSupply } from "../economy/sim";
 
 const CSS = /* css */ `
 #boot { position:fixed; inset:0; z-index:30; background:#0e1520; color:#eef2f0; display:flex; flex-direction:column; align-items:center; justify-content:center;
@@ -117,7 +117,7 @@ export function createMenu(game: Game, play: Play): { open(): void } {
     const who = cap(a.label ? `signed in as ${a.label}` : a.id ? "playing as guest" : "connecting to NEAR");
     if (!play.restored && !started) return `Saltlight Market, a NEAR city where every merchant has a wallet. ${who}.`;
     const s = play.state;
-    const shares = MERCHANT_IDS.filter((id) => s.player.shares[id] > 0).map((id) => `${s.player.shares[id]}/${SHARES_PER_STALL} of ${s.merchants[id].shop}`);
+    const shares = MERCHANT_IDS.filter((id) => s.player.shares[id] > 0).map((id) => `${s.player.shares[id]}/${shareSupply(s, id)} of ${s.merchants[id].shop}`);
     return `${clockOf(s.minute).replace(/^(Day \d+) /, "$1, ")}. ${s.player.coins} ${s.player.coins === 1 ? "coin" : "coins"}${shares.length ? `, ${shares.join(", ")}` : ""}. ${who}.`;
   };
 

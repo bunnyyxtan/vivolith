@@ -162,6 +162,12 @@ export async function connectGuest(): Promise<string | null> {
     accountId = r.accountId;
     store.set(ACCOUNT_STORE, accountId);
   }
+  // A stored account may predate a market reset: make sure the current ledger knows it (idempotent on the relayer).
+  const known = await view<boolean>("is_registered", { account_id: accountId }).catch(() => true);
+  if (!known) {
+    const r = await post("register", { accountId });
+    if (r.status !== "onchain") return null;
+  }
   player = new Account(accountId, provider, new KeyPairSigner(key));
   return accountId;
 }
@@ -236,3 +242,6 @@ export const receipts = (accountId: string): Promise<ChainReceipt[]> => view<Cha
 /** Asks the relayer to run the merchants' autonomous turn and the day's settlement (both throttled server-side). */
 export const marketTick = (): Promise<Record<string, unknown>> => post("tick", {}).catch(() => ({ status: "failed" }));
 export const settleDay = (): Promise<Record<string, unknown>> => post("settle", {}).catch(() => ({ status: "failed" }));
+/** Pays the player every whole coin of dividends they are owed (the relayer checks get_pending first and sends nothing
+ *  when nothing is owed). Their own trades claim too. */
+export const claimDividends = (accountId: string): Promise<Record<string, unknown>> => post("claim", { account: accountId }).catch(() => ({ status: "failed" }));
