@@ -11522,7 +11522,7 @@ function initialEconomy() {
 			arriveAt: null
 		}],
 		player: {
-			coins: 25,
+			coins: 40,
 			inventory: stock(0, 0, 0),
 			rep: {
 				pema: 0,
@@ -11845,6 +11845,10 @@ const LIMITS = {
 	social: {
 		max: 10,
 		windowSec: 3600
+	},
+	merge: {
+		max: 3,
+		windowSec: 2592e3
 	}
 };
 function readConfig(env) {
@@ -11970,7 +11974,6 @@ async function status(cfg) {
 	});
 }
 async function guest(cfg, req) {
-	if (!await hit(cfg, `guest:${clientIp(req)}`, LIMITS.guest.max, LIMITS.guest.windowSec)) throw new HttpError(429, "too many new players from this address, try later");
 	const body = await readJson(req);
 	const pk = typeof body.publicKey === "string" ? body.publicKey : "";
 	let publicKey;
@@ -11986,6 +11989,12 @@ async function guest(cfg, req) {
 		accountId,
 		finality: "final"
 	}).then(() => true, () => false);
+	if (exists && await view(provider, cfg.contractId, "is_registered", { account_id: accountId })) return json(200, {
+		status: "onchain",
+		accountId,
+		txHashes: []
+	});
+	if (!await hit(cfg, `guest:${clientIp(req)}`, LIMITS.guest.max, LIMITS.guest.windowSec)) throw new HttpError(429, "too many new players from this address, try later");
 	const txs = [];
 	if (!exists) {
 		const r = outcome(await relayer.signAndSendTransaction({
@@ -12025,7 +12034,6 @@ async function guest(cfg, req) {
 /** Re-registers an account this relayer created (a guest `g...` or signed-in `s...` sub-account that exists on chain)
 *  with the market contract, e.g. after the market's ledger was reset. Idempotent; never creates accounts. */
 async function register(cfg, req) {
-	if (!await hit(cfg, `guest:${clientIp(req)}`, LIMITS.guest.max, LIMITS.guest.windowSec)) throw new HttpError(429, "too many new players from this address, try later");
 	const body = await readJson(req);
 	const accountId = String(body.accountId ?? "");
 	const suffix = `.${cfg.relayerId}`;
@@ -12040,6 +12048,7 @@ async function register(cfg, req) {
 		accountId,
 		txHashes: []
 	});
+	if (!await hit(cfg, `register:${clientIp(req)}`, LIMITS.guest.max, LIMITS.guest.windowSec)) throw new HttpError(429, "too many new players from this address, try later");
 	const r = outcome(await relayer.callFunctionRaw({
 		contractId: cfg.contractId,
 		methodName: "register_player",
@@ -12254,6 +12263,12 @@ async function social(cfg, req, env) {
 		accountId,
 		finality: "final"
 	}).then(() => true, () => false);
+	if (exists && await view(provider, cfg.contractId, "is_registered", { account_id: accountId })) return json(200, {
+		status: "onchain",
+		accountId,
+		txHashes: []
+	});
+	if (!await hit(cfg, `guest:${clientIp(req)}`, LIMITS.guest.max, LIMITS.guest.windowSec)) throw new HttpError(429, "too many new players from this address, try later");
 	const txs = [];
 	if (!exists) {
 		const r = outcome(await relayer.signAndSendTransaction({
@@ -12286,7 +12301,7 @@ async function social(cfg, req, env) {
 	}
 	let merged = null;
 	const guest = guestFromProof(body.guest, body.idToken, cfg);
-	if (guest && guest !== accountId && await view(provider, cfg.contractId, "is_registered", { account_id: guest })) {
+	if (guest && guest !== accountId && await view(provider, cfg.contractId, "is_registered", { account_id: guest }) && await hit(cfg, `merge:${accountId}`, LIMITS.merge.max, LIMITS.merge.windowSec)) {
 		const r = outcome(await relayer.signAndSendTransaction({
 			receiverId: cfg.contractId,
 			actions: [actions.functionCall("migrate_player", {

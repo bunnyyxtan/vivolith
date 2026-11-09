@@ -53,6 +53,8 @@ async function relayCall(player: Account, method: string, args: Record<string, u
   }
 }
 
+/** contracts/market STARTER_COIN: what register_player mints, once per account. */
+const STARTER = 40;
 const tx = (h: unknown): string => `https://testnet.nearblocks.io/txns/${String(h)}`;
 
 async function newGuest(): Promise<Account> {
@@ -71,7 +73,22 @@ await audit("opening");
 
 const [kavi, rin] = [await newGuest(), await newGuest()];
 const pema = `pema.${cfg.relayerId}`, tomas = `tomas.${cfg.relayerId}`;
-assert.equal((await settled(kavi.accountId)).coin, 25, "starter purse");
+assert.equal((await settled(kavi.accountId)).coin, STARTER, "starter purse, minted once on NEAR");
+assert.equal((await settled(rin.accountId)).coin, STARTER);
+// The grant is once per account: asking again (a reload, Continue or New Game re-runs this) mints nothing.
+const supply0 = await view<string>("mt_supply", { token_id: "coin" });
+const again1 = await call("guest", { publicKey: (await kavi.getSigner()!.getPublicKey()).toString() });
+const again2 = await call("register", { accountId: kavi.accountId });
+assert.equal(again1.status, 200); assert.equal(again2.status, 200);
+assert.deepEqual([again1.body.txHashes, again2.body.txHashes], [[], []], "no transaction: already registered");
+assert.equal((await settled(kavi.accountId)).coin, STARTER, "still exactly one starter purse");
+assert.equal(await view<string>("mt_supply", { token_id: "coin" }), supply0, "no coin minted by the repeats");
+console.log(`starter purse: ${STARTER} c on NEAR for each new guest; repeated guest/register calls minted nothing`);
+// A refused registration grants nothing: only accounts this relayer created can register.
+const fake = await call("register", { accountId: "g0123456789abcdef.someone-else.testnet" });
+assert.equal(fake.status, 400);
+assert.equal(await view<string>("mt_supply", { token_id: "coin" }), supply0);
+console.log("refused registration of a foreign account:", fake.body.message);
 
 // 1. Buy 3 mangoes from Tomas at his posted price (tutorial step 3).
 const offers = await view<{ merchant: string; token_id: string; side: string; qty: string; price: string }[]>("get_offers");
@@ -88,6 +105,13 @@ assert.equal(refused.status, 422, JSON.stringify(refused.body));
 assert.deepEqual(await settled(kavi.accountId), before, "a failed trade moves nothing");
 console.log("refused (price limit):", refused.body.message, tx(refused.body.txHash));
 
+// 3. Deliver to Pema with a haggled deal she signs (tutorial step 4): 3 at 6 c. If her till cannot pay 18 c yet, the
+// next market turn's Market Guild loan covers it (as a player waiting a minute would see).
+if (((await settled(pema)).coin ?? 0) < 18) {
+  const t = await call("tick", {});
+  console.log("pema's till was short: market turn", t.body.status, ((t.body.log as string[] | undefined) ?? []).filter((l) => /guild lent pema/.test(l)).join("; "));
+  await settled(pema);
+}
 // 3. Deliver to Pema with a haggled deal she signs (tutorial step 4): 3 at 6 c.
 const signed = await call("deal", { merchant: "pema", side: "sell", token: "mango", qty: 3, unit: 6, player: kavi.accountId });
 assert.equal(signed.status, 200, JSON.stringify(signed.body));

@@ -16,7 +16,7 @@ Anyone can question these numbers: section 7 lists the public views and scripts 
 | `MAX_PACKS` | 20 packs per transaction | `lib.rs` |
 | `BPS` | dividend rate 5,000 basis points (50% of revenue) | `DIVIDEND_BPS` |
 | `K` | accumulator scale 720,720 × 10^18 | `ACC_SCALE` |
-| Starter purse | 25 coins per registered player | `STARTER_COIN` |
+| Starter purse | 40 coins per registered player, once per account | `STARTER_COIN` (contract), `STARTER_COINS` (`state.ts`) |
 | Guild fund | 200 coins, minted once at `new` | `handlers.ts` `GUILD_FUND` |
 | Market day | 10 real minutes | `MARKET_DAY_MS` |
 
@@ -34,6 +34,25 @@ and carried forward, as shown below.
 
 `operator_mint` can create only goods, never coin. The contract refuses to burn shares or the contract's own
 custody balance. Coin supply is exactly the mints minus the burns, readable at any time with `mt_supply("coin")`.
+
+### The starter purse
+
+- **Who gets it:** every new account. `register_player` mints `STARTER_COIN` (40 c) on NEAR the first time an account
+  joins the market, and never again for that account. A reload, Continue or New Game reuses the account and mints
+  nothing (verified on testnet 2026-11-09: coin supply unchanged by repeated `guest`/`register` calls).
+- **Why 40 c:** the first day costs about 12 c for three mangoes at the newcomer price (the delivery earns 18 c back),
+  9 to 15 c for the haggle purchase, and 5 c for a pack of Pema shares. 40 c covers all of that with room left for a
+  pack at a 10 c stall, so a new player never runs dry before their first profit. Accounts registered before the
+  change keep their 25 c history; nothing was re-granted.
+- **Where it comes from:** the purse is new coin, like street shoppers' payments. It never comes from a merchant till
+  or the Guild fund, so onboarding cannot drain either.
+- **Abuse limits** (relayer):
+  - Only accounts the relayer itself created (`g…`/`s…`) can register.
+  - A new account counts against a per-address limit of 5 an hour (repeats and refused attempts do not count).
+  - A signed-in account can absorb at most 3 guests' progress per 30 days. Guests cannot transfer coin themselves
+    (their keys are limited to buy, sell and deal).
+- **Ceiling on farming:** 5 accounts × 40 c = 200 c of in-game coin per address per hour, with no monetary value.
+  Merging it into one account is capped at 120 c a month.
 
 ## 3. Shares: reserve-backed, never sold out
 

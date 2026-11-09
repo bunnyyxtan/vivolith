@@ -91,6 +91,8 @@ export interface EconomyState {
 }
 
 export const MINUTES_PER_DAY = 24 * 60;
+/** Coins a new player starts with: the contract's STARTER_COIN, minted once per account on NEAR (offline, the same). */
+export const STARTER_COINS = 40;
 export const START_MINUTE = 9 * 60; // Day 1, 09:00
 const stock = (mango: number, lemon: number, lassi: number): Stock => ({ mango, lemon, lassi });
 
@@ -132,7 +134,7 @@ export function initialEconomy(): EconomyState {
         status: "held", arriveAt: null,
       },
     ],
-    player: { coins: 25, inventory: stock(0, 0, 0), rep: { pema: 0, tomas: 0, mira: 0, arin: 0 }, shares: { pema: 0, tomas: 0, mira: 0, arin: 0 } },
+    player: { coins: STARTER_COINS, inventory: stock(0, 0, 0), rep: { pema: 0, tomas: 0, mira: 0, arin: 0 }, shares: { pema: 0, tomas: 0, mira: 0, arin: 0 } },
     carry: {},
     flags: {},
     log: [{ minute: START_MINUTE, kind: "shipment", text: "Pema's mango shipment is held at the harbor." }],

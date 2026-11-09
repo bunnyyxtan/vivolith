@@ -10,7 +10,7 @@ import { loadGame, saveGame, clearSave } from "../economy/save";
 import { calibrateSoles } from "./soles";
 import { advance, invest, MAX_PACKS, payReleaseFee, recordRestock, REOPEN_SHARE, reopenGap, sellShares, SHARE_PACK, shareCost, shareRefund, shareSupply, tryReopen, UPGRADE_AT } from "../economy/sim";
 import { bidFor, quote, lassiPrice, stallPull, type Quote } from "../economy/pricing";
-import { clockOf, dayOf, MERCHANT_IDS, MINUTES_PER_DAY, type EconomyState, type Good, type MerchantId, type Receipt } from "../economy/state";
+import { clockOf, dayOf, MERCHANT_IDS, MINUTES_PER_DAY, STARTER_COINS, type EconomyState, type Good, type MerchantId, type Receipt } from "../economy/state";
 import { applyTactic, closeDeal, dealTotal, dealUnit, isLocked, lockKey, openHaggle, thoughts, tickPatience, modeFor, PERSONALITY, TACTICS, type HaggleSession, type Tactic } from "../economy/haggle";
 import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
@@ -396,7 +396,7 @@ export async function createPlay(game: Game): Promise<Play> {
   const goodFor = (id: MerchantId, tab: Tab): Good => (tab === "buy" && id === "arin" ? "lassi" : "mango");
   /** What a merchant asks this player. On the first day's buying step the tutorial seller gives a newcomer's price
    *  (DELIVERY_PRICE - 2, never above his posted price and never below the 55% the relayer lets a merchant sign), so
-   *  three mangoes always fit the 25 c starter purse and always sell to Pema at a profit, whatever the live market. */
+   *  three mangoes always fit the starter purse and always sell to Pema at a profit, whatever the live market. */
   const buyUnit = (id: MerchantId): number => {
     const p = priceOf(state, id).price;
     return stepIndex(state) === 2 && id === tutorSeller(state) ? Math.min(p, Math.max(Math.ceil(p * 0.55), DELIVERY_PRICE - 2)) : p;
@@ -957,7 +957,7 @@ export async function createPlay(game: Game): Promise<Play> {
   const showWelcome = (): void => openCard((card) => {
     card.append(el("h2", "", "Welcome to NEAR City"));
     const s = el("section");
-    s.append(el("p", "", "You're Kavi, new in town with 25 coins in your pocket."));
+    s.append(el("p", "", `You're Kavi, new in town with ${STARTER_COINS} coins in your pocket.`));
     s.append(el("p", "", "The market square ahead runs on trade. Four merchants buy and sell all day, and each keeps their own account on NEAR. Prices move with every crate."));
     s.append(el("p", "", "Auntie Pema's fruit stall is in trouble. Go and see her."));
     card.append(s);

@@ -25,7 +25,7 @@ fn give(m: &mut Market, who: &str, coin: u128) {
 }
 
 /// Operator `op`, guild `guild.t` (200 c), merchants pema (5 c a pack, 4 c backing) and tomas (10 / 8),
-/// player `kavi` with 25 coin; pema has 5 mangoes listed at 8.
+/// player `kavi` with STARTER_COIN (40) coin; pema has 5 mangoes listed at 8.
 fn market() -> Market {
     as_caller("op");
     let mut m = Market::new(acc("op"), acc("guild.t"), U128(200));
@@ -71,7 +71,7 @@ fn buy_moves_coin_and_goods_and_emits_nep245() {
     let mut m = market();
     as_caller("kavi");
     m.buy(acc("pema.t"), "mango".into(), U128(2), U128(8));
-    assert_eq!(bal(&m, "kavi", "coin"), 25 - 16);
+    assert_eq!(bal(&m, "kavi", "coin"), STARTER_COIN - 16);
     assert_eq!(bal(&m, "kavi", "mango"), 2);
     assert_eq!(bal(&m, "pema.t", "coin"), 16);
     assert_eq!(bal(&m, "pema.t", "mango"), 3);
@@ -104,9 +104,9 @@ fn buy_more_than_offered_fails() {
 fn buy_without_coin_fails() {
     let mut m = market();
     as_caller("pema.t");
-    m.list("mango".into(), U128(5), U128(20), None);
+    m.list("mango".into(), U128(5), U128(21), None);
     as_caller("kavi");
-    m.buy(acc("pema.t"), "mango".into(), U128(2), U128(20));
+    m.buy(acc("pema.t"), "mango".into(), U128(2), U128(21));
 }
 
 #[test]
@@ -162,7 +162,7 @@ fn register_is_idempotent() {
     let mut m = market();
     as_caller("op");
     assert!(!m.register_player(acc("kavi")));
-    assert_eq!(bal(&m, "kavi", "coin"), 25);
+    assert_eq!(bal(&m, "kavi", "coin"), STARTER_COIN);
 }
 
 #[test]
@@ -184,7 +184,7 @@ fn sell_into_bid() {
     as_caller("kavi");
     m.sell(acc("tomas.t"), "lemon".into(), U128(3), U128(4));
     assert_eq!(bal(&m, "kavi", "lemon"), 1);
-    assert_eq!(bal(&m, "kavi", "coin"), 25 + 12);
+    assert_eq!(bal(&m, "kavi", "coin"), STARTER_COIN + 12);
     assert_eq!(bal(&m, "tomas.t", "lemon"), 3);
     assert!(m.get_offers().iter().all(|o| o.side != "bid"));
 }
@@ -222,7 +222,7 @@ fn mt_transfer_with_one_yocto() {
     let mut m = market();
     testing_env!(VMContextBuilder::new().predecessor_account_id(acc("kavi")).attached_deposit(NearToken::from_yoctonear(1)).build());
     m.mt_transfer(acc("pema.t"), "coin".into(), U128(5), None, None);
-    assert_eq!(bal(&m, "kavi", "coin"), 20);
+    assert_eq!(bal(&m, "kavi", "coin"), STARTER_COIN - 5);
 }
 
 // ---------- shares ----------
@@ -233,7 +233,7 @@ fn investing_splits_the_price_between_reserve_and_till_and_sells_back_at_the_bac
     as_caller("kavi");
     m.buy(acc("pema.t"), "share:pema".into(), U128(30), U128(10)); // 2 packs at 5 c
     assert_eq!(bal(&m, "kavi", "share:pema"), 30);
-    assert_eq!(bal(&m, "kavi", "coin"), 15);
+    assert_eq!(bal(&m, "kavi", "coin"), STARTER_COIN - 10);
     assert_eq!(bal(&m, "pema.t", "coin"), 2, "one coin per pack is working capital");
     let s = stall(&m, "pema");
     assert_eq!((s.reserve.0, s.treasury.0, s.supply.0, s.holders), (8, 270, 300, 1));
@@ -241,7 +241,7 @@ fn investing_splits_the_price_between_reserve_and_till_and_sells_back_at_the_bac
     assert_audit(&m);
     as_caller("kavi");
     m.sell(acc("pema.t"), "share:pema".into(), U128(15), U128(4));
-    assert_eq!(bal(&m, "kavi", "coin"), 19);
+    assert_eq!(bal(&m, "kavi", "coin"), STARTER_COIN - 6);
     assert_eq!(stall(&m, "pema").reserve.0, 4);
     assert_eq!(stall(&m, "pema").treasury.0, 285, "sold shares go back on sale to the next partner");
     assert_audit(&m);
@@ -257,7 +257,7 @@ fn a_partner_can_always_sell_back_even_when_the_till_is_empty_and_the_stall_clos
     assert!(!m.charge_rent(2, "pema".into(), U128(40), U128(10)));
     as_caller("kavi");
     m.sell(acc("pema.t"), "share:pema".into(), U128(45), U128(12));
-    assert_eq!(bal(&m, "kavi", "coin"), 25 - 15 + 12);
+    assert_eq!(bal(&m, "kavi", "coin"), STARTER_COIN - 15 + 12);
     assert_audit(&m);
 }
 
@@ -727,7 +727,7 @@ fn rent_is_burned_once_per_day() {
     assert!(m.charge_rent(2, "tomas".into(), U128(40), U128(10)));
     assert!(m.charge_rent(2, "tomas".into(), U128(40), U128(10)));
     assert_eq!(bal(&m, "tomas.t", "coin"), 60);
-    assert_eq!(m.mt_supply("coin".into()).unwrap().0, 200 + 25 + 60);
+    assert_eq!(m.mt_supply("coin".into()).unwrap().0, 200 + STARTER_COIN + 60);
     assert_eq!(stall(&m, "tomas").last_rent, Some(2), "the relayer can see a day was charged");
     assert!(m.charge_rent(1, "tomas".into(), U128(40), U128(10)), "an older day is never charged after a newer one");
     assert_eq!(bal(&m, "tomas.t", "coin"), 60);
@@ -770,7 +770,7 @@ fn the_guild_lends_only_what_it_holds_and_is_repaid_before_dues() {
     assert_eq!(bal(&m, "guild.t", "coin"), 150);
     let (repaid, dues) = m.guild_collect("tomas".into(), U128(80), U128(200));
     assert_eq!((repaid.0, dues.0), (50, 0));
-    assert_eq!(m.mt_supply("coin".into()).unwrap().0, 200 + 25, "loans move coin, they never create it");
+    assert_eq!(m.mt_supply("coin".into()).unwrap().0, 200 + STARTER_COIN, "loans move coin, they never create it");
     // a fund that lost coin (e.g. a stall that never repays) is refilled by dues only up to its size, loans included
     m.guild_lend("pema".into(), U128(30));
     m.operator_burn(acc("guild.t"), "coin".into(), U128(20), "test loss".into()); // assets 150 + 30 = 180
@@ -797,7 +797,7 @@ fn signed_deal_settles_at_haggled_price() {
     as_caller("kavi");
     let (n, e, s) = signed_deal("buy", 2, 6, 1, &signer(1));
     m.deal("pema".into(), "buy".into(), "mango".into(), U128(2), U128(6), n, e, s);
-    assert_eq!(bal(&m, "kavi", "coin"), 13);
+    assert_eq!(bal(&m, "kavi", "coin"), STARTER_COIN - 12);
     assert_eq!(bal(&m, "kavi", "mango"), 2);
     assert_eq!(bal(&m, "pema.t", "coin"), 12);
     assert_eq!(m.get_revenue("pema".into()).0, 12);
@@ -812,7 +812,7 @@ fn player_sells_into_signed_deal() {
     as_caller("kavi");
     let (n, e, s) = signed_deal("sell", 4, 5, 2, &signer(1));
     m.deal("pema".into(), "sell".into(), "mango".into(), U128(4), U128(5), n, e, s);
-    assert_eq!(bal(&m, "kavi", "coin"), 45);
+    assert_eq!(bal(&m, "kavi", "coin"), STARTER_COIN + 20);
     assert_eq!(bal(&m, "pema.t", "mango"), 9);
 }
 
@@ -887,7 +887,7 @@ fn migrate_moves_everything_once() {
     assert_eq!(m.migrate_player(acc("kavi"), acc("kavi.social")), 2);
     assert_eq!(bal(&m, "kavi", "coin"), 0);
     assert_eq!(bal(&m, "kavi", "mango"), 0);
-    assert_eq!(bal(&m, "kavi.social", "coin"), 25 + 9);
+    assert_eq!(bal(&m, "kavi.social", "coin"), STARTER_COIN + (STARTER_COIN - 16));
     assert_eq!(bal(&m, "kavi.social", "mango"), 2);
     assert_eq!(m.migrate_player(acc("kavi"), acc("kavi.social")), 0, "nothing left to move");
 }

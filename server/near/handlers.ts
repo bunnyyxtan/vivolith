@@ -61,6 +61,9 @@ const LIMITS = {
   deal: { max: 20, windowSec: 60 }, // per player account
   claim: { max: 6, windowSec: 60 }, // per player account
   social: { max: 10, windowSec: 3600 }, // per IP
+  // per signed-in account: guests whose progress (and starter purse) may merge into it. Each new guest gets the
+  // starter grant once; this keeps "make guests, merge them into one account" from multiplying it.
+  merge: { max: 3, windowSec: 30 * 24 * 3600 },
 } as const;
 
 export function readConfig(env: RelayEnv): Config {
@@ -187,7 +190,6 @@ async function status(cfg: Config): Promise<Response> {
 }
 
 async function guest(cfg: Config, req: Request): Promise<Response> {
-  if (!(await hit(cfg, `guest:${clientIp(req)}`, LIMITS.guest.max, LIMITS.guest.windowSec))) throw new HttpError(429, "too many new players from this address, try later");
   const body = await readJson(req);
   const pk = typeof body.publicKey === "string" ? body.publicKey : "";
   let publicKey: PublicKey;
@@ -200,6 +202,10 @@ async function guest(cfg: Config, req: Request): Promise<Response> {
   const { provider, relayer } = account(cfg);
   const accountId = guestIdFor(pk, cfg.relayerId);
   const exists = await provider.viewAccount({ accountId, finality: "final" }).then(() => true, () => false);
+  const registered = exists && (await view<boolean>(provider, cfg.contractId, "is_registered", { account_id: accountId }));
+  if (registered) return json(200, { status: "onchain", accountId, txHashes: [] }); // a repeat: nothing to create or grant
+  // Only a new account (an account, NEAR for its key, and a starter purse) counts against the per-address limit.
+  if (!(await hit(cfg, `guest:${clientIp(req)}`, LIMITS.guest.max, LIMITS.guest.windowSec))) throw new HttpError(429, "too many new players from this address, try later");
   const txs: string[] = [];
   if (!exists) {
     const r = outcome(
@@ -227,7 +233,6 @@ async function guest(cfg: Config, req: Request): Promise<Response> {
 /** Re-registers an account this relayer created (a guest `g...` or signed-in `s...` sub-account that exists on chain)
  *  with the market contract, e.g. after the market's ledger was reset. Idempotent; never creates accounts. */
 async function register(cfg: Config, req: Request): Promise<Response> {
-  if (!(await hit(cfg, `guest:${clientIp(req)}`, LIMITS.guest.max, LIMITS.guest.windowSec))) throw new HttpError(429, "too many new players from this address, try later");
   const body = await readJson(req);
   const accountId = String(body.accountId ?? "");
   const suffix = `.${cfg.relayerId}`;
@@ -235,6 +240,8 @@ async function register(cfg: Config, req: Request): Promise<Response> {
   const { provider, relayer } = account(cfg);
   if (!(await provider.viewAccount({ accountId, finality: "final" }).then(() => true, () => false))) throw new HttpError(404, "no such account");
   if (await view<boolean>(provider, cfg.contractId, "is_registered", { account_id: accountId })) return json(200, { status: "onchain", accountId, txHashes: [] });
+  // only a registration that would mint a starter purse counts against the per-address limit
+  if (!(await hit(cfg, `register:${clientIp(req)}`, LIMITS.guest.max, LIMITS.guest.windowSec))) throw new HttpError(429, "too many new players from this address, try later");
   const r = outcome(await relayer.callFunctionRaw({ contractId: cfg.contractId, methodName: "register_player", args: { account_id: accountId }, gas: MAX_GAS }));
   return json(r.ok ? 200 : 502, { status: r.ok ? "onchain" : "failed", accountId, txHashes: [r.txHash], message: r.error });
 }
@@ -433,6 +440,10 @@ async function social(cfg: Config, req: Request, env: RelayEnv): Promise<Respons
   const session = keyPairFromSeed(createHash("sha256").update(`vivolith-session:${identity}:${secret}`).digest());
   const accountId = `s${createHash("sha256").update(`vivolith-account:${identity}`).digest("hex").slice(0, 16)}.${cfg.relayerId}`;
   const exists = await provider.viewAccount({ accountId, finality: "final" }).then(() => true, () => false);
+  const registered = exists && (await view<boolean>(provider, cfg.contractId, "is_registered", { account_id: accountId }));
+  if (registered) return json(200, { status: "onchain", accountId, txHashes: [] }); // a repeat: nothing to create or grant
+  // Only a new account (an account, NEAR for its key, and a starter purse) counts against the per-address limit.
+  if (!(await hit(cfg, `guest:${clientIp(req)}`, LIMITS.guest.max, LIMITS.guest.windowSec))) throw new HttpError(429, "too many new players from this address, try later");
   const txs: string[] = [];
   if (!exists) {
     const r = outcome(await relayer.signAndSendTransaction({
@@ -450,7 +461,8 @@ async function social(cfg: Config, req: Request, env: RelayEnv): Promise<Respons
   }
   let merged: string | null = null;
   const guest = guestFromProof(body.guest as GuestLink, body.idToken, cfg);
-  if (guest && guest !== accountId && (await view<boolean>(provider, cfg.contractId, "is_registered", { account_id: guest }))) {
+  const canMerge = guest && guest !== accountId && (await view<boolean>(provider, cfg.contractId, "is_registered", { account_id: guest }));
+  if (canMerge && (await hit(cfg, `merge:${accountId}`, LIMITS.merge.max, LIMITS.merge.windowSec))) {
     const r = outcome(await relayer.signAndSendTransaction({
       receiverId: cfg.contractId,
       actions: [actions.functionCall("migrate_player", { from: guest, to: accountId }, MAX_GAS, 0n)],

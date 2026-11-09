@@ -39,7 +39,9 @@ pub const MAX_PACKS: u128 = 20;
 /// other remainder is carried in the stall (`acc_rem`) and per holder (`carry`): deferred, never lost. Headroom:
 /// u128 holds balance * accumulated dividend up to 4.7e14 coins between two checkpoints of one holder.
 pub const ACC_SCALE: u128 = 720_720 * 1_000_000_000_000_000_000;
-pub const STARTER_COIN: u128 = 25;
+/// Coins every new player account receives on chain, once (`register_player` is idempotent per account). Enough for the
+/// first day with room to spare: three mangoes, a haggle, and a pack of shares in two stalls. See docs/ECONOMY_MATH.md.
+pub const STARTER_COIN: u128 = 40;
 pub const MAX_RECEIPTS: usize = 20;
 /// Settlements kept per stall for the views (older ones are summarised in the stall's lifetime totals).
 pub const MAX_HISTORY: usize = 24;
