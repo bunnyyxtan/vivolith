@@ -94,7 +94,7 @@ export function createMenu(game: Game, play: Play): { open(): void } {
   const root = document.getElementById("menu")!;
   const { player, rig } = game;
   const vantage = game.look.scene.getObjectByName("SPAWN")?.getWorldPosition(new THREE.Vector3()) ?? new THREE.Vector3(0, 0, -30);
-  let isOpen = false, started = false, sel = 0, items: Item[] = [], sheet: "" | "how" | "new" = "", t = 0;
+  let isOpen = false, started = false, sel = 0, items: Item[] = [], sheet: "" | "how" | "new" | "signout" = "", t = 0;
 
   // Cinematic: runs after the rig each frame, so it owns the camera while the menu is open.
   const fwd = new THREE.Vector3(0, 0, -1), right = new THREE.Vector3(1, 0, 0);
@@ -111,6 +111,7 @@ export function createMenu(game: Game, play: Play): { open(): void } {
     rig.camera.lookAt(look);
   });
 
+  const esc = (t: string): string => t.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
   const cap = (s: string): string => s[0].toUpperCase() + s.slice(1);
   const where = (): string => {
     const a = play.account();
@@ -138,7 +139,8 @@ export function createMenu(game: Game, play: Play): { open(): void } {
     const a = play.account();
     items = [{ label: started ? "Resume" : play.restored ? "Continue" : "Play", run: enter }];
     if (play.restored || started) items.push({ label: "New Game", run: () => { sheet = "new"; render(); } });
-    if (a.label) items.push({ label: "Sign out", note: a.label, run: () => { void play.signOut().then(render); } });
+    // Signing out asks first: it is the one item that changes whose account is playing.
+    if (a.label) items.push({ label: "Sign out", note: a.label, run: () => { sheet = "signout"; render(); } });
     else if (a.canSignIn && a.id) items.push({ label: "Sign in with email or Google", note: "Keep your market on any device", run: () => { void play.signIn().then(render); } });
     items.push({ label: "How to play", run: () => { sheet = sheet === "how" ? "" : "how"; render(); } });
     sel = Math.min(sel, items.length - 1);
@@ -154,14 +156,19 @@ export function createMenu(game: Game, play: Play): { open(): void } {
         <tr><td><kbd>N</kbd>your NEAR account</td><td><kbd>Esc</kbd>this menu</td></tr>
       </table>
       <p>Look at a chalkboard to see why a price is what it is. Every deal and share is recorded on NEAR testnet, with no wallet popups.</p></div>`;
+    if (sheet === "signout") return `<div class="sheet">
+      <p><b>Sign out of ${esc(play.account().label ?? "")}?</b> Your coins, goods and shares stay in that NEAR account; sign in again on any device to get them back. This browser goes back to its guest game.</p>
+      <p class="confirm"><button data-act="signout"><kbd>Y</kbd>Sign out</button><button data-act="keep"><kbd>Esc</kbd>Stay signed in</button></p></div>`;
     if (sheet === "new") return `<div class="sheet">
-      <p><b>Start the market over?</b> The city resets to Day 1. Coins, goods and shares you hold on NEAR stay in your account.</p>
+      <p><b>Start the story over?</b> The city resets to Day 1. You stay ${play.account().label ? `signed in as ${esc(play.account().label ?? "")}` : "on this browser's account"}, and the coins, goods and shares you hold on NEAR stay in it.</p>
       <p class="confirm"><button data-act="reset"><kbd>Enter</kbd>Start over</button><button data-act="keep"><kbd>Esc</kbd>Keep playing</button></p></div>`;
     return "";
   };
 
   const render = (): void => {
+    const before = items.map((it) => it.label).join("|");
     build();
+    if (items.map((it) => it.label).join("|") !== before) sel = 0; // the list changed: never leave a stale selection
     root.innerHTML = `<div class="col"><h1>VIVOLITH</h1><div class="where"></div><ul></ul>${sheetHtml()}</div><div class="foot">NEAR testnet</div>`;
     root.querySelector(".where")!.textContent = where();
     const ul = root.querySelector("ul")!;
@@ -175,6 +182,7 @@ export function createMenu(game: Game, play: Play): { open(): void } {
       ul.append(li);
     });
     root.querySelector<HTMLButtonElement>("[data-act=reset]")?.addEventListener("click", () => play.reset());
+    root.querySelector<HTMLButtonElement>("[data-act=signout]")?.addEventListener("click", () => { sheet = ""; void play.signOut().then(render); });
     root.querySelector<HTMLButtonElement>("[data-act=keep]")?.addEventListener("click", () => { sheet = ""; render(); });
   };
 
@@ -194,6 +202,12 @@ export function createMenu(game: Game, play: Play): { open(): void } {
     if (sheet === "new") {
       if (e.code === "Enter") play.reset();
       else if (e.code === "Escape") { sheet = ""; render(); }
+      e.preventDefault();
+      return;
+    }
+    if (sheet === "signout") { // only an explicit Y signs out: Enter or Space (aimed at another item) never do
+      if (e.code === "KeyY") { sheet = ""; void play.signOut().then(render); }
+      else if (e.code === "Escape" || e.code === "Enter" || e.code === "Space") { sheet = ""; render(); }
       e.preventDefault();
       return;
     }

@@ -73,8 +73,21 @@ export const merchantAccount = (id: string): string => `${id}.${status?.relayer 
 export const playerId = (): string | null => player?.accountId ?? null;
 /** True when Google/email sign-in is available (the relayer has our Auth0 tenant configured). */
 export const socialAvailable = (): boolean => Boolean(status?.auth);
-/** Email or name of a signed-in player; null for guests. */
-export const playerLabel = (): string | null => store.get(LABEL_STORE);
+/** Email or name of a signed-in player; null for guests. Never empty while signed in (finishSignIn falls back to the
+ *  account name), so "signed in" can never be mistaken for "guest". */
+export const playerLabel = (): string | null => store.get(LABEL_STORE) || null;
+
+/** Called when another tab of this browser signs in or out, or this tab's sign-in turns out to have expired. */
+const accountListeners = new Set<(why: "other-tab" | "expired") => void>();
+export const onAccountChange = (f: (why: "other-tab" | "expired") => void): void => { accountListeners.add(f); };
+// Another tab changed who is signed in (localStorage is shared per origin): follow it, never keep acting as the old one.
+try {
+  window.addEventListener("storage", (e) => {
+    if (e.key !== null && e.key !== KEY_STORE && e.key !== ACCOUNT_STORE && e.key !== LABEL_STORE) return;
+    player = null;
+    void connectGuest().then(() => { for (const f of accountListeners) f("other-tab"); });
+  });
+} catch { /* no window (tests) */ }
 
 let auth: Auth0Client | null = null;
 const authClient = (): Auth0Client => {
@@ -131,9 +144,9 @@ async function finishSignIn(): Promise<{ accountId: string; label: string; merge
   }
   store.set(KEY_STORE, r.sessionKey);
   store.set(ACCOUNT_STORE, r.accountId);
-  store.set(LABEL_STORE, String(r.label ?? ""));
+  store.set(LABEL_STORE, String(r.label || r.accountId.split(".")[0]));
   player = new Account(r.accountId, provider, new KeyPairSigner(KeyPair.fromString(r.sessionKey as KeyPairString)));
-  return { accountId: r.accountId, label: String(r.label ?? ""), merged: Boolean(r.merged) };
+  return { accountId: r.accountId, label: String(r.label || r.accountId.split(".")[0]), merged: Boolean(r.merged) };
 }
 
 /** Back to the guest account this browser had before signing in (its key never left the browser). */
@@ -185,6 +198,18 @@ const errText = (e: unknown, fallback: string): string => (e instanceof Error ? 
 /** Player move as a relayed meta-transaction. It is signed once; an attempt with no clear answer resends the same
  *  bytes, which NEAR accepts at most once (the delegate nonce), so a retry can never pay twice. */
 async function act(method: "buy" | "sell" | "deal", args: Record<string, unknown>): Promise<TxOutcome> {
+  const o = await actOnce(method, args);
+  if (o.status === "failed" && store.get(LABEL_STORE) && /AccessKeyNotFound|InvalidAccessKey|access key.*(not found|doesn't exist|does not exist)/i.test(o.message ?? "")) {
+    // The signed-in session's key is no longer on the account (revoked or expired): nothing was charged. Sign out to
+    // this browser's guest game so the player is never left "signed in" with moves that cannot succeed.
+    await signOutSocial();
+    for (const f of accountListeners) f("expired");
+    return { status: "failed", message: "your sign-in expired: sign in again" };
+  }
+  return o;
+}
+
+async function actOnce(method: "buy" | "sell" | "deal", args: Record<string, unknown>): Promise<TxOutcome> {
   if (!player) return { status: "local", message: "offline: not connected to NEAR" };
   const s = await chainStatus();
   let delegate = "";

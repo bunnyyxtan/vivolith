@@ -16,7 +16,7 @@ import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
 import {
   EXPLORER_ACCOUNT, EXPLORER_TX, balances, buyPosted, sellPosted, connectGuest, haggleDeal, marketTick, merchantAccount, playerId, playerLabel, receipts as chainReceipts,
-  settleDay, claimDividends, socialAvailable, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
+  settleDay, claimDividends, onAccountChange, socialAvailable, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
 } from "../near/chain";
 
 const GAME_MIN_PER_SEC = 2.4; // 09:00 -> 21:00 in five real minutes
@@ -1191,7 +1191,8 @@ export async function createPlay(game: Game): Promise<Play> {
     who.append(el("b", "", !id ? "Offline" : label || "Guest"), el("span", "", id ? (label ? " · saved on NEAR" : " · saved in this browser") : " · trades stay here"));
     hud.acct.append(who);
     if (!id || (!label && !socialAvailable())) return; // sign-in appears once Google/email login is configured
-    hud.acct.append(button(signingIn ? "Signing in…" : label ? "Sign out" : "Sign in", label ? "" : "primary", () => { void (label ? signOut() : signIn()); }));
+    if (label) return; // signed in: sign-out is in the menu (Esc), behind a confirmation
+    hud.acct.append(button(signingIn ? "Signing in…" : "Sign in", "primary", () => { void signIn(); }));
   };
   const signIn = async (): Promise<void> => {
     if (signingIn || playerLabel()) return;
@@ -1216,6 +1217,13 @@ export async function createPlay(game: Game): Promise<Play> {
 
   let tickIn = 5;
   renderAcct();
+  // Another tab signed in or out, or this sign-in expired: show it and follow the account that is now active.
+  onAccountChange((why) => {
+    renderAcct();
+    if (why === "expired") hud.toast("Your sign-in expired. You're on this browser's guest game: sign in again to get back to your account.");
+    const id = playerId();
+    if (id) void syncPlayer(id);
+  });
   void finishSocialRedirect().then((r) => {
     if (r) hud.toast(`Signed in as ${r.label || r.accountId.split(".")[0]}${r.merged ? ". Your progress came with you." : ""}`, true);
     return r;
