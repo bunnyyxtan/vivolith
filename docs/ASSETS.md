@@ -3,6 +3,21 @@
 Every third-party asset used in VIVOLITH is listed here with its source and license.
 Assets we created ourselves (Blender scripts in `blender/`, code-built geometry in `src/`) are MIT with the code.
 
+## Licence scope
+
+The MIT licence in `LICENSE` covers the code and the assets our Blender scripts build from scratch. It does not cover
+the files below. They are included only so the game builds and runs; do not extract or reuse them outside VIVOLITH.
+
+| Files | Source | Terms |
+|---|---|---|
+| `public/models/player.glb`, `pema.glb`, `npc_*.glb`, `ped_*.glb`, `vendor_*.glb` | Mixamo characters and animations (Adobe), converted to GLB | Royalty-free for use in games; Adobe does not allow redistributing characters or animations as stand-alone files |
+| `public/models/v2/cast/{folk1-6,ines,marta,pema,tomas}.glb` | Our own meshes on the Mixamo Remy skeleton with Mixamo clips | As above for the skeleton and clips |
+| `public/models/v2/kavi.glb`, `v2/cast/merchant_fruit.glb`, `v2/props/*.glb` | Generated with Tripo, then processed by our scripts | Tripo's terms for the plan used at generation time |
+| `public/audio/**` | Generated with ElevenLabs on a paid (Starter) plan | ElevenLabs terms; paid plans allow commercial use |
+| `public/brand/*` (except `vivolith-mark.svg`), `assets-src/brand/**`, the marks modelled into `spire.glb` and `v2/landmarks/*.glb` | NEAR, NEAR AI and NEAR Intents marks | Trademarks of their owners |
+| `public/draco/*` | Draco decoder from three.js | Apache-2.0 |
+| `public/hdri/*`, Poly Haven parts of `saltlight_row.glb` and `spire.glb` | Poly Haven | CC0 |
+
 ## NEAR brand assets (provided by the team, downloaded from official NEAR brand resources)
 
 | File in repo | Original | Notes |

@@ -190,9 +190,9 @@ VIVOLITH was made by one developer, Bunny, with substantial AI assistance. Bunny
 the NEAR Spire, the anime look, the economy rules), reviewed the output, and played and verified each change in the
 browser and on testnet. Most of the code was written by AI coding agents working under that direction.
 
-- **Code and docs:** mostly Claude Code (Anthropic); OpenAI Codex was also used. This covers the TypeScript game, the
-  relayer, the Rust contract, the Blender Python scripts, the checks and the docs. The planning files in `docs/` were
-  written as work orders for these agents.
+- **Code and docs:** mostly Claude Code (Anthropic). This covers the TypeScript game, the relayer, the Rust contract,
+  the Blender Python scripts, the checks and the docs. The planning files in `docs/` were written as work orders for
+  the agents.
 - **3D models:** Kavi (the hero), Pema's model, the two cars, the fruit stall, the corner shop and other street props
   were generated with Tripo (text, image and multiview to 3D, auto-rig, preset animations). Scripts in `blender/`
   then rescale, re-shade, decimate and add collision (for example `blender/fix_cars.py` splits out the wheels so they
@@ -205,8 +205,10 @@ browser and on testnet. Most of the code was written by AI coding agents working
 
 ## Credits and licenses
 
-- Code and the assets built by our Blender scripts: MIT ([LICENSE](LICENSE)). Third-party assets keep their own
-  terms; the full list with authors is in [docs/ASSETS.md](docs/ASSETS.md).
+- Code and the assets built by our Blender scripts: MIT ([LICENSE](LICENSE)). The MIT licence does **not** cover
+  third-party or AI-generated assets (Mixamo-derived characters and animations, Tripo models, ElevenLabs audio, NEAR
+  marks); they keep their own terms and are here only so the game runs. See
+  [docs/ASSETS.md](docs/ASSETS.md#licence-scope) for the file-by-file list.
 - [Poly Haven](https://polyhaven.com) models, textures and the HDRI (CC0), by the authors named in `docs/ASSETS.md`.
 - Character rigs and animations from [Mixamo](https://www.mixamo.com) (Adobe), converted to GLB; the raw FBX files are
   not redistributed.

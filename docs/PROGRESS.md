@@ -74,7 +74,7 @@ GPU-synchronized frame in the market view: 5.3 ms median (`__v2.frameTime(60)`).
 | Gate | Item | Status | Evidence / blocker |
 |---|---|---|---|
 | 0 | Repo/tool audit | VERIFIED | This file |
-| 0 | Local checkpoint | VERIFIED | commit `e553a33` on `dev` (author Bunny) |
+| 0 | Local checkpoint | VERIFIED | commit `5a72814` (then on branch `dev`, now in `main`) |
 | 1 | Deterministic economy core (`src/economy/`) | VERIFIED | `node src/economy/economy.check.ts`: idle path closes Pema (34 c < 40 rent), fee path drops mango 5->2 c and she pays rent, rival path moves stock/cash, week fast-forward identical across step sizes |
 | 1 | Pema branching choice with tracked consequences | VERIFIED (A, C in game) | Browser 2026-11-06: A -> flag accepted, rep +8, objective; C -> Pema cash 12->2, mango 3->5, Tomas +10 c -2 stock, rep pema -10 / tomas +6. B, D covered by code review only |
 | 1 | Save / reload | VERIFIED | Reload restored flag, rep, receipts, clock (localStorage `nearworld.save.v1`) |
