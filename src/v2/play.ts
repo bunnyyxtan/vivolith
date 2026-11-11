@@ -12,6 +12,11 @@ import { advance, invest, MAX_PACKS, payReleaseFee, recordRestock, REOPEN_SHARE,
 import { bidFor, quote, lassiPrice, stallPull, type Quote } from "../economy/pricing";
 import { clockOf, dayOf, MERCHANT_IDS, MINUTES_PER_DAY, STARTER_COINS, type EconomyState, type Good, type MerchantId, type Receipt } from "../economy/state";
 import { RESIDENTS } from "../economy/residents";
+import { audio } from "./audio";
+import { VOICES, type LineId } from "./audio-manifest";
+
+/** Metres per footstep sound, and how close to the stalls the market music and murmur take over. */
+const STEP_EVERY_M = 1.4, MARKET_SOUND_M = 24, CAR_SOUND_M = 9, CAR_QUIET_SEC = 5, RENT_VOICE_DELAY_MS = 1600;
 import { applyTactic, closeDeal, dealTotal, dealUnit, isLocked, lockKey, openHaggle, thoughts, tickPatience, modeFor, PERSONALITY, TACTICS, type HaggleSession, type Tactic } from "../economy/haggle";
 import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
@@ -55,10 +60,11 @@ const TACTIC_LABEL: Record<"buy" | "sell", Record<Tactic, [string, string]>> = {
 
 /** Who each merchant is, in one line, and how they greet you. */
 const WHO: Record<MerchantId, { role: string; color: string; hello: string; thanks: string }> = {
-  pema: { role: "Fruit seller · fair prices, loyal to regulars", color: "#f39a2c", hello: "Fresh mangoes, when the harbor lets me have them.", thanks: "Thank you, dear. Come back soon." },
-  tomas: { role: "Fruit seller · charges what he can", color: "#5f7280", hello: "Mangoes! More than this street can eat.", thanks: "Pleasure. Bring more coin next time." },
-  mira: { role: "Trader · buys surplus, sells for less", color: "#9b7fe0", hello: "Whatever Tomas charges, I'll do a coin cheaper.", thanks: "Good trade. Tell your friends." },
-  arin: { role: "Tea house · buys mangoes for his lassi", color: "#2f9a85", hello: "Lassi's fresh. And I always need mangoes.", thanks: "That's the afternoon's lassi sorted." },
+  // hello/thanks come from the voice manifest: what a merchant says on screen is exactly what their clip says
+  pema: { role: "Fruit seller · fair prices, loyal to regulars", color: "#f39a2c", hello: VOICES.pema.lines.hello, thanks: VOICES.pema.lines.thanks },
+  tomas: { role: "Fruit seller · charges what he can", color: "#5f7280", hello: VOICES.tomas.lines.hello, thanks: VOICES.tomas.lines.thanks },
+  mira: { role: "Trader · buys surplus, sells for less", color: "#9b7fe0", hello: VOICES.mira.lines.hello, thanks: VOICES.mira.lines.thanks },
+  arin: { role: "Tea house · buys mangoes for his lassi", color: "#2f9a85", hello: VOICES.arin.lines.hello, thanks: VOICES.arin.lines.thanks },
 };
 
 interface Snapshot {
@@ -208,7 +214,7 @@ export async function createPlay(game: Game): Promise<Play> {
     const hour = Math.floor(state.minute / 60);
     market.life.setHour(hour % 24);
     const landed = state.log.filter((e) => e.kind === "shipment" && e.minute >= prevHour * 60 && /delivered|released/.test(e.text)).length;
-    if (landed) market.life.deliver(3 * landed);
+    if (landed) { market.life.deliver(3 * landed); void audio.sfx("harbor_horn"); }
     const lines: string[] = [];
     const cheapest = TRADERS.filter((id) => id !== "arin" && state.merchants[id].status === "open")
       .sort((a, b) => priceOf(state, a).price - priceOf(state, b).price)[0];
@@ -272,6 +278,10 @@ export async function createPlay(game: Game): Promise<Play> {
     if (key === walletKey) return;
     const prev = walletKey.split("|");
     walletKey = key;
+    if (prev.length > 1) { // the purse changed: a coin chime up, a softer one down; goods into the bag thud
+      if (p.coins > Number(prev[0])) audio.synth("coin"); else if (p.coins < Number(prev[0])) audio.synth("pay");
+      if (p.inventory.mango > Number(prev[1])) void audio.sfx("goods");
+    }
     hud.wallet.innerHTML = "";
     const row = el("div", "row");
     const pill = (cls: string, ico: string, text: string, title: string, bumped: boolean, onClick: () => void): void => {
@@ -401,8 +411,10 @@ export async function createPlay(game: Game): Promise<Play> {
     hud.panel.style.display = "block";
     hud.panel.scrollTop = 0;
     requestAnimationFrame(() => hud.panel.classList.add("show"));
+    void audio.sfx("ui_open");
   };
   const hidePanel = (): void => {
+    if (hud.panel.style.display !== "none") void audio.sfx("ui_close");
     hud.panel.classList.remove("show"); hud.panel.style.display = "none";
     document.body.classList.remove("panel-open");
   };
@@ -470,8 +482,9 @@ export async function createPlay(game: Game): Promise<Play> {
     const newcomer = tab === "buy" && buyUnit(id) < priceOf(state, id).price;
     const say = id === "pema" && stepIndex(state) === 3 ? `Are those for me? ${DELIVERY_PRICE} coins each, as promised!`
       : newcomer ? `New in town? ${buyUnit(id)} c a mango, just this once. The board says ${priceOf(state, id).price}.`
-      : closed ? "The shutters are down: I couldn't make rent. Bring me stock and I can open again." : WHO[id].hello;
+      : closed ? VOICES[id].lines.closed : WHO[id].hello;
     mode = { kind: "trade", npc, id, tab, qty: q, say, tone: closed ? "bad" : "", why: false, h: null, done: 0 };
+    speak(id, say);
     renderTrade();
     showPanel("trade");
     if (playerId()) void syncMerchants(); // offers follow the merchant's live wallet (re-renders when it lands)
@@ -741,6 +754,9 @@ export async function createPlay(game: Game): Promise<Play> {
       const gap = reopenGap(state, h.merchant);
       say = `Thank you. ${gap} more ${gap === 1 ? "mango" : "mangoes"} and I can open again.`;
     }
+    const reopened = say.startsWith("That's enough stock");
+    void audio.sfx(reopened ? "reopen" : "deal");
+    speak(h.merchant, reopened ? VOICES[h.merchant].lines.reopen : say);
     if (mode.kind === "trade" && mode.id === h.merchant) { mode = { ...mode, h: null, say, tone: "good", done: RESULT_HOLD }; renderTrade(); }
     drawBoards();
     afterProgress();
@@ -1010,7 +1026,7 @@ export async function createPlay(game: Game): Promise<Play> {
   // ---------------------------------------------------------------- progress ----
   const afterProgress = (): void => {
     const reward = guide.update(state);
-    if (reward) hud.toast(reward, true);
+    if (reward) { hud.toast(reward, true); void audio.sfx("step_done"); }
     if (Number(state.flags.tut ?? 0) >= STEPS.length && !state.flags.tutDone) {
       state.flags.tutDone = true;
       hud.toast("First day done. New goals are in your notebook (J).", true);
@@ -1050,19 +1066,27 @@ export async function createPlay(game: Game): Promise<Play> {
    *  merchant says where they stand, from their actual till and rent (and the chain's open/closed when connected). */
   const RENT_HOLD_SEC = 5;
   let rentHold = 0, rentDone: (() => void) | null = null;
-  const rentLine = (id: MerchantId): string => {
-    const m = state.merchants[id];
+  /** Each line opens with the merchant's recorded phrase (rent_ok / rent_risk / rent_closed), then the live numbers. */
+  const rentLine = (id: MerchantId): { line: LineId; text: string } => {
+    const m = state.merchants[id], v = VOICES[id].lines;
     if (m.status !== "open") { // closed by unpaid rent; deliveries reopen it (the contract's rule)
       const need = Number(state.flags[`reopenNeed.${id}`] ?? 0);
-      return need > 0 ? `Shutters down since rent went unpaid. ${need} more mangoes and I can reopen.` : "Shutters down since rent went unpaid.";
+      return { line: "rent_closed", text: `${v.rent_closed} Rent went unpaid.${need > 0 ? ` ${need} more mangoes and I can reopen.` : ""}` };
     }
-    return m.cash >= m.rent ? `Lights on! ${m.cash} c in the till, the ${m.rent} c rent is covered.` : `Only ${m.cash} c in the till and rent is ${m.rent} c. I'm in trouble.`;
+    return m.cash >= m.rent
+      ? { line: "rent_ok", text: `${v.rent_ok} ${m.cash} c in the till, the ${m.rent} c rent is covered.` }
+      : { line: "rent_risk", text: `${v.rent_risk} Only ${m.cash} c in the till and rent is ${m.rent} c.` };
   };
   const rentNight = (done: () => void): void => {
     drawBoards();
     rentHold = RENT_HOLD_SEC; rentDone = done;
     player.frozen = true;
-    for (const id of TRADERS) market.say(id, rentLine(id), RENT_HOLD_SEC);
+    const lines = TRADERS.map((id) => ({ id, ...rentLine(id) }));
+    for (const l of lines) market.say(l.id, l.text, RENT_HOLD_SEC);
+    // one voice at a time: the merchant in the worst spot speaks (the others are read on their bubbles)
+    const worst = lines.find((l) => l.line === "rent_closed") ?? lines.find((l) => l.line === "rent_risk") ?? lines[0];
+    void audio.sfx("rent_bell");
+    if (worst) window.setTimeout(() => void audio.say(worst.id, worst.line, worst.text), RENT_VOICE_DELAY_MS);
   };
   const rentEye = new THREE.Vector3(), rentAt = new THREE.Vector3();
   game.onUpdate.push((dt) => { // runs after the rig: it owns the camera while the stalls are lit up
@@ -1077,6 +1101,41 @@ export async function createPlay(game: Game): Promise<Play> {
     rig.camera.lookAt(rentAt);
     if (rentHold <= 0 && rentDone) { const d = rentDone; rentDone = null; player.frozen = false; d(); }
   });
+  // ---------------------------------------------------------------- sound ----
+  /** Voice a merchant line only when the text on screen is one of their recorded lines (audio matches subtitles). */
+  const speak = (id: MerchantId, text: string): void => {
+    const lines = VOICES[id].lines;
+    const line = (Object.keys(lines) as LineId[]).find((k) => lines[k] === text);
+    if (line) void audio.say(id, line, text);
+  };
+  const marketAt = new THREE.Vector3();
+  let soundIn = 0, stepDist = 0;
+  /** Music and ambience by time and place (checked once a second), and footsteps by distance walked. */
+  const soundscape = (dt: number): void => {
+    if (!play.paused && player.body.grounded && player.speed > 0.6) {
+      stepDist += player.speed * dt;
+      if (stepDist > STEP_EVERY_M) { stepDist = 0; audio.step(); }
+    }
+    soundIn -= dt;
+    if (soundIn > 0) return;
+    soundIn = 1;
+    const traders = market.npcs.filter((n) => (TRADERS as readonly string[]).includes(n.id));
+    marketAt.set(0, 0, 0);
+    for (const n of traders) marketAt.add(n.root.position);
+    marketAt.divideScalar(Math.max(1, traders.length));
+    const h = (state.minute % MINUTES_PER_DAY) / 60;
+    const night = h >= 21.5 || h < 5, sunset = h >= 17 && !night;
+    const nearMarket = Math.hypot(player.body.x - marketAt.x, player.body.z - marketAt.z) < MARKET_SOUND_M;
+    audio.music(!entered ? "title" : night ? "night" : sunset ? "sunset" : nearMarket ? "market" : "day");
+    audio.ambience(night ? "night" : nearMarket ? "market" : "day");
+    // a car passing close by (traffic.ts exposes its cars for playtests); one at a time, not every second
+    carQuiet -= 1;
+    const cars = (window as unknown as { __traffic?: { x: number; z: number; v: number; obj: THREE.Object3D }[] }).__traffic ?? [];
+    if (entered && carQuiet <= 0 && cars.some((c) => c.obj.visible && c.v > 2 && Math.hypot(c.x - player.body.x, c.z - player.body.z) < CAR_SOUND_M)) {
+      carQuiet = CAR_QUIET_SEC; void audio.sfx("car_pass");
+    }
+  };
+  let carQuiet = 0;
   const runClock = (minutes: number): void => {
     let left = minutes;
     while (left > 1e-9) {
@@ -1112,6 +1171,7 @@ export async function createPlay(game: Game): Promise<Play> {
   const update = (dt: number): void => {
     market.update(dt, player.root.position);
     game.look.setTime(state.minute % MINUTES_PER_DAY); // day and night follow the game clock (the menu too)
+    soundscape(dt);
     if (play.paused) return;
     playTime += dt;
     autosaveIn -= dt;
@@ -1170,7 +1230,7 @@ export async function createPlay(game: Game): Promise<Play> {
       tickIn = TICK_EVERY_SEC;
       const me = playerId()!;
       void marketTick().then((t) => { hungry(t); return syncMerchants(); }).then(syncResidents).then(() => claimDividends(me)).then((r) => {
-        if (Number(r.coins) > 0 && r.status === "onchain") hud.toast(`+${String(r.coins)} c in dividends, paid on NEAR`, true);
+        if (Number(r.coins) > 0 && r.status === "onchain") { hud.toast(`+${String(r.coins)} c in dividends, paid on NEAR`, true); void audio.sfx("coin_big"); }
         return syncPlayer(me); // every turn re-reads the wallet, so the purse can never drift from the chain for long
       });
     }
@@ -1271,7 +1331,7 @@ export async function createPlay(game: Game): Promise<Play> {
       if (s.open) { delete state.flags[`reopenNeed.${id}`]; delete state.flags[`reopenTotal.${id}`]; }
       else { state.flags[`reopenNeed.${id}`] = Math.max(0, Number(s.need) - Number(s.delivered)); state.flags[`reopenTotal.${id}`] = Number(s.need); }
       if (was !== m.status) {
-        hud.toast(s.open ? `${m.shop} reopened.` : `${m.shop} couldn't pay rent and closed.`, s.open);
+        hud.toast(s.open ? `${m.shop} reopened.` : `${m.shop} couldn't pay rent and closed.`, s.open); void audio.sfx(s.open ? "reopen" : "closed");
         state.log.push({ minute: state.minute, kind: s.open ? "reopened" : "closed", text: s.open ? `${m.shop} reopened with fresh stock.` : `${m.shop} could not pay rent and pulled the shutters down.` });
       }
     }

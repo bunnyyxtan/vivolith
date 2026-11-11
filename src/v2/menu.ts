@@ -6,6 +6,7 @@ import type { Game } from "./game";
 import type { Play } from "./play";
 import { clockOf, MERCHANT_IDS } from "../economy/state";
 import { shareSupply } from "../economy/sim";
+import { audio } from "./audio";
 
 const CSS = /* css */ `
 #boot { position:fixed; inset:0; z-index:30; background:#0e1520; color:#eef2f0; display:flex; flex-direction:column; align-items:center; justify-content:center;
@@ -114,7 +115,7 @@ export function createMenu(game: Game, play: Play): { open(): void } {
   const root = document.getElementById("menu")!;
   const { player, rig } = game;
   const vantage = game.look.scene.getObjectByName("SPAWN")?.getWorldPosition(new THREE.Vector3()) ?? new THREE.Vector3(0, 0, -30);
-  let isOpen = false, started = false, sel = 0, items: Item[] = [], sheet: "" | "how" | "new" | "signout" = "", t = 0;
+  let isOpen = false, started = false, sel = 0, items: Item[] = [], sheet: "" | "how" | "new" | "signout" | "sound" = "", t = 0;
 
   // Cinematic: runs after the rig each frame, so it owns the camera while the menu is open.
   const fwd = new THREE.Vector3(0, 0, -1), right = new THREE.Vector3(1, 0, 0);
@@ -185,11 +186,19 @@ export function createMenu(game: Game, play: Play): { open(): void } {
       if (a.label) items.push({ label: "Sign out", note: a.label, run: () => { sheet = "signout"; render(); } });
       else if (a.canSignIn && a.id) items.push(google());
     }
+    items.push({ label: "Sound", run: () => { sheet = sheet === "sound" ? "" : "sound"; render(); } });
     items.push({ label: "How to play", run: () => { sheet = sheet === "how" ? "" : "how"; render(); } });
     sel = Math.min(sel, items.length - 1);
   };
 
   const sheetHtml = (): string => {
+    if (sheet === "sound") {
+      const l = audio.levels();
+      const row = (k: "music" | "voice" | "sfx", label: string): string =>
+        `<tr><td>${label}</td><td><input type="range" min="0" max="100" value="${Math.round(l[k] * 100)}" data-vol="${k}" aria-label="${label} volume"></td></tr>`;
+      return `<div class="sheet"><table>${row("music", "Music")}${row("voice", "Voices")}${row("sfx", "Effects")}
+        <tr><td>Mute all</td><td><input type="checkbox" data-mute ${l.muted ? "checked" : ""} aria-label="Mute all sound"></td></tr></table></div>`;
+    }
     if (sheet === "how") return `<div class="sheet">
       <p><b>Trade with the four merchants.</b> Pema is loyal and never gouges. Tomas charges what a shortage allows. Mira buys surplus and undercuts. Arin pays a steady price for mangoes.</p>
       <table>
@@ -247,6 +256,11 @@ export function createMenu(game: Game, play: Play): { open(): void } {
     root.querySelector<HTMLButtonElement>("[data-act=reset]")?.addEventListener("click", () => play.reset());
     root.querySelector<HTMLButtonElement>("[data-act=signout]")?.addEventListener("click", () => { sheet = ""; void play.signOut().then(render); });
     root.querySelector<HTMLButtonElement>("[data-act=keep]")?.addEventListener("click", () => { sheet = ""; render(); });
+    root.querySelectorAll<HTMLInputElement>("[data-vol]").forEach((r) => {
+      r.oninput = () => audio.set({ [r.dataset.vol as "music" | "voice" | "sfx"]: Number(r.value) / 100 });
+    });
+    const mute = root.querySelector<HTMLInputElement>("[data-mute]");
+    if (mute) mute.onchange = () => audio.set({ muted: mute.checked });
   };
 
   // The guest account connects in the background: refresh the status line and items when it does.
