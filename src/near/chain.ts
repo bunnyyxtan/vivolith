@@ -69,6 +69,9 @@ export async function chainStatus(): Promise<ChainStatus> {
   return status;
 }
 
+/** Picks the morning's mangoes at the orchard (relayer route `pick`): minted on NEAR once per market day. */
+export const pickOrchard = (account: string): Promise<Record<string, unknown>> => post("pick", { account }).catch(() => ({ status: "failed" }));
+
 /** A merchant explains its price and day (relayer route `talk`): `ai` only when NEAR AI phrased it. */
 export async function askMerchant(id: string): Promise<{ line: string; ai: boolean } | null> {
   const r = await post("talk", { npc: id }).catch(() => null);

@@ -12020,6 +12020,10 @@ const LIMITS = {
 	talk: {
 		max: 10,
 		windowSec: 60
+	},
+	pick: {
+		max: 6,
+		windowSec: 3600
 	}
 };
 function readConfig(env) {
@@ -13045,6 +13049,36 @@ async function tick(cfg, env) {
 		log
 	});
 }
+/** The Mango Orchard: ORCHARD_PICK mangoes to a registered player, once per account per market day (atomic day
+*  key), minted as goods with the reason "orchard picking". Also capped per IP so new guests can't farm it. */
+async function pick(cfg, req) {
+	const b = await readJson(req);
+	const player = String(b.account ?? "");
+	if (!/^[a-z0-9._-]{2,64}$/.test(player) || !player.endsWith(`.${cfg.relayerId}`)) throw new HttpError(400, "bad account id");
+	if (!await hit(cfg, `pick:${clientIp(req)}`, LIMITS.pick.max, LIMITS.pick.windowSec)) throw new HttpError(429, "slow down");
+	const { provider, relayer } = account(cfg);
+	if (!await view(provider, cfg.contractId, "is_registered", { account_id: player })) throw new HttpError(400, "unregistered account");
+	if (!await claimOnce(cfg, `pick:${player}:${Math.floor(Date.now() / 6e5)}`, Math.ceil(600) * 2)) return json(200, {
+		status: "picked",
+		message: "already picked this market day"
+	});
+	const r = outcome(await relayer.signAndSendTransaction({
+		receiverId: cfg.contractId,
+		actions: [actions.functionCall("operator_mint", {
+			account_id: player,
+			token_id: "mango",
+			amount: String(3),
+			reason: "orchard picking"
+		}, TICK_GAS, 0n)],
+		throwOnFailure: false
+	}));
+	return json(r.ok ? 200 : 502, {
+		status: r.ok ? "onchain" : "failed",
+		qty: 3,
+		txHash: r.txHash,
+		message: r.error
+	});
+}
 /** "Ask why": a merchant explains its price and its day from facts read on NEAR (see talk.ts). Read-only on chain;
 *  NEAR AI phrases it when NEAR_AI_KEY and NEAR_AI_MODEL are set (server-side only), else the scripted line. */
 async function talk(cfg, req, env) {
@@ -13132,6 +13166,7 @@ async function handle(route, req, env) {
 		if (route === "settle") return await settle(cfg);
 		if (route === "deal") return await deal(cfg, req, env);
 		if (route === "tick") return await tick(cfg, env);
+		if (route === "pick") return await pick(cfg, req);
 		if (route === "talk") return await talk(cfg, req, env);
 		if (route === "social") return await social(cfg, req, env);
 		if (route === "claim") return await claim(cfg, req);

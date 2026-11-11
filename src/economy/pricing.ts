@@ -215,3 +215,9 @@ export function stallPull(state: EconomyState, id: MerchantId): number {
   }
   return clamp(best, 0, 2);
 }
+
+/** The Mango Orchard (WP10): in the morning a player may pick this many mangoes, once per market day. They enter the
+ *  economy as goods (operator mint, reason "orchard picking", like the resident picker's day); coin never does.
+ *  The relayer enforces the once-a-day cap per account; the morning window is the game clock's. */
+export const ORCHARD_PICK = 3;
+export const ORCHARD_HOURS: readonly [number, number] = [6, 11];

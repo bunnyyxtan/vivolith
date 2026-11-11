@@ -83,6 +83,7 @@ export const STEPS: readonly Step[] = [
 
 /** Goals after the first mission: the first unfinished one is the current objective. */
 export const GOALS: readonly { id: string; title: string; detail: string; done: (s: EconomyState) => boolean }[] = [
+  { id: "orchard", title: "Pick mangoes at the Orchard", detail: "Follow the signs west past the Spire. Mornings 06:00 to 11:00, three mangoes a day: sell them where the bid is best.", done: (s) => f(s, "pickedOrchard") },
   { id: "arin", title: "Supply Arin's tea house", detail: "Arin buys mangoes for his lassi. Buy from Tomas or Mira and sell to him.", done: (s) => f(s, "soldArin") },
   { id: "two", title: "Own shares in two stalls", detail: "Every partner earns from that stall's daily sales.", done: (s) => MERCHANT_IDS.filter((id) => s.player.shares[id] > 0).length >= 2 },
   { id: "hundred", title: "Reach 100 coins", detail: "Buy where goods are cheap, sell where they are missing.", done: (s) => s.player.coins >= 100 },

@@ -9,20 +9,21 @@ import { createGuide, DELIVERY_PRICE, GOALS, inTutorial, investTarget, STEPS, st
 import { loadGame, saveGame, clearSave } from "../economy/save";
 import { calibrateSoles } from "./soles";
 import { advance, invest, MAX_PACKS, payReleaseFee, recordRestock, REOPEN_SHARE, reopenGap, sellShares, SHARE_PACK, shareCost, shareRefund, shareSupply, tryReopen, UPGRADE_AT } from "../economy/sim";
-import { bidFor, quote, lassiPrice, stallPull, type Quote } from "../economy/pricing";
+import { bidFor, quote, lassiPrice, stallPull, ORCHARD_PICK, ORCHARD_HOURS, type Quote } from "../economy/pricing";
 import { clockOf, dayOf, MERCHANT_IDS, MINUTES_PER_DAY, STARTER_COINS, type EconomyState, type Good, type MerchantId, type Receipt } from "../economy/state";
 import { RESIDENTS } from "../economy/residents";
 import { audio } from "./audio";
 import { VOICES, type LineId } from "./audio-manifest";
 
 /** Metres per footstep sound, and how close to the stalls the market music and murmur take over. */
+const ORCHARD_REACH_M = 4;
 const STEP_EVERY_M = 1.4, MARKET_SOUND_M = 24, CAR_SOUND_M = 9, CAR_QUIET_SEC = 5, RENT_VOICE_DELAY_MS = 1600;
 import { applyTactic, closeDeal, dealTotal, dealUnit, isLocked, lockKey, openHaggle, thoughts, tickPatience, modeFor, PERSONALITY, TACTICS, type HaggleSession, type Tactic } from "../economy/haggle";
 import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
 import {
   EXPLORER_ACCOUNT, EXPLORER_TX, balances, buyPosted, sellPosted, connectGuest, haggleDeal, marketTick, merchantAccount, playerId, playerLabel, receipts as chainReceipts,
-  settleDay, claimDividends, lastMarketTurn, askMerchant, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
+  settleDay, claimDividends, lastMarketTurn, askMerchant, pickOrchard, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
 } from "../near/chain";
 
 const GAME_MIN_PER_SEC = 2.4; // 09:00 -> 21:00 in five real minutes
@@ -1101,6 +1102,36 @@ export async function createPlay(game: Game): Promise<Play> {
     rig.camera.lookAt(rentAt);
     if (rentHold <= 0 && rentDone) { const d = rentDone; rentDone = null; player.frozen = false; d(); }
   });
+  // ---------------------------------------------------------------- orchard ----
+  /** The Mango Orchard (west of the Spire): a few free mangoes each morning, minted on NEAR once per market day,
+   *  to carry to whoever bids best. The rule lives in pricing.ts (ORCHARD_PICK, ORCHARD_HOURS). */
+  let orchardAt: THREE.Vector3 | null = null, picking = false;
+  const atOrchard = (): boolean => {
+    orchardAt ??= game.look.scene.getObjectByName("PLACARD_orchard")?.getWorldPosition(new THREE.Vector3()) ?? null; // town loads async
+    return orchardAt !== null && Math.hypot(player.body.x - orchardAt.x, player.body.z - orchardAt.z) < ORCHARD_REACH_M;
+  };
+  const orchardOpen = (): boolean => { const h = (state.minute % MINUTES_PER_DAY) / 60; return h >= ORCHARD_HOURS[0] && h < ORCHARD_HOURS[1]; };
+  const pickAtOrchard = async (): Promise<void> => {
+    if (picking) return;
+    if (!orchardOpen()) { hud.toast(`The pickers have finished for today. Come back between ${String(ORCHARD_HOURS[0]).padStart(2, "0")}:00 and ${ORCHARD_HOURS[1]}:00.`); return; }
+    const today = dayOf(state.minute);
+    if (state.flags.orchardDay === today) { hud.toast("You've picked your share today. The trees need a rest until tomorrow."); return; }
+    const id = playerId();
+    picking = true;
+    const r = id ? await pickOrchard(id) : { status: "local" };
+    picking = false;
+    if (r.status === "picked") { state.flags.orchardDay = today; hud.toast("You've picked your share this market day. Come back tomorrow."); return; }
+    if (r.status !== "onchain" && r.status !== "local") { hud.toast("The orchard gate is stuck. Try again in a moment."); audio.synth("error"); return; }
+    state.flags.orchardDay = today; state.flags.pickedOrchard = true;
+    state.player.inventory.mango += ORCHARD_PICK; // NEAR minted them; the next wallet read confirms it
+    const best = TRADERS.map((m) => ({ m, b: bidFor(state, m, "mango") })).filter((x) => x.b).sort((a, b) => b.b!.price - a.b!.price)[0];
+    hud.toast(`+${ORCHARD_PICK} mangoes, picked fresh.${best ? ` ${state.merchants[best.m].name} pays the most for them: ${best.b!.price} c each.` : ""}`, true);
+    const tx = typeof r.txHash === "string" ? r.txHash : undefined; // minted on NEAR (offline: a local pick, labelled so)
+    state.receipts.push({ id: `orchard-${state.minute}`, kind: "orchard", minute: state.minute, summary: `Picked ${ORCHARD_PICK} mangoes at the orchard`, status: tx ? "onchain" : "local", txHash: tx });
+    save();
+    if (id) void syncPlayer(id);
+  };
+
   // ---------------------------------------------------------------- sound ----
   /** Voice a merchant line only when the text on screen is one of their recorded lines (audio matches subtitles). */
   const speak = (id: MerchantId, text: string): void => {
@@ -1245,7 +1276,11 @@ export async function createPlay(game: Game): Promise<Play> {
     }
 
     const near = mode.kind === "walk" && !ff ? market.nearest(player.root.position) : null;
-    if (near) {
+    if (!near && mode.kind === "walk" && !ff && atOrchard()) {
+      hud.prompt.innerHTML = "";
+      hud.prompt.append(el("kbd", "", "F"), el("span", "", orchardOpen() ? `Pick mangoes (${ORCHARD_PICK} a day)` : `Orchard · picking ${String(ORCHARD_HOURS[0]).padStart(2, "0")}:00 to ${ORCHARD_HOURS[1]}:00`));
+      hud.prompt.style.display = "block";
+    } else if (near) {
       const trader = TRADERS.includes(near.id as MerchantId);
       const name = trader ? PERSONALITY[near.id as MerchantId].name : CONVERSATIONS[near.id]?.name ?? near.id;
       const talkFirst = near.id === "pema" && stepIndex(state) <= 1;
@@ -1506,6 +1541,7 @@ export async function createPlay(game: Game): Promise<Play> {
     account: () => ({ id: playerId(), label: playerLabel(), canSignIn: socialAvailable() }),
     interact() {
       if (mode.kind !== "walk" || ff) return;
+      if (!market.nearest(player.root.position) && atOrchard()) { void pickAtOrchard(); return; }
       const npc = market.nearest(player.root.position);
       if (!npc) return;
       if (npc.id === "pema" && stepIndex(state) <= 1) { state.flags.nearPema = true; openTalk(npc, PEMA_INTRO); return; }
