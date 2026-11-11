@@ -34,8 +34,12 @@ Controls: WASD move, Shift run, F talk or trade, B bag, J goals, H help, N NEAR 
 | Rent every two market days, stall closures and reopening, dividends, Market Guild loans | |
 | Starter purse of 40 coins, once per account | |
 
-- One market day on chain is 10 real minutes. A market turn (`POST /api/near/tick`) reprices merchants, lets them
-  trade with each other, and records street shoppers, harbor freight and the tea kitchen.
+- One market day on chain is 10 real minutes; rent is due every 2 market days. A market turn (`POST /api/near/tick`)
+  reprices merchants, lets them trade with each other, and records street shoppers, harbor freight and the tea
+  kitchen. Players' browsers trigger turns while they play, and `.github/workflows/tick.yml` runs one every 5 minutes
+  so the city keeps trading when nobody plays. Only one turn runs at a time (an atomic lock held 75 s), and rent and
+  settlement are once per market day in the contract, so missed, late or repeated triggers never double anything.
+  The proof screen (**N**) shows when the last turn ran.
 - Players sign moves with a function-call key limited to `buy`, `sell` and `deal`; the relayer pays gas (NEP-366
   meta-transactions). A display name is guest access only and never names an account or key.
 - Signing in with Google moves a guest's coins, goods and shares into the Google account with one starter purse kept.

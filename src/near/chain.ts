@@ -69,6 +69,17 @@ export async function chainStatus(): Promise<ChainStatus> {
   return status;
 }
 
+/** When the market last took a turn on NEAR (a fresh read, not the cached status). */
+export interface LastTick { readonly at: number; readonly day: number; readonly txs: number; readonly failed: number }
+export async function lastMarketTurn(): Promise<LastTick | null> {
+  try {
+    const r = await fetch("/api/near/status");
+    return r.ok ? (((await r.json()) as { lastTick?: LastTick | null }).lastTick ?? null) : null;
+  } catch {
+    return null;
+  }
+}
+
 export const merchantAccount = (id: string): string => `${id}.${status?.relayer ?? ""}`;
 export const playerId = (): string | null => player?.accountId ?? null;
 /** True when Google/email sign-in is available (the relayer has our Auth0 tenant configured). */

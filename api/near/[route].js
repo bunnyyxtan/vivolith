@@ -11984,7 +11984,9 @@ function guestIdFor(publicKey, relayerId) {
 	return `g${createHash("sha256").update(publicKey).digest("hex").slice(0, 16)}.${relayerId}`;
 }
 async function status(cfg) {
+	const last = await kv(cfg, ["GET", LAST_TICK]).catch(() => null);
 	return json(200, {
+		lastTick: last ? JSON.parse(last) : null,
 		configured: configured(cfg),
 		network: "testnet",
 		contractId: cfg.contractId,
@@ -12553,8 +12555,41 @@ async function guildTurn(cfg, provider, st, day, log) {
 /** One merchant turn on NEAR: each merchant reprices its own asks and bids from pricing.ts (signed with its own
 *  key), merchants fill each other's bids, and the operator records street shoppers, Tomas's harbor contract and
 *  Arin's kitchen. Idempotent enough to call often: throttled to one turn per minute across all players. */
+/** One market turn at a time, everywhere. An atomic lock (Redis SET NX EX) is claimed by the turn that starts and held
+*  for TICK_GAP_SEC: unlike the old fixed one-minute window it cannot let two turns through either side of a window
+*  boundary, and it outlasts the function's 60 s limit (vercel.json), so a slow turn can never overlap the next one.
+*  Rent and settlement are also once per market day in the contract itself. */
+const TICK_GAP_SEC = 75;
+const TICK_LOCK = "vivolith:tick:lock";
+const LAST_TICK = "vivolith:tick:last";
+let tickHeldUntil = 0;
+async function claimTick(cfg) {
+	if (cfg.redisUrl && cfg.redisToken) {
+		const r = await fetch(cfg.redisUrl, {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${cfg.redisToken}`,
+				"content-type": "application/json"
+			},
+			body: JSON.stringify([
+				"SET",
+				TICK_LOCK,
+				String(Date.now()),
+				"NX",
+				"EX",
+				String(TICK_GAP_SEC)
+			])
+		});
+		if (!r.ok) throw new HttpError(503, "market clock unavailable");
+		return (await r.json()).result === "OK";
+	}
+	const now = Date.now();
+	if (now < tickHeldUntil) return false;
+	tickHeldUntil = now + TICK_GAP_SEC * 1e3;
+	return true;
+}
 async function tick(cfg, env) {
-	if (!await hit(cfg, "tick", 1, 60)) return json(200, {
+	if (!await claimTick(cfg)) return json(200, {
 		status: "skipped",
 		message: "the merchants moved less than a minute ago"
 	});
@@ -12738,6 +12773,17 @@ async function tick(cfg, env) {
 		txs.push(r.txHash);
 		if (!r.ok) log.push(`operator FAILED: ${r.error}`);
 	}
+	const last = {
+		at: Date.now(),
+		day,
+		txs: txs.length,
+		failed: log.filter((l) => /FAILED/.test(l)).length
+	};
+	await kv(cfg, [
+		"SET",
+		LAST_TICK,
+		JSON.stringify(last)
+	]).catch(() => null);
 	return json(200, {
 		status: "onchain",
 		txHashes: txs,

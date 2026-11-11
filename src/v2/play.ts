@@ -16,7 +16,7 @@ import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
 import {
   EXPLORER_ACCOUNT, EXPLORER_TX, balances, buyPosted, sellPosted, connectGuest, haggleDeal, marketTick, merchantAccount, playerId, playerLabel, receipts as chainReceipts,
-  settleDay, claimDividends, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
+  settleDay, claimDividends, lastMarketTurn, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
 } from "../near/chain";
 
 const GAME_MIN_PER_SEC = 2.4; // 09:00 -> 21:00 in five real minutes
@@ -863,7 +863,7 @@ export async function createPlay(game: Game): Promise<Play> {
       card.append(el("h2", "", "Your account on NEAR"), el("div", "sub", id ? "Read live from the market contract on NEAR testnet." : "Offline: this session is not connected to NEAR."));
     });
     if (id) {
-      const [bal, rc] = await Promise.all([balances(id).catch(() => ({})), chainReceipts(id).catch(() => [])]);
+      const [bal, rc, turn] = await Promise.all([balances(id).catch(() => ({})), chainReceipts(id).catch(() => []), lastMarketTurn()]);
       const sec = el("section");
       const t = el("table");
       for (const [token, amount] of Object.entries(bal)) {
@@ -874,6 +874,10 @@ export async function createPlay(game: Game): Promise<Play> {
       sec.append(t);
       const a = el("a", "", "Open in the NEAR explorer"); a.href = `${EXPLORER_ACCOUNT}${id}`; a.target = "_blank"; a.rel = "noopener";
       const p = el("p"); p.style.marginTop = "10px"; p.append(a); sec.append(p);
+      if (turn) { // the city keeps trading on NEAR when nobody is playing
+        const mins = Math.max(0, Math.round((Date.now() - turn.at) / 60000));
+        sec.append(el("p", "", `Last market turn: ${mins < 1 ? "under a minute" : `${mins} min`} ago, market day ${turn.day} (${turn.txs} transactions${turn.failed ? `, ${turn.failed} refused` : ""}).`));
+      }
       hud.card.append(sec);
       if (rc.length) {
         const d = el("details"); d.append(el("summary", "", `Last ${Math.min(8, rc.length)} entries in the contract`));
