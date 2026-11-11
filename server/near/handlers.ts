@@ -12,6 +12,7 @@ import { deserialize } from "borsh";
 import { Account, JsonRpcProvider, KeyPairSigner, PublicKey, SCHEMA, actions, nearToYocto, teraToGas, type KeyPairString } from "near-api-js";
 import { MERCHANTS, keyPairFromSeed, merchantKey, residentKey, type MerchantId } from "./keys.ts";
 import { RESIDENTS, planResident, type Offer } from "../../src/economy/residents.ts";
+import { synthesize } from "./voice.ts";
 import { answer, factsFor } from "./talk.ts";
 import { ORCHARD_PICK, bidFor, planMerchantTrades, quote } from "../../src/economy/pricing.ts";
 import { closingNeed, shopperWant } from "../../src/economy/sim.ts";
@@ -68,6 +69,7 @@ const LIMITS = {
   merge: { max: 3, windowSec: 30 * 24 * 3600 },
   save: { max: 20, windowSec: 60 }, // per account: cloud save reads and writes
   talk: { max: 10, windowSec: 60 }, // per IP: "Ask why" (each may be one NEAR AI call)
+  voice: { max: 30, windowSec: 60 }, // per IP: spoken lines without a recorded file (cached; daily budget in voice.ts)
   pick: { max: 6, windowSec: 3600 }, // per IP: orchard picks (each account also once per market day)
 } as const;
 
@@ -938,6 +940,14 @@ export async function handle(route: string, req: Request, env: RelayEnv): Promis
   try {
     if (route === "status" && req.method === "GET") return await status(cfg);
     if (req.method !== "POST") return json(405, { status: "error", message: "method not allowed" });
+    if (route === "voice") { // spoken lines work offline too: no NEAR needed
+      const origin = req.headers.get("origin");
+      if (origin && new URL(origin).host !== new URL(req.url).host) return json(403, { status: "error", message: "cross-origin requests not allowed" });
+      if (!(await hit(cfg, `voice:${clientIp(req)}`, LIMITS.voice.max, LIMITS.voice.windowSec))) return json(429, { status: "error", message: "slow down" });
+      const b = await readJson(req);
+      const r = await synthesize(String(b.speaker ?? ""), String(b.text ?? ""), (env as Record<string, string | undefined>).ELEVENLABS_API_KEY?.trim());
+      return json(r.status, r.body);
+    }
     if (!configured(cfg)) return json(503, { status: "unconfigured", message: "NEAR relayer not configured (see docs/DEPLOY.md)" });
     const origin = req.headers.get("origin");
     if (origin && new URL(origin).host !== new URL(req.url).host) return json(403, { status: "error", message: "cross-origin requests not allowed" });

@@ -11483,6 +11483,219 @@ function planResident(r, offers, coin, holding) {
 		hungry: price
 	};
 }
+// src/v2/audio-manifest.ts
+const shared = {
+	closed: "The shutters are down: I couldn't make rent. Bring me stock and I can open again.",
+	reopen: "We're open again, thanks to you!",
+	rent_ok: "Lights on!",
+	rent_risk: "I'm in trouble.",
+	rent_closed: "Shutters down."
+};
+/** Four recognisable merchants: one voice each, chosen once and kept. */
+const VOICES = {
+	pema: {
+		brief: "warm, kind older woman, motherly market auntie",
+		voiceId: "pFZP5JQG7iQjIQuC4Bku",
+		tag: "[warmly]",
+		lines: {
+			hello: "Fresh mangoes, when the harbor lets me have them.",
+			thanks: "Thank you, dear. Come back soon.",
+			...shared,
+			haggle_ok: "Oh, alright, dear.",
+			haggle_no: "Now, now, be fair with me.",
+			refuse: "That's my last word, dear.",
+			bump: "Oh! Careful, dear!",
+			invest_pitch: "Buy a few shares, dear, and you share in every mango I sell.",
+			invest_done: "A partner! Thank you, dear.",
+			shares_sold: "Of course, dear. Come back anytime."
+		}
+	},
+	tomas: {
+		brief: "smooth, confident middle-aged man, salesman's charm, a little smug",
+		voiceId: "N2lVS1w4EtoT3dr4eOWO",
+		tag: "[confidently]",
+		lines: {
+			hello: "Mangoes! More than this street can eat.",
+			thanks: "Pleasure. Bring more coin next time.",
+			...shared,
+			haggle_ok: "Fine, fine. You win this one.",
+			haggle_no: "Ha! Not a chance.",
+			refuse: "We're done here.",
+			bump: "Watch the merchandise!",
+			invest_pitch: "Want a piece of my stall? Every sale I make, you take your cut.",
+			invest_done: "Welcome aboard, partner. Now let's sell some mangoes.",
+			shares_sold: "Cashing out? Your loss."
+		}
+	},
+	mira: {
+		brief: "quick, bright young woman, playful and sharp",
+		voiceId: "cgSgspJ2msm6clMCkdW9",
+		tag: "[playfully]",
+		lines: {
+			hello: "Whatever Tomas charges, I'll do a coin cheaper.",
+			thanks: "Good trade. Tell your friends.",
+			...shared,
+			haggle_ok: "Ooh, sharp. Okay!",
+			haggle_no: "Nice try!",
+			refuse: "Nope, I'm out.",
+			bump: "Hey, eyes up!",
+			invest_pitch: "Own a slice of my stall and earn on every flip I make.",
+			invest_done: "Partner! Let's make some coin.",
+			shares_sold: "Sold back. No hard feelings!"
+		}
+	},
+	arin: {
+		brief: "warm, confident, expressive tea house owner, a natural merchant",
+		voiceId: "iP95p4xoKVk53GoZ742B",
+		tag: "[warmly]",
+		lines: {
+			hello: "Lassi's fresh. And I always need mangoes.",
+			thanks: "That's the afternoon's lassi sorted.",
+			...shared,
+			haggle_ok: "That seems fair.",
+			haggle_no: "I can't go that low.",
+			refuse: "Let's leave it there.",
+			bump: "Whoa, sorry about that!",
+			invest_pitch: "Shares in the tea house pay out every time I sell a lassi.",
+			invest_done: "Thank you. We'll do well together.",
+			shares_sold: "That's alright. The door's always open."
+		}
+	}
+};
+/** Townsfolk reaction voices (pre-made ElevenLabs voices): each townsperson keeps one voice; bump lines are what the
+*  speech bubble shows, so sound and text match. Files: /audio/voice/folk<n>/bump_<k>.mp3. */
+const FOLK_VOICES = [
+	{
+		voiceId: "FGY2WhTYpPnrIDTdsKH5",
+		tag: "[surprised]",
+		bump: ["Whoa!", "Hey, watch out!"]
+	},
+	{
+		voiceId: "IKne3meq5aSn9XLyUdCD",
+		tag: "[startled]",
+		bump: ["Oof!", "Easy there!"]
+	},
+	{
+		voiceId: "pqHfZKP75CvOlQylNhV4",
+		tag: "[grumbling]",
+		bump: ["Careful!", "Hey!"]
+	},
+	{
+		voiceId: "XrExE9yKIg1WjnnlVkGX",
+		tag: "[surprised]",
+		bump: ["Excuse you!", "Oh my!"]
+	}
+];
+/** Every voiced character, by speaker id: merchants, townsfolk voices (folk0..3) and the non-trading cast. The server
+*  voice route (server/near/voice.ts) speaks lines that have no recorded file with exactly these voices. */
+const SPEAKERS = {
+	...Object.fromEntries(Object.entries(VOICES).map(([id, v]) => [id, {
+		voiceId: v.voiceId,
+		tag: v.tag
+	}])),
+	...Object.fromEntries(FOLK_VOICES.map((v, n) => [`folk${n}`, {
+		voiceId: v.voiceId,
+		tag: v.tag.replace(/\[(surprised|startled|grumbling)\]/, "[casually]")
+	}])),
+	engineer: {
+		voiceId: "Xb7hH8MSUJpSbSDYk0k2",
+		tag: "[thoughtfully]"
+	},
+	harbor: {
+		voiceId: "CwhRBWXzGAHq8TQ4Fs17",
+		tag: "[gruffly]"
+	}
+};
+// server/near/voice.ts
+const MODEL = "eleven_v4";
+const MAX_TEXT = 240;
+/** ponytail: per server instance and day; move to Redis (shared counter) if many instances run at once. */
+const DAILY_CHARS = 6e3;
+const cache = /* @__PURE__ */ new Map();
+const CACHE_MAX = 300;
+let day = "";
+let spent = 0;
+async function synthesize(speaker, raw, apiKey) {
+	const v = SPEAKERS[speaker];
+	const text = raw.replace(/\s+/g, " ").trim().slice(0, MAX_TEXT);
+	if (!v) return {
+		status: 400,
+		body: {
+			status: "error",
+			message: "unknown speaker"
+		}
+	};
+	if (!text) return {
+		status: 400,
+		body: {
+			status: "error",
+			message: "empty line"
+		}
+	};
+	const key = `${speaker}|${text}`;
+	const hit = cache.get(key);
+	if (hit) return {
+		status: 200,
+		body: {
+			status: "ok",
+			mime: "audio/mpeg",
+			audio: hit
+		}
+	};
+	if (!apiKey) return {
+		status: 503,
+		body: {
+			status: "unconfigured",
+			message: "voice not configured"
+		}
+	};
+	const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+	if (today !== day) {
+		day = today;
+		spent = 0;
+	}
+	if (spent + text.length > DAILY_CHARS) return {
+		status: 429,
+		body: {
+			status: "budget",
+			message: "voice budget used for today"
+		}
+	};
+	spent += text.length;
+	const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${v.voiceId}?output_format=mp3_44100_64`, {
+		method: "POST",
+		headers: {
+			"xi-api-key": apiKey,
+			"content-type": "application/json",
+			accept: "audio/mpeg"
+		},
+		body: JSON.stringify({
+			text: `${v.tag} ${text}`,
+			model_id: MODEL
+		})
+	}).catch(() => null);
+	if (!r || !r.ok) {
+		spent -= text.length;
+		return {
+			status: 502,
+			body: {
+				status: "error",
+				message: `voice service ${r?.status ?? "unreachable"}`
+			}
+		};
+	}
+	const audio = Buffer.from(await r.arrayBuffer()).toString("base64");
+	if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value);
+	cache.set(key, audio);
+	return {
+		status: 200,
+		body: {
+			status: "ok",
+			mime: "audio/mpeg",
+			audio
+		}
+	};
+}
 // src/economy/state.ts
 const MERCHANT_IDS = [
 	"pema",
@@ -12019,6 +12232,10 @@ const LIMITS = {
 	},
 	talk: {
 		max: 10,
+		windowSec: 60
+	},
+	voice: {
+		max: 30,
 		windowSec: 60
 	},
 	pick: {
@@ -13152,6 +13369,20 @@ async function handle(route, req, env) {
 			status: "error",
 			message: "method not allowed"
 		});
+		if (route === "voice") {
+			const origin = req.headers.get("origin");
+			if (origin && new URL(origin).host !== new URL(req.url).host) return json(403, {
+				status: "error",
+				message: "cross-origin requests not allowed"
+			});
+			if (!await hit(cfg, `voice:${clientIp(req)}`, LIMITS.voice.max, LIMITS.voice.windowSec)) return json(429, {
+				status: "error",
+				message: "slow down"
+			});
+			const b = await readJson(req);
+			const r = await synthesize(String(b.speaker ?? ""), String(b.text ?? ""), env.ELEVENLABS_API_KEY?.trim());
+			return json(r.status, r.body);
+		}
 		if (!configured(cfg)) return json(503, {
 			status: "unconfigured",
 			message: "NEAR relayer not configured (see docs/DEPLOY.md)"

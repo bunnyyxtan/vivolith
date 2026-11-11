@@ -36,9 +36,8 @@ export interface Player {
 
 async function loadKavi(): Promise<AnimatedCharacter> {
   try {
-    // Kavi's own idle, turn and jump; walk and run from the Mixamo set: the Tripo walk/run carried 1.1 and 3.0 m/s
-    // with one leg lifting 17-35% higher than the other, which read as a limp at any playback speed.
-    return await loadCharacter("/models/v2/kavi.glb", HEIGHT, ["/models/v2/kavi.glb#Idle,Turn,Jump", "/models/player.glb#Walk,Run"]);
+    // Kavi from Tripo Studio (blender/build_studio_character.py): his own mesh, rig and every clip, no Mixamo data.
+    return await loadCharacter("/models/v2/kavi.glb", HEIGHT);
   } catch {
     return loadCharacter("/models/player.glb", HEIGHT); // placeholder until kavi.glb exists
   }

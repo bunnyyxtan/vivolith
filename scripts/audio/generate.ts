@@ -10,7 +10,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
-import { AMBIENCE, MUSIC, MUSIC_STYLE, SFX, SFX_STYLE, VOICES, type LineId } from "../../src/v2/audio-manifest.ts";
+import { AMBIENCE, FOLK_VOICES, MUSIC, MUSIC_STYLE, SFX, SFX_STYLE, VOICES, type LineId } from "../../src/v2/audio-manifest.ts";
 
 const OUT = path.resolve("public");
 const TTS_MODEL = "eleven_v4", SFX_MODEL = "eleven_text_to_sound_v3", MUSIC_MODEL = "music_v2_5";
@@ -28,6 +28,10 @@ for (const [id, v] of Object.entries(VOICES)) {
     });
   }
 }
+FOLK_VOICES.forEach((v, n) => v.bump.forEach((text, k) => jobs.push({
+  kind: "voice", file: `audio/voice/folk${n}/bump_${k}.mp3`, detail: `folk${n}: "${text}"`, chars: text.length,
+  make: (c) => c.textToSpeech.convert(v.voiceId, { text: `${v.tag} ${text}`, modelId: TTS_MODEL, outputFormat: "mp3_44100_128" }),
+})));
 for (const [id, s] of Object.entries(SFX)) {
   jobs.push({ kind: "sfx", file: `audio/sfx/${id}.mp3`, detail: s.prompt, seconds: s.seconds, make: (c) => c.textToSoundEffects.convert({ text: `${s.prompt}. ${SFX_STYLE}`, modelId: SFX_MODEL, durationSeconds: s.seconds, promptInfluence: 0.6 }) });
 }
@@ -60,7 +64,7 @@ if (args.includes("--account")) {
   const only = args.find((a) => ["voice", "sfx", "ambience", "music"].includes(a));
   const oneAt = args.indexOf("--one"), one = oneAt >= 0 ? args[oneAt + 1] : null; // a single file, e.g. a sample
   const todo = jobs.filter((j) => !exists(j) && (!only || j.kind === only) && (!one || j.file === one));
-  const unvoiced = todo.filter((j) => j.kind === "voice" && !VOICES[j.file.split("/")[2] as keyof typeof VOICES].voiceId);
+  const unvoiced = todo.filter((j) => j.kind === "voice" && j.file.split("/")[2] in VOICES && !VOICES[j.file.split("/")[2] as keyof typeof VOICES].voiceId);
   if (unvoiced.length) throw new Error(`choose voices first (--voices, then set voiceId in src/v2/audio-manifest.ts): ${[...new Set(unvoiced.map((j) => j.file.split("/")[2]))].join(", ")}`);
   console.log(`generating ${todo.length} files, about $${cost(todo).toFixed(2)}`);
   const c = client();

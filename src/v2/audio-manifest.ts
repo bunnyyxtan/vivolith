@@ -3,7 +3,10 @@
 // Voice lines are spoken exactly as the subtitle starts, so what you hear always matches what you read.
 import type { MerchantId } from "../economy/state";
 
-export type LineId = "hello" | "thanks" | "closed" | "reopen" | "rent_ok" | "rent_risk" | "rent_closed";
+/** haggle_ok / haggle_no / refuse are short openers spoken before the live haggle text (which carries the numbers);
+ *  bump is a reaction when Kavi walks into them. */
+export type LineId = "hello" | "thanks" | "closed" | "reopen" | "rent_ok" | "rent_risk" | "rent_closed" | "haggle_ok" | "haggle_no" | "refuse" | "bump"
+  | "invest_pitch" | "invest_done" | "shares_sold";
 
 export interface Voice {
   /** Who they sound like (used to pick a pre-made ElevenLabs voice once). */
@@ -25,13 +28,54 @@ const shared = {
 
 /** Four recognisable merchants: one voice each, chosen once and kept. */
 export const VOICES: Record<MerchantId, Voice> = {
-  pema: { brief: "warm, kind older woman, motherly market auntie", voiceId: "pFZP5JQG7iQjIQuC4Bku", tag: "[warmly]", lines: { hello: "Fresh mangoes, when the harbor lets me have them.", thanks: "Thank you, dear. Come back soon.", ...shared } },
-  tomas: { brief: "smooth, confident middle-aged man, salesman's charm, a little smug", voiceId: "N2lVS1w4EtoT3dr4eOWO", tag: "[confidently]", lines: { hello: "Mangoes! More than this street can eat.", thanks: "Pleasure. Bring more coin next time.", ...shared } },
-  mira: { brief: "quick, bright young woman, playful and sharp", voiceId: "cgSgspJ2msm6clMCkdW9", tag: "[playfully]", lines: { hello: "Whatever Tomas charges, I'll do a coin cheaper.", thanks: "Good trade. Tell your friends.", ...shared } },
-  arin: { brief: "calm, gentle young man, soft-spoken tea house owner", voiceId: "bIHbv24MWmeRgasZH58o", tag: "[softly]", lines: { hello: "Lassi's fresh. And I always need mangoes.", thanks: "That's the afternoon's lassi sorted.", ...shared } },
+  pema: { brief: "warm, kind older woman, motherly market auntie", voiceId: "pFZP5JQG7iQjIQuC4Bku", tag: "[warmly]", lines: { hello: "Fresh mangoes, when the harbor lets me have them.", thanks: "Thank you, dear. Come back soon.", ...shared,
+    haggle_ok: "Oh, alright, dear.", haggle_no: "Now, now, be fair with me.", refuse: "That's my last word, dear.", bump: "Oh! Careful, dear!",
+    invest_pitch: "Buy a few shares, dear, and you share in every mango I sell.", invest_done: "A partner! Thank you, dear.", shares_sold: "Of course, dear. Come back anytime." } },
+  tomas: { brief: "smooth, confident middle-aged man, salesman's charm, a little smug", voiceId: "N2lVS1w4EtoT3dr4eOWO", tag: "[confidently]", lines: { hello: "Mangoes! More than this street can eat.", thanks: "Pleasure. Bring more coin next time.", ...shared,
+    haggle_ok: "Fine, fine. You win this one.", haggle_no: "Ha! Not a chance.", refuse: "We're done here.", bump: "Watch the merchandise!",
+    invest_pitch: "Want a piece of my stall? Every sale I make, you take your cut.", invest_done: "Welcome aboard, partner. Now let's sell some mangoes.", shares_sold: "Cashing out? Your loss." } },
+  mira: { brief: "quick, bright young woman, playful and sharp", voiceId: "cgSgspJ2msm6clMCkdW9", tag: "[playfully]", lines: { hello: "Whatever Tomas charges, I'll do a coin cheaper.", thanks: "Good trade. Tell your friends.", ...shared,
+    haggle_ok: "Ooh, sharp. Okay!", haggle_no: "Nice try!", refuse: "Nope, I'm out.", bump: "Hey, eyes up!",
+    invest_pitch: "Own a slice of my stall and earn on every flip I make.", invest_done: "Partner! Let's make some coin.", shares_sold: "Sold back. No hard feelings!" } },
+  // Arin: was "Will" with a [softly] tag, which came out breathy; now Chris, warm and confident (samples in tools/voice-samples)
+  arin: { brief: "warm, confident, expressive tea house owner, a natural merchant", voiceId: "iP95p4xoKVk53GoZ742B", tag: "[warmly]", lines: { hello: "Lassi's fresh. And I always need mangoes.", thanks: "That's the afternoon's lassi sorted.", ...shared,
+    haggle_ok: "That seems fair.", haggle_no: "I can't go that low.", refuse: "Let's leave it there.", bump: "Whoa, sorry about that!",
+    invest_pitch: "Shares in the tea house pay out every time I sell a lassi.", invest_done: "Thank you. We'll do well together.", shares_sold: "That's alright. The door's always open." } },
 };
 
 export const voiceUrl = (id: MerchantId, line: LineId): string => `/audio/voice/${id}/${line}.mp3`;
+
+/** Townsfolk reaction voices (pre-made ElevenLabs voices): each townsperson keeps one voice; bump lines are what the
+ *  speech bubble shows, so sound and text match. Files: /audio/voice/folk<n>/bump_<k>.mp3. */
+export const FOLK_VOICES = [
+  { voiceId: "FGY2WhTYpPnrIDTdsKH5", tag: "[surprised]", bump: ["Whoa!", "Hey, watch out!"] },   // Laura: young woman
+  { voiceId: "IKne3meq5aSn9XLyUdCD", tag: "[startled]", bump: ["Oof!", "Easy there!"] },        // Charlie: young man
+  { voiceId: "pqHfZKP75CvOlQylNhV4", tag: "[grumbling]", bump: ["Careful!", "Hey!"] },          // Bill: older man
+  { voiceId: "XrExE9yKIg1WjnnlVkGX", tag: "[surprised]", bump: ["Excuse you!", "Oh my!"] },     // Matilda: woman
+] as const;
+export const folkVoiceUrl = (voice: number, k: number): string => `/audio/voice/folk${voice}/bump_${k}.mp3`;
+
+/** Every voiced character, by speaker id: merchants, townsfolk voices (folk0..3) and the non-trading cast. The server
+ *  voice route (server/near/voice.ts) speaks lines that have no recorded file with exactly these voices. */
+export const SPEAKERS: Record<string, { voiceId: string; tag: string }> = {
+  ...Object.fromEntries(Object.entries(VOICES).map(([id, v]) => [id, { voiceId: v.voiceId, tag: v.tag }])),
+  ...Object.fromEntries(FOLK_VOICES.map((v, n) => [`folk${n}`, { voiceId: v.voiceId, tag: v.tag.replace(/\[(surprised|startled|grumbling)\]/, "[casually]") }])),
+  engineer: { voiceId: "Xb7hH8MSUJpSbSDYk0k2", tag: "[thoughtfully]" }, // Alice: Ines Varga, NEAR Labs
+  harbor: { voiceId: "CwhRBWXzGAHq8TQ4Fs17", tag: "[gruffly]" },         // Roger: the harbor dispatcher
+};
+
+/** The recorded file for a line, when this speaker has one with exactly this text (else the server voices it). */
+export function recordedUrl(speaker: string, text: string): string | null {
+  const v = VOICES[speaker as MerchantId];
+  if (v) {
+    const line = (Object.keys(v.lines) as LineId[]).find((k) => v.lines[k] === text);
+    return line ? voiceUrl(speaker as MerchantId, line) : null;
+  }
+  const m = /^folk(\d)$/.exec(speaker);
+  const f = m ? FOLK_VOICES[Number(m[1])] : undefined;
+  const k = f ? (f.bump as readonly string[]).indexOf(text) : -1;
+  return k >= 0 ? folkVoiceUrl(Number(m![1]), k) : null;
+}
 
 /** One house style for every effect, so nothing sounds borrowed from another game. */
 export const SFX_STYLE = "clean, warm, soft-edged, cosy anime slice-of-life game sound, close and dry, no music";

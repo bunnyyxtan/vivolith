@@ -30,3 +30,6 @@ Mixamo/
 # third-party reference images and videos (not redistributable)
 assets-src/tripo/ref/
 public/ref/
+
+# local voice auditions (not shipped)
+tools/voice-samples/

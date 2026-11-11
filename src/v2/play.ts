@@ -20,7 +20,7 @@ import { VOICES, type LineId } from "./audio-manifest";
 const ORCHARD_REACH_M = 4;
 /** Money trail: how many payments the proof screen lists, and how long the gold arc stays up. */
 const TRAIL_ROWS = 10, TRAIL_SEC = 10;
-const STEP_EVERY_M = 1.4, MARKET_SOUND_M = 24, CAR_SOUND_M = 9, CAR_QUIET_SEC = 5, RENT_VOICE_DELAY_MS = 1600;
+const STEP_EVERY_M = 1.4, MARKET_SOUND_M = 24, CAR_SOUND_M = 9, CAR_QUIET_SEC = 5;
 import { applyTactic, closeDeal, dealTotal, dealUnit, isLocked, lockKey, openHaggle, thoughts, tickPatience, modeFor, PERSONALITY, TACTICS, type HaggleSession, type Tactic } from "../economy/haggle";
 import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
@@ -356,7 +356,10 @@ export async function createPlay(game: Game): Promise<Play> {
   /** A refusal lands on the merchant's panel if it is still open, else as a toast. null: no final answer came. */
   const refusedAt = (id: MerchantId, side: "buy" | "sell" = "buy") => (message: string | null): void => {
     const why = message === null ? "The market didn't confirm in time. Your purse was re-checked." : refusal(message, side);
-    if (mode.kind === "trade" && mode.id === id) { mode = { ...mode, h: null, say: why, tone: "bad", done: RESULT_HOLD }; renderTrade(); }
+    if (mode.kind === "trade" && mode.id === id) {
+      mode = { ...mode, h: null, say: why, tone: "bad", done: RESULT_HOLD }; renderTrade();
+      if (message !== null) void audio.line(id, why); // the merchant's refusal; a timeout notice is the game's, not theirs
+    }
     else hud.toast(why);
   };
   /** The panel waits on the chain: inputs stay locked (done > 0) until record() answers. */
@@ -492,7 +495,9 @@ export async function createPlay(game: Game): Promise<Play> {
   };
   const setTab = (tab: Tab): void => {
     if (mode.kind !== "trade" || mode.h) return;
-    mode = { ...mode, tab, qty: Math.max(1, Math.min(3, maxQty(mode.id, tab))), why: false };
+    const pitch = tab === "invest" && mode.tab !== "invest" ? VOICES[mode.id].lines.invest_pitch : null;
+    mode = { ...mode, tab, qty: Math.max(1, Math.min(3, maxQty(mode.id, tab))), why: false, ...(pitch ? { say: pitch, tone: "" as const } : {}) };
+    if (pitch) void audio.line(mode.id, pitch); // one short pitch, no figures: the panel shows those
     renderTrade();
   };
   const setQty = (d: number): void => {
@@ -586,7 +591,7 @@ export async function createPlay(game: Game): Promise<Play> {
     const r = await askMerchant(id);
     asking = false;
     asked = r ? { id, ...r } : { id, line: "Not now, I'm busy with customers.", ai: false };
-    if (mode.kind === "trade" && mode.id === id) renderTrade();
+    if (mode.kind === "trade" && mode.id === id) { renderTrade(); void audio.line(id, asked.line); }
   };
 
   /** Closed stall: how far its shelves are from reopening (stock is the only thing that reopens it). */
@@ -702,6 +707,7 @@ export async function createPlay(game: Game): Promise<Play> {
     if ("error" in h) { mode = { ...mode, say: h.error, tone: "bad" }; renderTrade(); return; }
     const qty = Math.max(1, Math.min(mode.qty, h.qty));
     mode = { ...mode, h: { ...h, qty }, say: "Let's talk, then. My patience runs out while you think.", tone: "" };
+    void audio.line(mode.id, mode.say);
     renderTrade();
   };
 
@@ -770,13 +776,16 @@ export async function createPlay(game: Game): Promise<Play> {
     toast: (t) => hud.toast(t),
     settle: (kind, detail) => settle(kind, `${kind.replace(/-/g, " ")}: ${Object.entries(detail).map(([k, v]) => `${k} ${v}`).join(", ")}`),
   };
+  let lastTalk = "";
   const renderTalk = (): void => {
     if (mode.kind !== "talk") return;
     const { convo } = mode;
     const node = convo.nodes[mode.node];
     hud.panel.innerHTML = "";
     hud.panel.append(head(node.speaker, convo.role, convo.accent || "#5f7280"));
-    hud.panel.append(el("div", "tp-say", node.text(state)));
+    const said = node.text(state);
+    hud.panel.append(el("div", "tp-say", said));
+    if (said !== lastTalk) { lastTalk = said; void audio.line(mode.npc.id, said); } // each new line once, never on re-render
     const acts = el("div", "tp-acts");
     const go = (next: string | null): void => {
       if (mode.kind !== "talk") return;
@@ -1174,10 +1183,8 @@ export async function createPlay(game: Game): Promise<Play> {
     player.frozen = true;
     const lines = TRADERS.map((id) => ({ id, ...rentLine(id) }));
     for (const l of lines) market.say(l.id, l.text, RENT_HOLD_SEC);
-    // one voice at a time: the merchant in the worst spot speaks (the others are read on their bubbles)
-    const worst = lines.find((l) => l.line === "rent_closed") ?? lines.find((l) => l.line === "rent_risk") ?? lines[0];
+    // every merchant speaks their bubble in turn (market.say queues them), after the bell
     void audio.sfx("rent_bell");
-    if (worst) window.setTimeout(() => void audio.say(worst.id, worst.line, worst.text), RENT_VOICE_DELAY_MS);
   };
   const rentEye = new THREE.Vector3(), rentAt = new THREE.Vector3();
   game.onUpdate.push((dt) => { // runs after the rig: it owns the camera while the stalls are lit up
@@ -1239,15 +1246,14 @@ export async function createPlay(game: Game): Promise<Play> {
 
   // ---------------------------------------------------------------- sound ----
   /** Voice a merchant line only when the text on screen is one of their recorded lines (audio matches subtitles). */
-  const speak = (id: MerchantId, text: string): void => {
-    const lines = VOICES[id].lines;
-    const line = (Object.keys(lines) as LineId[]).find((k) => lines[k] === text);
-    if (line) void audio.say(id, line, text);
-  };
+  const speak = (id: MerchantId, text: string): void => { void audio.line(id, text); }; // recorded, or voiced by the server
   const marketAt = new THREE.Vector3();
   let soundIn = 0, stepDist = 0;
   /** Music and ambience by time and place (checked once a second), and footsteps by distance walked. */
+  const ears = new THREE.Vector3();
   const soundscape = (dt: number): void => {
+    rig.camera.getWorldDirection(ears);
+    audio.listen(rig.camera.position.x, rig.camera.position.y, rig.camera.position.z, ears.x, ears.z);
     if (!play.paused && player.body.grounded && player.speed > 0.6) {
       stepDist += player.speed * dt;
       if (stepDist > STEP_EVERY_M) { stepDist = 0; audio.step(); }
@@ -1337,7 +1343,8 @@ export async function createPlay(game: Game): Promise<Play> {
         mode = { ...mode, h };
         if (h.over === "walked") {
           const out = closeDeal(state, h);
-          mode = { ...mode, h: null, say: out.message, tone: "bad", done: RESULT_HOLD };
+          mode = { ...mode, h: null, say: `${VOICES[mode.id].lines.refuse} ${out.message}`, tone: "bad", done: RESULT_HOLD };
+          void audio.line(mode.id, mode.say);
           renderTrade();
         } else tickHaggleBar();
       }
@@ -1421,7 +1428,9 @@ export async function createPlay(game: Game): Promise<Play> {
     if (mode.kind === "trade") { mode = { ...mode, say: `Selling ${n} shares back for ${pay} c. Recording it…`, tone: "", done: AWAITING }; renderTrade(); }
     record("invest", `Sold ${n} shares of ${m.shop} back for ${pay} c`, sellPosted(id, `share:${id}`, n, pay), () => {
       sellShares(state, id, n);
-      if (mode.kind === "trade") { mode = { ...mode, say: `Done: ${pay} c for ${n} shares. You still own ${state.player.shares[id]}.`, tone: "good", done: RESULT_HOLD }; renderTrade(); }
+      const bye = VOICES[id].lines.shares_sold;
+      if (mode.kind === "trade") { mode = { ...mode, say: `${bye} Done: ${pay} c for ${n} shares. You still own ${state.player.shares[id]}.`, tone: "good", done: RESULT_HOLD }; renderTrade(); }
+      void audio.line(id, `${bye} Done`, { openerOnly: true }); // the merchant says it; the figures stay on screen
       drawBoards(); save();
     }, refusedAt(id));
   };
@@ -1429,7 +1438,7 @@ export async function createPlay(game: Game): Promise<Play> {
     invest(state, id, n);
     // Pema spends part of her partner's money on the harbor's storage fee: her held crates are finally on the way.
     const released = id === "pema" && payReleaseFee(state, "pema-mangoes", "merchant").ok;
-    market.say(id, released ? "A partner! I've paid the harbor. My crates are coming!" : id === "pema" ? "A partner! That's tonight's rent, and a new awning." : "Partner! Let's make it worth it.", 4);
+    market.say(id, released ? "A partner! I've paid the harbor. My crates are coming!" : VOICES[id].lines.invest_done, 4);
     if (mode.kind === "trade") { mode = { ...mode, say: `You now own ${state.player.shares[id]} of ${shareSupply(state, id)} shares.${state.player.shares[id] >= UPGRADE_AT ? " Look at the stall!" : ""}`, tone: "good", done: RESULT_HOLD }; renderTrade(); }
     drawBoards(); afterProgress(); save();
   };
@@ -1661,10 +1670,13 @@ export async function createPlay(game: Game): Promise<Play> {
     tactic(t) {
       if (mode.kind !== "trade" || !mode.h || mode.h.over || mode.done > 0) return;
       const r = applyTactic(state, mode.h, t);
-      mode = { ...mode, h: r.session, say: r.line, tone: t === "fair" ? "good" : r.success ? "good" : "bad" };
-      if (r.session.over === "deal") settleDeal(r.session);
-      else if (r.session.over === "walked") { const out = closeDeal(state, r.session); mode = { ...mode, h: null, say: out.message, tone: "bad", done: RESULT_HOLD }; renderTrade(); }
-      else renderTrade();
+      const id = mode.id, opener = (line: "haggle_ok" | "haggle_no" | "refuse"): string => VOICES[id].lines[line];
+      // a recorded opener starts the subtitle and plays at once; the live line with the numbers is voiced after it
+      const line = r.success || t === "fair" ? "haggle_ok" : "haggle_no";
+      mode = { ...mode, h: r.session, say: `${opener(line)} ${r.line}`, tone: t === "fair" ? "good" : r.success ? "good" : "bad" };
+      if (r.session.over === "deal") { void audio.line(id, mode.say); settleDeal(r.session); }
+      else if (r.session.over === "walked") { const out = closeDeal(state, r.session); mode = { ...mode, h: null, say: `${opener("refuse")} ${out.message}`, tone: "bad", done: RESULT_HOLD }; void audio.line(id, mode.say); renderTrade(); }
+      else { void audio.line(id, mode.say); renderTrade(); }
     },
     fastForward(on) {
       const want = on ?? !ff;

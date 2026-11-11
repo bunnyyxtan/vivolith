@@ -8,6 +8,8 @@ export interface AnimatedCharacter {
   setSpeed(speed: number, walkSpeed: number, runSpeed: number): void;
   /** Play a named one-shot or looping clip on top of locomotion (e.g. "Talking"). */
   setAction(name: string | null, once?: boolean): void;
+  /** Whether the model carries a clip whose name matches (case-insensitive). */
+  has(name: string): boolean;
   update(dt: number): void;
   /** Skeleton bone by name suffix (e.g. "LeftUpLeg"), or undefined. */
   bone(name: string): THREE.Object3D | undefined;
@@ -374,6 +376,7 @@ export async function loadCharacter(url: string, height: number, clipSource?: st
       return prints;
     },
     setSpeed,
+    has: (name) => findClip(clips, new RegExp(name, "i")) !== undefined,
     setAction(name, once = false) {
       const clip = name ? findClip(clips, new RegExp(name, "i")) : undefined;
       const next = clip ? mixer.clipAction(clip) : null;

@@ -9,6 +9,9 @@ import { standHeight, type FloorHeight } from "./floor";
 import type { AnimatedCharacter } from "../character";
 import { NPC_STEP, createNav, type Nav } from "./nav";
 import { createBubbles, installPose, type PoseState } from "./npcfx";
+import { audio } from "./audio";
+import { FOLK_VOICES, VOICES, folkVoiceUrl, voiceUrl } from "./audio-manifest";
+import type { MerchantId } from "../economy/state";
 
 type Kind = "bench" | "shopdoor" | "stallq" | "chat" | "wait" | "crate" | "cafe" | "photo" | "jog";
 const KINDS: readonly Kind[] = ["bench", "shopdoor", "stallq", "chat", "wait", "crate", "cafe", "photo", "jog"];
@@ -71,6 +74,8 @@ interface Ent extends Pedestrian {
   onScreen: boolean; lag: number; near: boolean; inks: THREE.Object3D[]; bodies: THREE.Mesh[];
   /** Residents: confirmed trades to act out (walk to the stall, then say it), and the line being walked to now. */
   errands: { mer: string; line: string }[]; errand: string | null;
+  /** Townsfolk: index into FOLK_VOICES. startled: seconds left on the startled clip before it is released. */
+  voice: number; startled: number;
 }
 
 const WALK = 1.3, PLAYER_R = 0.32, HEAD = 1.85;
@@ -177,11 +182,12 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
     r: 0.33, fixed, cd: 0, svx: 0, svz: 0, stag: 0, head: new THREE.Vector3(),
     state: "idle", spot: null, slot: 0, path: [], pi: 0, speed: rnd(1.0, 1.5), spd: 0, t: 0, phase: 0, last: null, carrying: false,
     stuckT: 0, sx: 0, sz: 0, carry: null, mer: null, hx: root.position.x, hz: root.position.z, hy: root.position.y, by: root.position.y, jogLeft: 0, baseSpeed: 1.2,
-    onScreen: true, lag: 0, near: true, inks: [], bodies: [], errands: [], errand: null,
+    onScreen: true, lag: 0, near: true, inks: [], bodies: [], errands: [], errand: null, voice: 0, startled: 0,
   });
   const merEnts = mers.map((m) => { const e = mkEnt(m.character, m.root, true); e.mer = m; return e; });
-  const folk = folkChars.map((f) => {
+  const folk = folkChars.map((f, i) => {
     const e = mkEnt(f.c, f.root, false);
+    e.voice = (i % 6) % FOLK_VOICES.length; // same model (market.ts cycles 6) = same voice; model 1 (Noor) = folk0
     e.carry = makeCrate();
     e.carry.position.set(0, 1.0, 0.36);
     e.carry.visible = false;
@@ -318,7 +324,7 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
       case "crate": e.t = 0.9; break;
       case "stallq": e.t = s.next ? 999 : rnd(4, 7); if (!s.next && s.mer) { s.mer.serving = true; s.mer.attend = new THREE.Vector3(e.x, 0, e.z); } break;
     }
-    if (e.errand) { e.t = 4; bubbles.say(e.head, e.errand, 4); e.errand = null; } // at the stall: the trade, as recorded on NEAR
+    if (e.errand) { e.t = 4; chat(e, e.errand, 4); e.errand = null; } // at the stall: the trade, as recorded on NEAR
   };
 
   const faceTo = (e: Ent, yaw: number, dt: number, k = 8): void => { e.yaw += wrap(yaw - e.yaw) * (1 - Math.exp(-k * dt)); };
@@ -334,7 +340,7 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
         if (p && p.state === "act" && p.spot === s) { // friends on a bench take turns talking
           if (e.slot === 0) { s.turn -= dt; if (s.turn < 0) { s.turn = rnd(3, 6); e.phase ^= 1; p.phase = e.phase ^ 1; } }
           talk = e.phase === 1;
-          if (talk && Math.random() < dt * 0.06) bubbles.say(e.head, gossip[Math.floor(Math.random() * gossip.length)], 2.4);
+          if (talk && Math.random() < dt * 0.06) chat(e, gossip[Math.floor(Math.random() * gossip.length)], 2.4);
         }
         break;
       }
@@ -363,7 +369,7 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
           if (e.slot === 0) { s.turn -= dt; if (s.turn < 0) { s.turn = rnd(3, 5); s.slots[0]!.phase ^= 1; s.slots[1]!.phase = s.slots[0]!.phase ^ 1; } }
           talk = e.phase === 0 ? e.slot === 0 : e.slot === 1;
           if (e.slot === 0) { s.t -= dt; if (s.t <= 0.001) { s.t = 0.001; e.t = 0; p.t = 0; } }
-          if (e.slot === 0 && Math.random() < dt * 0.15 && talk) bubbles.say(e.head, gossip[Math.floor(Math.random() * gossip.length)], 2.4);
+          if (e.slot === 0 && Math.random() < dt * 0.15 && talk) chat(e, gossip[Math.floor(Math.random() * gossip.length)], 2.4);
         } else if (s.t > 0) e.t = 0; // partner left
         break;
       }
@@ -421,6 +427,12 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
 
   const body: Body = { x: 0, y: 0, z: 0, vy: 0, radius: 0.3, height: 1.7, grounded: true };
   let pb: Body | null = null, cam: THREE.Camera | null = null;
+  /** A townsperson says something: the bubble, and their voice when the camera is near (street chatter, one at a time). */
+  const CHAT_HEAR_M = 14;
+  const chat = (e: Ent, text: string, sec: number): void => {
+    bubbles.say(e.head, text, sec);
+    if (cam && Math.hypot(e.x - cam.position.x, e.z - cam.position.z) < CHAT_HEAR_M) void audio.line(`folk${e.voice}`, text, { at: e.head, ambient: true });
+  };
   // ---- view culling: townsfolk outside the camera frustum or far away are not drawn; beyond DETAIL_FAR they lose the
   // ink outline and shadow (a few pixels tall there). Characters disable three's own culling (skinned bounds lag).
   const VIEW_FAR = 90, DETAIL_FAR = 30;
@@ -451,13 +463,24 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
   };
   let lpx = 0, lpz = 0;
 
+  let voiceCd = 0; // one voiced reaction at a time across the whole street
   const bump = (e: Ent, nx: number, nz: number, speed: number): void => {
     e.cd = 3;
     const k = e.fixed ? 1.2 : 2.4;
     e.svx = nx * k; e.svz = nz * k; e.stag = 0.6;
     if (!e.fixed && e.state !== "act") e.state = "stag";
-    if (Math.random() < 0.9) bubbles.say(e.head, BUMP_LINES[Math.floor(Math.random() * BUMP_LINES.length)], 1.6);
-    void speed;
+    // what they say is what you hear: a merchant's own bump line, or one of the townsperson's voice's lines
+    const mid = e.fixed ? e.mer?.id : undefined;
+    const merchant = mid && mid in VOICES ? (mid as MerchantId) : null;
+    let text: string, url: string | null;
+    if (merchant) { text = VOICES[merchant].lines.bump; url = voiceUrl(merchant, "bump"); }
+    else if (!e.fixed) { const v = FOLK_VOICES[e.voice], n = Math.floor(Math.random() * v.bump.length); text = v.bump[n]; url = folkVoiceUrl(e.voice, n); }
+    else { text = BUMP_LINES[Math.floor(Math.random() * BUMP_LINES.length)]; url = null; }
+    bubbles.say(e.head, text, 1.6);
+    if (url && voiceCd <= 0) { voiceCd = 0.8; void audio.at(url, e.x, e.y + 1.6, e.z); }
+    // a real flinch where the model has one (Tripo "Startled"); seated folk keep their seat
+    const seated = e.state === "act" && (e.spot?.kind === "bench" || e.spot?.kind === "cafe");
+    if (!seated && e.c.has("Startled") && speed > 1.6) { e.c.setAction("Startled", true); e.startled = 1.1; }
   };
 
   const place = (e: Ent): void => {
@@ -495,6 +518,8 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
     bind(b, c) { pb = b; cam = c; lpx = b.x; lpz = b.z; },
     update(dt) {
       dt = Math.min(dt, 0.1);
+      voiceCd -= dt;
+      for (const e of all) if (e.startled > 0 && (e.startled -= dt) <= 0) e.c.setAction(null); // release the flinch
       // merchants: stagger offsets spring back
       for (const m of merEnts) {
         m.cd -= dt;

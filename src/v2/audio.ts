@@ -3,7 +3,7 @@
 // missing or broken file is silent, so the game never depends on audio. UI clicks, coins and footsteps are
 // synthesised (tiny, no files). One voice at a time; music and ambience duck while someone speaks.
 import type { MerchantId } from "../economy/state";
-import { loopUrl, sfxUrl, voiceUrl, type AmbienceId, type LineId, type MusicId, type SfxFile } from "./audio-manifest";
+import { VOICES, loopUrl, recordedUrl, sfxUrl, type AmbienceId, type LineId, type MusicId, type SfxFile } from "./audio-manifest";
 
 export interface Levels { music: number; voice: number; sfx: number; muted: boolean }
 type Synth = "click" | "coin" | "pay" | "error" | "step";
@@ -101,6 +101,85 @@ function synth(id: Synth): void {
   }
 }
 
+/** Server-voiced line (server/near/voice.ts): cached per speaker and text; null when the voice is unavailable. */
+const tts = new Map<string, Promise<AudioBuffer | null>>();
+function ttsBuffer(speaker: string, text: string): Promise<AudioBuffer | null> {
+  const k = `${speaker}|${text}`;
+  let p = tts.get(k);
+  if (!p) {
+    p = fetch("/api/near/voice", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ speaker, text }) })
+      .then((r) => (r.ok ? (r.json() as Promise<{ audio?: string }>) : null))
+      .then((j) => (j?.audio && ctx ? ctx.decodeAudioData(Uint8Array.from(atob(j.audio), (c) => c.charCodeAt(0)).buffer) : null))
+      .catch(() => null);
+    tts.set(k, p);
+  }
+  return p;
+}
+
+/** The longest recorded line of this merchant that the text starts with (an opener such as "Ha! Not a chance."). */
+function opener(speaker: string, text: string): string | null {
+  const v = VOICES[speaker as MerchantId];
+  if (!v) return null;
+  return Object.values(v.lines).filter((l) => text.startsWith(`${l} `)).sort((a, b) => b.length - a.length)[0] ?? null;
+}
+
+export interface LineOptions {
+  /** World position: the line pans and fades with distance from the camera. */
+  at?: { x: number; y: number; z: number };
+  /** Background chatter (gossip, residents): never interrupts dialogue, rate-limited across the street. */
+  ambient?: boolean;
+  /** Wait for the current line to finish instead of cutting it (several merchants in turn). */
+  queue?: boolean;
+  /** Speak only the recorded opener; the rest of the subtitle is interface detail (figures), not speech. */
+  openerOnly?: boolean;
+}
+let lineSeq = 0, chain: Promise<unknown> = Promise.resolve(), ambientUntil = 0;
+const AMBIENT_GAP_SEC = 6;
+
+function playBuffer(buf: AudioBuffer, at?: LineOptions["at"]): Promise<void> {
+  const s = ctx!.createBufferSource();
+  s.buffer = buf;
+  if (at) {
+    const p = ctx!.createPanner();
+    p.panningModel = "equalpower"; p.distanceModel = "inverse"; p.refDistance = 2.5; p.rolloffFactor = 1.1; p.maxDistance = 40;
+    p.positionX.value = at.x; p.positionY.value = at.y; p.positionZ.value = at.z;
+    s.connect(p).connect(voiceBus);
+  } else s.connect(voiceBus);
+  return new Promise((done) => { s.onended = () => done(); s.start(); speaking = s; });
+}
+
+/** Speak one character's line: the recorded file when it exists, else a recorded opener plus the server voice for the
+ *  rest, else (voice unavailable) a few pitched blips. Resolves when the speech ends, with its length in seconds. */
+async function speakLine(speaker: string, text: string, o: LineOptions): Promise<number> {
+  if (!ctx || !text) return 0;
+  const my = ++lineSeq;
+  if (speaking) { try { speaking.stop(); } catch { /* already ended */ } speaking = null; }
+  const whole = recordedUrl(speaker, text);
+  const op = whole ? null : opener(speaker, text);
+  const parts: Promise<AudioBuffer | null>[] = [];
+  if (whole) parts.push(fetchBuffer(whole));
+  else if (op) {
+    parts.push(fetchBuffer(recordedUrl(speaker, op)!));
+    if (!o.openerOnly) parts.push(ttsBuffer(speaker, text.slice(op.length).trim()));
+  } else if (!o.openerOnly) parts.push(ttsBuffer(speaker, text));
+  let total = 0;
+  for (const p of parts) { // all fetched at once; played in order, the server line usually ready by the time the opener ends
+    const buf = await p;
+    if (my !== lineSeq || !ctx) return total; // a newer line took over
+    if (!buf) continue;
+    duckFor(buf.duration);
+    await playBuffer(buf, o.at);
+    total += buf.duration;
+  }
+  if (!total && parts.length && my === lineSeq) { // voice unavailable: short blips, so the subtitle never appears in silence
+    const syl = Math.min(6, Math.max(2, Math.round(text.split(/\s+/).length / 2)));
+    const f = BLIP[speaker as MerchantId] ?? 260;
+    for (let i = 0; i < syl; i++) blip(f * (0.9 + Math.random() * 0.25), ctx.currentTime + i * 0.09, 0.07, "square", 0.05, voiceBus);
+  }
+  if (my === lineSeq) speaking = null;
+  return total;
+}
+
 function duckFor(sec: number): void {
   if (!ctx) return;
   const t = ctx.currentTime;
@@ -139,20 +218,49 @@ export const audio = {
     s.buffer = buf; s.playbackRate.value = 0.94 + Math.random() * 0.12; g.gain.value = 0.55; // variety, sits under everything
     s.connect(g).connect(sfxBus); s.onended = () => live--; s.start();
   },
-  /** One merchant line; cuts off whoever was speaking. Without a recorded clip, a short pitched blip stands in. */
-  async say(id: MerchantId, line: LineId, text: string): Promise<void> {
-    if (!ctx) return;
-    if (speaking) { try { speaking.stop(); } catch { /* already ended */ } speaking = null; }
-    const buf = await fetchBuffer(voiceUrl(id, line));
-    if (!ctx) return;
-    if (!buf) { // fallback: a few syllable blips, never a stack of them
-      const syl = Math.min(6, Math.max(2, Math.round(text.split(/\s+/).length / 2)));
-      for (let i = 0; i < syl; i++) blip(BLIP[id] * (0.9 + Math.random() * 0.25), ctx.currentTime + i * 0.09, 0.07, "square", 0.05, voiceBus);
-      return;
+  /** One merchant line by id (kept for callers that know the line). */
+  async say(id: MerchantId, _line: LineId, text: string): Promise<void> { await audio.line(id, text); },
+  /** Any character's line (speaker: a merchant id, folk0..3, engineer, harbor). The text is exactly what the subtitle
+   *  shows. Dialogue cuts the previous line (or queues after it); ambient chatter waits its turn and never interrupts. */
+  line(speaker: string, text: string, o: LineOptions = {}): Promise<number> {
+    if (!ctx) return Promise.resolve(0);
+    if (o.ambient) {
+      if (speaking || ctx.currentTime < ambientUntil) return Promise.resolve(0);
+      ambientUntil = ctx.currentTime + AMBIENT_GAP_SEC;
+      const url = recordedUrl(speaker, text);
+      return (url ? fetchBuffer(url) : ttsBuffer(speaker, text)).then(async (b) => {
+        if (!b || !ctx || speaking) return 0;
+        ambientUntil = ctx.currentTime + b.duration + AMBIENT_GAP_SEC;
+        const s = ctx.createBufferSource(), p = ctx.createPanner();
+        p.panningModel = "equalpower"; p.distanceModel = "inverse"; p.refDistance = 2; p.rolloffFactor = 1.4; p.maxDistance = 25;
+        if (o.at) { p.positionX.value = o.at.x; p.positionY.value = o.at.y; p.positionZ.value = o.at.z; }
+        s.buffer = b; s.connect(p).connect(voiceBus); s.start();
+        return b.duration;
+      });
     }
-    const s = ctx.createBufferSource(); s.buffer = buf; s.connect(voiceBus); s.start();
-    speaking = s; s.onended = () => { if (speaking === s) speaking = null; };
-    duckFor(buf.duration);
+    if (o.queue) { const run = chain.then(() => speakLine(speaker, text, o)); chain = run.catch(() => 0); return run; }
+    const run = speakLine(speaker, text, o); chain = run.catch(() => 0); return run;
+  },
+  /** Where the ears are (the camera): set every frame so reactions pan and fade with distance. */
+  listen(x: number, y: number, z: number, fx: number, fz: number): void {
+    if (!ctx) return;
+    const l = ctx.listener;
+    if (l.positionX) {
+      l.positionX.value = x; l.positionY.value = y; l.positionZ.value = z;
+      l.forwardX.value = fx; l.forwardY.value = 0; l.forwardZ.value = fz; l.upX.value = 0; l.upY.value = 1; l.upZ.value = 0;
+    } else { l.setPosition(x, y, z); l.setOrientation(fx, 0, fz, 0, 1, 0); } // older Safari
+  },
+  /** A short voiced reaction at a world position (a bump): panned, quieter with distance, on the voice bus.
+   *  Never cuts a merchant's line; silent until the file exists. */
+  async at(url: string, x: number, y: number, z: number): Promise<void> {
+    if (!ctx || live >= MAX_SFX) return;
+    const buf = await fetchBuffer(url);
+    if (!buf || !ctx) return;
+    live++;
+    const s = ctx.createBufferSource(), p = ctx.createPanner();
+    p.panningModel = "equalpower"; p.distanceModel = "inverse"; p.refDistance = 2; p.rolloffFactor = 1.2; p.maxDistance = 40;
+    p.positionX.value = x; p.positionY.value = y; p.positionZ.value = z;
+    s.buffer = buf; s.connect(p).connect(voiceBus); s.onended = () => live--; s.start();
   },
   music: (id: MusicId): void => { void setLoop("music", id); },
   ambience: (id: AmbienceId): void => { void setLoop("ambience", id); },

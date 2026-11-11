@@ -9,6 +9,7 @@ import { groundHeightAt, type Box } from "../physics/collision";
 import { applyToon, setGlowBase, trackGlow } from "./toon";
 import { installProps } from "./props";
 import { createLife, type FolkChar, type Life } from "./npc";
+import { audio } from "./audio";
 import { createFloor, type FloorHeight } from "./floor";
 import type { Body } from "../physics/collision";
 
@@ -249,10 +250,13 @@ async function loadNpcModel(id: NpcId): Promise<AnimatedCharacter> {
 
 /** Townsfolk models (cast folk1..6; Idle/Walk/Run/Talking borrowed from old Mixamo characters, the cast clips are static). */
 const FOLK_CLIPS = ["/models/ped_abe.glb", "/models/npc_teahouse.glb", "/models/player.glb"];
+/** Townsfolk rebuilt in Tripo Studio (blender/build_studio_character.py) carry their own clips: no borrowing. */
+const TRIPO_FOLK = new Set([1]);
 async function loadFolk(scene: THREE.Scene): Promise<FolkChar[]> {
   const out = await Promise.all(Array.from({ length: FOLK }, async (_, i): Promise<FolkChar | null> => {
     try {
-      const c = await loadCharacter(`/models/v2/cast/folk${(i % 6) + 1}.glb`, CAST_HEIGHT * (0.94 + 0.06 * (i % 3)), FOLK_CLIPS);
+      const n = (i % 6) + 1;
+      const c = await loadCharacter(`/models/v2/cast/folk${n}.glb`, CAST_HEIGHT * (0.94 + 0.06 * (i % 3)), TRIPO_FOLK.has(n) ? undefined : FOLK_CLIPS);
       applyToon(c.root, 0.011);
       c.autoGround = true;
       const root = new THREE.Group();
@@ -307,7 +311,15 @@ export async function createMarket(scene: THREE.Scene, colliders: Box[]): Promis
     boards: npcs.flatMap((n) => (n.board ? [n.board.mesh] : [])),
     bind: (body, camera) => life.bind(body, camera),
     setStall(id, st) { dressing.get(id)?.(st); life.setPull(id, st.pull); },
-    say(id, text, sec) { const n = npcs.find((x) => x.id === id); if (n) life.say(n.head, text, sec); },
+    say(id, text, sec) {
+      const n = npcs.find((x) => x.id === id);
+      if (!n) return;
+      life.say(n.head, text, sec);
+      // the bubble is spoken too, in turn (several merchants at Rent Night queue up), mouth moving while it plays
+      const was = n.talking;
+      void audio.line(id, text, { at: n.head, queue: true }).then(() => { if (!was) n.talking = false; });
+      n.talking = true;
+    },
     life,
     nearest(p) {
       let best: Npc | null = null, bd = INTERACT_RADIUS;
