@@ -198,6 +198,7 @@ function tex(o: SignOpts, lines: SignLine[], w: number, h: number, px = 1024, st
 
 export function makeSign(kind: SignKind, o: SignOpts): THREE.Object3D {
   const root = new THREE.Group();
+  root.name = `SIGN:${o.lines[0]?.text ?? kind}`; // the city map finds named places by their real signs
   switch (kind) {
     case "gateway": {
       const span = o.width ?? 11, h = o.height ?? 1.9, postH = 6.4;
@@ -304,7 +305,11 @@ export function makeSign(kind: SignKind, o: SignOpts): THREE.Object3D {
 }
 
 // ---------------------------------------------------------------- placing --
+/** Where each placed sign stands (signs are merged into a few meshes afterwards, so their names don't survive). */
+export const SIGN_SPOTS: { name: string; x: number; z: number }[] = [];
+
 function place(group: THREE.Group, boxes: Box[], obj: THREE.Object3D, x: number, y: number, z: number, yaw: number): void {
+  if (obj.name.startsWith("SIGN:")) SIGN_SPOTS.push({ name: obj.name.slice(5), x, z });
   obj.position.set(x, y, z);
   obj.rotation.y = yaw;
   group.add(obj);

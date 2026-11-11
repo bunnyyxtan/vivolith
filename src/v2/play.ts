@@ -13,6 +13,7 @@ import { bidFor, quote, lassiPrice, stallPull, ORCHARD_PICK, ORCHARD_HOURS, type
 import { clockOf, dayOf, MERCHANT_IDS, MINUTES_PER_DAY, STARTER_COINS, type EconomyState, type Good, type MerchantId, type Receipt } from "../economy/state";
 import { RESIDENTS } from "../economy/residents";
 import { audio } from "./audio";
+import { createCityMap } from "./map";
 import { VOICES, type LineId } from "./audio-manifest";
 
 /** Metres per footstep sound, and how close to the stalls the market music and murmur take over. */
@@ -1191,6 +1192,16 @@ export async function createPlay(game: Game): Promise<Play> {
     rig.camera.lookAt(rentAt);
     if (rentHold <= 0 && rentDone) { const d = rentDone; rentDone = null; player.frozen = false; d(); }
   });
+  // ---------------------------------------------------------------- city map ----
+  const cityMap = createCityMap({
+    scene: game.look.scene, colliders: game.colliders,
+    player: () => ({ x: player.body.x, z: player.body.z, heading: player.heading }),
+    objective: () => { const o = guide.current(state); return o?.target ? market.npcs.find((n) => n.id === o.target)?.root.position ?? null : null; },
+    merchants: () => TRADERS.flatMap((id) => { const n = market.npcs.find((x) => x.id === id); return n ? [{ name: state.merchants[id].name, at: n.root.position }] : []; }),
+    allowed: () => mode.kind === "walk" && !play.paused && !ff,
+    setFrozen: (on) => { player.frozen = on; game.input.setUi(on); },
+  });
+
   // ---------------------------------------------------------------- orchard ----
   /** The Mango Orchard (west of the Spire): a few free mangoes each morning, minted on NEAR once per market day,
    *  to carry to whoever bids best. The rule lives in pricing.ts (ORCHARD_PICK, ORCHARD_HOURS). */
@@ -1294,6 +1305,7 @@ export async function createPlay(game: Game): Promise<Play> {
     market.update(dt, player.root.position);
     game.look.setTime(state.minute % MINUTES_PER_DAY); // day and night follow the game clock (the menu too)
     soundscape(dt);
+    cityMap.update(dt);
     if (play.paused) return;
     playTime += dt;
     autosaveIn -= dt;
