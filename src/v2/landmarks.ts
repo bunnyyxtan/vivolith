@@ -27,7 +27,7 @@ export async function installLandmarks(town: THREE.Object3D, colliders?: Box[]):
       const leaves: Array<{ node: THREE.Object3D; parent: THREE.Object3D }> = [];
       gltf.scene.traverse((o) => { if (/^(FOLIAGE|HT_)/.test(o.name) && o.parent) leaves.push({ node: o, parent: o.parent }); });
       for (const l of leaves) l.parent.remove(l.node);
-      applyToon(gltf.scene, OUTLINE, undefined, true);
+      applyToon(gltf.scene, OUTLINE, undefined, true, false); // buildings: no ink line (WP3)
       for (const l of leaves) l.parent.add(l.node);
       gltf.scene.traverse((o) => { o.frustumCulled = true; });
       placed++;

@@ -6,7 +6,7 @@ import * as THREE from "three";
 import { loadGLB, prepareModel } from "../assets";
 import { loadCharacter, type AnimatedCharacter } from "../character";
 import { groundHeightAt, type Box } from "../physics/collision";
-import { applyToon } from "./toon";
+import { applyToon, trackGlow } from "./toon";
 import { installProps } from "./props";
 import { createLife, type FolkChar, type Life } from "./npc";
 import { createFloor, type FloorHeight } from "./floor";
@@ -194,6 +194,9 @@ async function loadTown(colliders: Box[], scene: THREE.Scene): Promise<THREE.Obj
     const gltf = await loadGLB("/models/v2/town.glb");
     const m = prepareModel(gltf.scene);
     colliders.push(...m.colliders);
+    gltf.scene.traverse((o) => { // street lamps and lit windows follow the time of day (dim at noon)
+      if (o instanceof THREE.Mesh) for (const mat of Array.isArray(o.material) ? o.material : [o.material]) trackGlow(mat);
+    });
     scene.add(gltf.scene);
     void installProps(gltf.scene, colliders); // Tripo EVs, stalls and shops stream in on their PROP_ empties
     return gltf.scene;

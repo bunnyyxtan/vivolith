@@ -73,7 +73,8 @@ function decor(asset: string, id: string): THREE.Object3D | null {
 async function loadTemplate(asset: string): Promise<THREE.Object3D> {
   const gltf = await loadGLB(`/models/v2/props/${asset}.glb`);
   prepareModel(gltf.scene); // hides COL_*; the colliders are already in the town
-  applyToon(gltf.scene, OUTLINE, undefined, true);
+  // Parked cars keep the same paint as the traffic (toon flattens it into clay); shops are buildings: no ink line.
+  if (!/^ev_/.test(asset)) applyToon(gltf.scene, OUTLINE, undefined, true, !/^shop_/.test(asset));
   gltf.scene.traverse((o) => { o.frustumCulled = true; }); // static: let three cull them (applyToon disables it)
   return gltf.scene;
 }
