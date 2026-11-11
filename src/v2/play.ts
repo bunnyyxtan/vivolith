@@ -1041,6 +1041,7 @@ export async function createPlay(game: Game): Promise<Play> {
 
   const update = (dt: number): void => {
     market.update(dt, player.root.position);
+    game.look.setTime(state.minute % MINUTES_PER_DAY); // day and night follow the game clock (the menu too)
     if (play.paused) return;
     playTime += dt;
     autosaveIn -= dt;
