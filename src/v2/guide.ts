@@ -82,8 +82,10 @@ export const STEPS: readonly Step[] = [
 ];
 
 /** Goals after the first mission: the first unfinished one is the current objective. */
-export const GOALS: readonly { id: string; title: string; detail: string; done: (s: EconomyState) => boolean }[] = [
-  { id: "orchard", title: "Pick mangoes at the Orchard", detail: "Follow the signs west past the Spire. Mornings 06:00 to 11:00, three mangoes a day: sell them where the bid is best.", done: (s) => f(s, "pickedOrchard") },
+/** Where a goal sends the player: a merchant or the Mango Orchard (gold marker in the world and on the map). */
+export type Target = MerchantId | "orchard";
+export const GOALS: readonly { id: string; title: string; detail: string; target?: Target; done: (s: EconomyState) => boolean }[] = [
+  { id: "orchard", title: "Pick free mangoes at the Orchard", detail: "Follow the gold marker to the Mango Orchard sign. Press F there between 06:00 and 11:00 for 3 free mangoes, then sell them where the price is best.", target: "orchard", done: (s) => f(s, "pickedOrchard") },
   { id: "arin", title: "Supply Arin's tea house", detail: "Arin buys mangoes for his lassi. Buy from Tomas or Mira and sell to him.", done: (s) => f(s, "soldArin") },
   { id: "two", title: "Own shares in two stalls", detail: "Every partner earns from that stall's daily sales.", done: (s) => MERCHANT_IDS.filter((id) => s.player.shares[id] > 0).length >= 2 },
   { id: "hundred", title: "Reach 100 coins", detail: "Buy where goods are cheap, sell where they are missing.", done: (s) => s.player.coins >= 100 },
@@ -98,13 +100,13 @@ export const unlocked = (s: EconomyState, what: "haggle" | "invest" | "week" | "
   return what === "haggle" ? i >= 4 : what === "invest" ? i >= 5 : i >= 6;
 };
 
-export interface Objective { title: string; detail: string; target: MerchantId | null; label: string }
+export interface Objective { title: string; detail: string; target: Target | null; label: string }
 
 export interface Guide {
   /** Re-check completion; returns the reward line of a step that just completed (or null). */
   update(s: EconomyState): string | null;
   /** Objective tracker + world marker, every frame. */
-  draw(s: EconomyState, camera: THREE.Camera, targetPos: (id: MerchantId) => THREE.Vector3 | null, player: THREE.Vector3): void;
+  draw(s: EconomyState, camera: THREE.Camera, targetPos: (id: Target) => THREE.Vector3 | null, player: THREE.Vector3): void;
   current(s: EconomyState): Objective | null;
 }
 
@@ -131,7 +133,7 @@ export function createGuide(hud: Hud): Guide {
       };
     }
     const g = GOALS.find((x) => !x.done(s));
-    return g ? { title: g.title, detail: g.detail, target: null, label: "Goal" } : null;
+    return g ? { title: g.title, detail: g.detail, target: g.target ?? null, label: "Goal" } : null;
   };
   return {
     current,
@@ -172,7 +174,7 @@ export function createGuide(hud: Hud): Guide {
       hud.mark.style.left = `${x}px`;
       hud.mark.style.top = `${y}px`;
       hud.mark.style.display = dist < 3.2 ? "none" : "block";
-      const label = off ? `${NAMES[c.target!]} · ${Math.round(dist)} m` : `${Math.round(dist)} m`;
+      const label = off ? `${(c.target === "orchard" ? "Orchard" : NAMES[c.target!])} · ${Math.round(dist)} m` : `${Math.round(dist)} m`;
       if (label !== lastMark) { lastMark = label; hud.mark.innerHTML = ""; hud.mark.append(el("span", "", label)); }
     },
   };

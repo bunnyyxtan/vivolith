@@ -5,7 +5,7 @@ import * as THREE from "three";
 import type { Game } from "./game";
 import { createMarket, type Market, type Npc } from "./market";
 import { createHud, el, type Hud } from "./hud";
-import { createGuide, DELIVERY_PRICE, GOALS, inTutorial, investTarget, STEPS, stepIndex, titleOf, tutorSeller, unlocked } from "./guide";
+import { createGuide, DELIVERY_PRICE, GOALS, inTutorial, investTarget, STEPS, stepIndex, titleOf, tutorSeller, unlocked, type Target } from "./guide";
 import { loadGame, saveGame, clearSave } from "../economy/save";
 import { calibrateSoles } from "./soles";
 import { advance, invest, MAX_PACKS, payReleaseFee, recordRestock, REOPEN_SHARE, reopenGap, sellShares, SHARE_PACK, shareCost, shareRefund, shareSupply, tryReopen, UPGRADE_AT } from "../economy/sim";
@@ -1192,11 +1192,14 @@ export async function createPlay(game: Game): Promise<Play> {
     rig.camera.lookAt(rentAt);
     if (rentHold <= 0 && rentDone) { const d = rentDone; rentDone = null; player.frozen = false; d(); }
   });
+  /** Where an objective points: a merchant at their stall, or the Mango Orchard sign. */
+  const targetAt = (id: Target): THREE.Vector3 | null => (id === "orchard" ? game.look.scene.getObjectByName("PLACARD_orchard")?.getWorldPosition(new THREE.Vector3()) ?? null : market.npcs.find((n) => n.id === id)?.root.position ?? null);
+
   // ---------------------------------------------------------------- city map ----
   const cityMap = createCityMap({
     scene: game.look.scene, colliders: game.colliders,
     player: () => ({ x: player.body.x, z: player.body.z, heading: player.heading }),
-    objective: () => { const o = guide.current(state); return o?.target ? market.npcs.find((n) => n.id === o.target)?.root.position ?? null : null; },
+    objective: () => { const o = guide.current(state); return o?.target ? targetAt(o.target) : null; },
     merchants: () => TRADERS.flatMap((id) => { const n = market.npcs.find((x) => x.id === id); return n ? [{ name: state.merchants[id].name, at: n.root.position }] : []; }),
     allowed: () => mode.kind === "walk" && !play.paused && !ff,
     setFrozen: (on) => { player.frozen = on; game.input.setUi(on); },
@@ -1391,7 +1394,7 @@ export async function createPlay(game: Game): Promise<Play> {
       hud.prompt.append(el("kbd", "", "F"), el("span", "", `${!trader || talkFirst ? "Talk to" : "Trade with"} ${name}`));
       hud.prompt.style.display = "block";
     } else hud.prompt.style.display = "none";
-    guide.draw(state, rig.camera, (id) => market.npcs.find((n) => n.id === id)?.root.position ?? null, player.root.position);
+    guide.draw(state, rig.camera, targetAt, player.root.position);
     renderTip();
     renderWallet();
     renderHint();
