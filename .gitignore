@@ -23,7 +23,7 @@ assets-src/downloads/
 assets-src/tripo/out/
 assets-src/tripo/library/
 assets-src/tripo/tripo-out/
-assets-src/tripo/.tripo/
+.tripo/
 # Raw Mixamo FBX downloads: converted GLBs in public/models are used instead (Mixamo terms: no standalone redistribution)
 Mixamo/
 
