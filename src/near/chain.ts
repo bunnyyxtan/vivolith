@@ -24,6 +24,8 @@ export interface ChainStatus {
   readonly merchants: readonly string[];
   /** Our Auth0 tenant for Google/email sign-in; null until configured (the sign-in button stays hidden). */
   readonly auth: { readonly domain: string; readonly clientId: string } | null;
+  /** Length of one on-chain market day (the relayer's MARKET_DAY_MS). */
+  readonly marketDayMs?: number;
 }
 
 export interface TxOutcome {
@@ -88,6 +90,9 @@ export async function lastMarketTurn(): Promise<LastTick | null> {
     return null;
   }
 }
+
+/** The current on-chain market day, numbered exactly as the relayer does (floor(now / marketDayMs)); null offline. */
+export const marketDay = (): number | null => (status?.marketDayMs ? Math.floor(Date.now() / status.marketDayMs) : null);
 
 export const merchantAccount = (id: string): string => `${id}.${status?.relayer ?? ""}`;
 export const playerId = (): string | null => player?.accountId ?? null;

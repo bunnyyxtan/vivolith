@@ -23,7 +23,7 @@ import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
 import {
   EXPLORER_ACCOUNT, EXPLORER_TX, balances, buyPosted, sellPosted, connectGuest, haggleDeal, marketTick, merchantAccount, playerId, playerLabel, receipts as chainReceipts,
-  settleDay, claimDividends, lastMarketTurn, askMerchant, pickOrchard, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
+  settleDay, claimDividends, lastMarketTurn, askMerchant, pickOrchard, marketDay, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
 } from "../near/chain";
 
 const GAME_MIN_PER_SEC = 2.4; // 09:00 -> 21:00 in five real minutes
@@ -1114,13 +1114,15 @@ export async function createPlay(game: Game): Promise<Play> {
   const pickAtOrchard = async (): Promise<void> => {
     if (picking) return;
     if (!orchardOpen()) { hud.toast(`The pickers have finished for today. Come back between ${String(ORCHARD_HOURS[0]).padStart(2, "0")}:00 and ${ORCHARD_HOURS[1]}:00.`); return; }
-    const today = dayOf(state.minute);
-    if (state.flags.orchardDay === today) { hud.toast("You've picked your share today. The trees need a rest until tomorrow."); return; }
     const id = playerId();
+    // One period, the same as the relayer's: connected, the on-chain market day; offline, the game day.
+    const md = id ? marketDay() : null;
+    const today = md !== null ? `m${md}` : `g${dayOf(state.minute)}`;
+    if (state.flags.orchardDay === today) { hud.toast(`You've picked your share ${md !== null ? "this market day" : "today"}. The trees need a rest.`); return; }
     picking = true;
     const r = id ? await pickOrchard(id) : { status: "local" };
     picking = false;
-    if (r.status === "picked") { state.flags.orchardDay = today; hud.toast("You've picked your share this market day. Come back tomorrow."); return; }
+    if (r.status === "picked") { state.flags.orchardDay = today; hud.toast("You've picked your share this market day. The trees need a rest."); return; }
     if (r.status !== "onchain" && r.status !== "local") { hud.toast("The orchard gate is stuck. Try again in a moment."); audio.synth("error"); return; }
     state.flags.orchardDay = today; state.flags.pickedOrchard = true;
     state.player.inventory.mango += ORCHARD_PICK; // NEAR minted them; the next wallet read confirms it
