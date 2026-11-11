@@ -17,13 +17,15 @@ import { VOICES, type LineId } from "./audio-manifest";
 
 /** Metres per footstep sound, and how close to the stalls the market music and murmur take over. */
 const ORCHARD_REACH_M = 4;
+/** Money trail: how many payments the proof screen lists, and how long the gold arc stays up. */
+const TRAIL_ROWS = 10, TRAIL_SEC = 10;
 const STEP_EVERY_M = 1.4, MARKET_SOUND_M = 24, CAR_SOUND_M = 9, CAR_QUIET_SEC = 5, RENT_VOICE_DELAY_MS = 1600;
 import { applyTactic, closeDeal, dealTotal, dealUnit, isLocked, lockKey, openHaggle, thoughts, tickPatience, modeFor, PERSONALITY, TACTICS, type HaggleSession, type Tactic } from "../economy/haggle";
 import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
 import {
   EXPLORER_ACCOUNT, EXPLORER_TX, balances, buyPosted, sellPosted, connectGuest, haggleDeal, marketTick, merchantAccount, playerId, playerLabel, receipts as chainReceipts,
-  settleDay, claimDividends, lastMarketTurn, askMerchant, pickOrchard, marketDay, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
+  settleDay, claimDividends, lastMarketTurn, askMerchant, pickOrchard, marketDay, isOffline, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
 } from "../near/chain";
 
 const GAME_MIN_PER_SEC = 2.4; // 09:00 -> 21:00 in five real minutes
@@ -50,8 +52,8 @@ const refusal = (msg = "", side: "buy" | "sell" = "buy"): string =>
     : /won't go below|won't pay more/i.test(msg) ? `They won't take that price (${msg}).`
     : /slow down|429/i.test(msg) ? "Too many trades at once. Wait a moment."
     : /expired/i.test(msg) ? "The handshake took too long. Try again."
-    : /unreachable|offline|could not sign/i.test(msg) ? "Couldn't reach NEAR. Check your connection and try again."
-    : `NEAR refused the trade${msg ? `: ${msg}` : "."}`;
+    : /unreachable|offline|could not sign/i.test(msg) ? "Couldn't reach the market. Check your connection and try again."
+    : `The trade didn't go through${msg ? `: ${msg}` : "."}`;
 const MAX_QTY = 10;
 
 const TACTIC_LABEL: Record<"buy" | "sell", Record<Tactic, [string, string]>> = {
@@ -121,7 +123,7 @@ export interface Play {
   enterWorld(): void;
   signIn(): Promise<void>;
   signOut(): Promise<void>;
-  account(): { id: string | null; label: string | null; canSignIn: boolean };
+  account(): { id: string | null; label: string | null; canSignIn: boolean; offline: boolean };
 }
 
 /** Pema's first conversation: the opening of the first mission. */
@@ -327,7 +329,7 @@ export async function createPlay(game: Game): Promise<Play> {
     state.receipts.push(r);
     inFlight++;
     ledgerEpoch++;
-    nearNote((n) => n.append(document.createTextNode("Processing on NEAR…")));
+    nearNote((n) => n.append(document.createTextNode("Saving the trade…")));
     void tx.then((o) => {
       inFlight--;
       ledgerEpoch++;
@@ -338,13 +340,10 @@ export async function createPlay(game: Game): Promise<Play> {
         nearNote((n) => n.append(el("i", "", "Not saved · nothing was charged")), true);
       } else if (o.status === "unknown") {
         refused(null);
-        nearNote((n) => n.append(el("i", "", "Unconfirmed · wallet re-read from NEAR")), true);
+        nearNote((n) => n.append(el("i", "", "Not confirmed yet · your purse was re-checked")), true);
       } else if (o.status === "onchain") {
         nearNote((n) => {
-          n.append(el("i", "", "✓ "), document.createTextNode("Saved on NEAR · "));
-          const a = el("a", "", "view");
-          a.href = `${EXPLORER_TX}${o.txHash}`; a.target = "_blank"; a.rel = "noopener";
-          n.append(a);
+          n.append(el("i", "", "✓ "), document.createTextNode("Saved · see N for the record")); // the transaction link lives on the proof screen
         });
       }
       const id = playerId();
@@ -355,7 +354,7 @@ export async function createPlay(game: Game): Promise<Play> {
   };
   /** A refusal lands on the merchant's panel if it is still open, else as a toast. null: no final answer came. */
   const refusedAt = (id: MerchantId, side: "buy" | "sell" = "buy") => (message: string | null): void => {
-    const why = message === null ? "NEAR didn't confirm in time. Your wallet was re-read from the chain." : refusal(message, side);
+    const why = message === null ? "The market didn't confirm in time. Your purse was re-checked." : refusal(message, side);
     if (mode.kind === "trade" && mode.id === id) { mode = { ...mode, h: null, say: why, tone: "bad", done: RESULT_HOLD }; renderTrade(); }
     else hud.toast(why);
   };
@@ -721,7 +720,7 @@ export async function createPlay(game: Game): Promise<Play> {
     if (!preview.ok) { mode = { ...mode, h: null, say: preview.message, tone: "bad", done: RESULT_HOLD }; renderTrade(); return; }
     const unit = dealUnit(h), total = preview.total; // whole coins per unit: exactly what the contract settles
     const name = PERSONALITY[h.merchant].name, npc = mode.npc;
-    mode = { ...mode, h: null, say: `Shaking on it: ${total} c. Recording the deal on NEAR…`, tone: "", done: AWAITING };
+    mode = { ...mode, h: null, say: `Shaking on it: ${total} c. Recording the deal…`, tone: "", done: AWAITING };
     renderTrade();
     record("trade", `${h.mode === "buy" ? "Bought" : "Sold"} ${goodName(h.good, h.qty)} ${h.mode === "buy" ? "from" : "to"} ${name} for ${total} c`,
       haggleDeal(h.merchant, h.mode, h.good, h.qty, unit), () => applyDeal(h, npc), refusedAt(h.merchant, h.mode));
@@ -915,7 +914,7 @@ export async function createPlay(game: Game): Promise<Play> {
       card.append(el("h2", "", "Your account on NEAR"), el("div", "sub", id ? "Read live from the market contract on NEAR testnet." : "Offline: this session is not connected to NEAR."));
     });
     if (id) {
-      const [bal, rc, turn] = await Promise.all([balances(id).catch(() => ({})), chainReceipts(id).catch(() => []), lastMarketTurn()]);
+      const [bal, turn] = await Promise.all([balances(id).catch(() => ({})), lastMarketTurn()]);
       const sec = el("section");
       const t = el("table");
       for (const [token, amount] of Object.entries(bal)) {
@@ -931,15 +930,106 @@ export async function createPlay(game: Game): Promise<Play> {
         sec.append(el("p", "", `Last market turn: ${mins < 1 ? "under a minute" : `${mins} min`} ago, market day ${turn.day} (${turn.txs} transactions${turn.failed ? `, ${turn.failed} refused` : ""}).`));
       }
       hud.card.append(sec);
-      if (rc.length) {
-        const d = el("details"); d.append(el("summary", "", `Last ${Math.min(8, rc.length)} entries in the contract`));
-        const ul = el("ul");
-        for (const r of [...rc].reverse().slice(0, 8)) ul.append(el("li", "", `${r.kind} ${r.qty} ${r.token_id}${Number(r.price) ? ` at ${r.price} c` : ""}, with ${r.counterparty.split(".")[0]}`));
-        d.append(ul); hud.card.append(d);
-      }
+
+      await moneyTrail(id);
     }
+    yourMoves();
     footer(hud.card, "Back to the city", closeOverlay);
   };
+
+  // ---------------------------------------------------------------- money trail ----
+  /** Who's who on the trail: merchants and residents by name, this browser's account as "you". */
+  const whoIs = (acct: string, me: string | null): string => {
+    if (acct === me) return "You";
+    const short = acct.split(".")[0];
+    const r = RESIDENTS.find((x) => x.id === short);
+    if (r) return `${r.name} (${r.job})`;
+    return state.merchants[short as MerchantId]?.name ?? (acct.endsWith(".testnet") && short.startsWith("g") ? "another player" : short);
+  };
+  /** Payments recorded by the market contract (read-only, just now): every sale is someone paying someone, in the
+   *  order NEAR recorded them. Coins are interchangeable, so this is a trail of payments, not of one coin. */
+  const moneyTrail = async (me: string): Promise<void> => {
+    const people = [me, ...TRADERS.map((m) => merchantAccount(m)), ...RESIDENTS.map((r) => merchantAccount(r.id))];
+    const [lists, tills] = await Promise.all([
+      Promise.all(people.map((a) => chainReceipts(a).then((l) => l.map((x) => ({ ...x, owner: a }))).catch(() => []))),
+      Promise.all(TRADERS.map((m) => balances(merchantAccount(m)).catch(() => null))),
+    ]);
+    const seen = new Set<string>();
+    const sales = lists.flat().filter((x) => x.kind === "sold").filter((x) => {
+      const k = `${x.block_height}|${x.owner}|${x.counterparty}|${x.token_id}|${x.qty}`;
+      return seen.has(k) ? false : (seen.add(k), true);
+    }).sort((a, b) => b.block_height - a.block_height).slice(0, TRAIL_ROWS);
+    const sec = el("section");
+    sec.append(el("h4", "", "Money trail · verified on NEAR"));
+    sec.append(el("p", "tp-note", "Who paid whom, read from the market contract just now, newest first. Coins are interchangeable, so this follows payments, not one coin."));
+    if (!sales.length) sec.append(el("p", "", "No sales recorded yet."));
+    const ul = el("ul");
+    for (const x of sales) {
+      const payer = whoIs(x.counterparty, me), payee = whoIs(x.owner, me), total = Number(x.qty) * Number(x.price);
+      const li = el("li");
+      li.append(document.createTextNode(`${payer} paid ${payee} ${total} c for ${x.qty} ${x.token_id}${Number(x.qty) === 1 ? "" : "s"} `), el("span", "tp-note", `(block ${x.block_height}) `));
+      const show = button("Show", "tp-why", () => { closeOverlay(); drawTrail(x.counterparty, x.owner, me); });
+      li.append(show);
+      ul.append(li);
+    }
+    sec.append(ul);
+    const t = el("p");
+    t.textContent = `Tills on NEAR: ${TRADERS.map((m, i) => `${state.merchants[m].name.split(" ").pop()} ${tills[i]?.coin ?? "?"} c`).join(" · ")}`;
+    sec.append(t);
+    const links = el("p", "tp-note"); links.append(document.createTextNode("Check any account: "));
+    const accounts: [string, string][] = [
+      [`You (${me})`, me],
+      ...TRADERS.map((m): [string, string] => [state.merchants[m].name.split(" ").pop() ?? m, merchantAccount(m)]),
+      ...RESIDENTS.map((r): [string, string] => [`${r.name} the ${r.job}`, merchantAccount(r.id)]),
+    ];
+    accounts.forEach(([label, acct], i) => { const a = el("a", "", label); a.href = `${EXPLORER_ACCOUNT}${acct}`; a.target = "_blank"; a.rel = "noopener"; links.append(a, document.createTextNode(i < accounts.length - 1 ? " · " : "")); });
+    sec.append(links);
+    // honest about autonomy: say whether the city has been trading on its own (a recent turn nobody here triggered)
+    sec.append(el("p", "tp-note", "Merchants and residents act in market turns. A turn runs while someone is playing; the 5-minute background schedule is not switched on yet."));
+    hud.card.append(sec);
+  };
+  /** This session's own moves, each saying plainly whether NEAR has it. */
+  const yourMoves = (): void => {
+    const rows = [...state.receipts].reverse().slice(0, 6);
+    if (!rows.length) return;
+    const LABEL: Record<Receipt["status"], string> = { onchain: "Verified on NEAR", pending: "Waiting for NEAR", unconfirmed: "Not confirmed yet: re-reading NEAR", failed: "Refused by NEAR, nothing moved", local: "Offline only, not on NEAR" };
+    const sec = el("section"); sec.append(el("h4", "", "Your recent moves"));
+    const ul = el("ul");
+    for (const r of rows) {
+      const li = el("li"); li.append(document.createTextNode(`${r.summary} · ${r.message === "story event" ? "Story event, not a trade" : LABEL[r.status]} `));
+      if (r.txHash) { const a = el("a", "", "view transaction"); a.href = `${EXPLORER_TX}${r.txHash}`; a.target = "_blank"; a.rel = "noopener"; li.append(a); }
+      ul.append(li);
+    }
+    sec.append(ul); hud.card.append(sec);
+  };
+  /** A gold arc in the city from the payer to the payee (where both stand), fading after a few seconds. */
+  let trail: THREE.Mesh | null = null, trailTimer = 0;
+  const placeOf = (acct: string, me: string | null): THREE.Vector3 | null => {
+    if (acct === me) return player.root.position.clone();
+    const short = acct.split(".")[0];
+    const mer = market.npcs.find((n) => n.id === short);
+    if (mer) return mer.root.position.clone();
+    const ri = RESIDENTS.findIndex((r) => r.id === short);
+    const folk = (window as unknown as { __npcs?: { fixed: boolean; x: number; y: number; z: number }[] }).__npcs?.filter((e) => !e.fixed)[ri];
+    return ri >= 0 && folk ? new THREE.Vector3(folk.x, folk.y, folk.z) : null;
+  };
+  const drawTrail = (payer: string, payee: string, me: string | null): void => {
+    const a = placeOf(payer, me), b = placeOf(payee, me);
+    if (trail) { trail.removeFromParent(); trail.geometry.dispose(); trail = null; }
+    if (!a || !b) { hud.toast(`${whoIs(payer, me)} isn't in town right now, so there's nothing to point at.`); return; }
+    a.y += 1.6; b.y += 1.6;
+    const mid = a.clone().lerp(b, 0.5); mid.y += Math.max(2, a.distanceTo(b) * 0.3);
+    const curve = new THREE.QuadraticBezierCurve3(a, mid, b);
+    trail = new THREE.Mesh(new THREE.TubeGeometry(curve, 48, 0.06, 6), new THREE.MeshBasicMaterial({ color: "#ffd166", toneMapped: false }));
+    game.look.scene.add(trail);
+    trailTimer = TRAIL_SEC;
+    hud.toast(`${whoIs(payer, me)} → ${whoIs(payee, me)}`, true);
+  };
+  game.onUpdate.push((dt) => {
+    if (!trail) return;
+    trailTimer -= dt;
+    if (trailTimer <= 0) { trail.removeFromParent(); trail.geometry.dispose(); trail = null; }
+  });
 
   /** Evening and weekly report: what happened in the city, what you did, what you earned. Details are optional. */
   const showReport = (title: string, from: Snapshot, week: boolean): void => openCard((card) => {
@@ -977,7 +1067,7 @@ export async function createPlay(game: Game): Promise<Play> {
     purse.append(el("div", `big ${d >= 0 ? "pos" : "neg"}`, `${d >= 0 ? "+" : ""}${d} c`));
     purse.append(el("p", "", `From ${from.coins} c to ${state.player.coins} c${div > 0 ? `, including ${div} c in dividends from your shares` : ""}.`));
     // the week ran on this device; the wallet is the chain's, which only pays for real market days
-    const real = week && playerId() ? el("p", "why", "A forecast: this week ran on your device from today's real market. Checking your NEAR wallet…") : null;
+    const real = week && playerId() ? el("p", "why", "A forecast: this week ran on your device from today's real market. Checking your real purse…") : null;
     if (real) purse.append(real);
     card.append(purse);
     // details
@@ -992,16 +1082,15 @@ export async function createPlay(game: Game): Promise<Play> {
     const events = state.log.filter((e) => e.minute > from.minute && e.kind !== "player").slice(-8);
     if (events.length) { const ev = el("details"); ev.append(el("summary", "", "What happened, hour by hour")); const ul = el("ul"); for (const e of events) ul.append(el("li", "", `${clockOf(e.minute)} · ${e.text}`)); ev.append(ul); card.append(ev); }
     if (week && playerId()) {
-      const near = el("details"); near.append(el("summary", "", "Dividends on NEAR"));
-      const line = el("p", "why", "Settling today's dividends on NEAR…"); near.append(line); card.append(near);
+      const near = el("details"); near.append(el("summary", "", "Dividends"));
+      const line = el("p", "why", "Paying out today's dividends…"); near.append(line); card.append(near);
       void settleDay().then(async (r) => {
         if (playerId()) await claimDividends(playerId()!);
         const got = (await chainReceipts(playerId()!).catch(() => [])).filter((x) => x.kind === "dividend").reduce((n, x) => n + Number(x.qty), 0);
-        line.textContent = r.status === "onchain" ? `Dividends are paid on NEAR sale by sale, and today's record is closed for all four stalls. Paid to your account so far: ${got} c. ` : `NEAR settlement: ${String(r.message ?? "not available right now")}`;
-        if (r.status === "onchain" && typeof r.txHash === "string") { const a = el("a", "", "view"); a.href = `${EXPLORER_TX}${r.txHash}`; a.target = "_blank"; a.rel = "noopener"; line.append(a); }
+        line.textContent = r.status === "onchain" ? `Dividends are paid sale by sale, and today's books are closed for all four stalls. Paid to you so far: ${got} c. ` : `Dividends: ${String(r.message ?? "not available right now")}`;
         const id = playerId();
         if (id) await syncPlayer(id);
-        if (real) real.textContent = `A forecast: this week ran on your device from today's real market. Your NEAR wallet holds ${state.player.coins} c right now; real dividends land there with every sale the stall makes (claimed each market turn).`;
+        if (real) real.textContent = `A forecast: this week ran on your device from today's real market. Your purse holds ${state.player.coins} c right now; real dividends land there with every sale the stall makes (claimed each market turn).`;
       });
     }
     footer(card, week ? "Back to the city" : "Next morning", () => closeReport(week, from));
@@ -1038,7 +1127,7 @@ export async function createPlay(game: Game): Promise<Play> {
     card.append(el("h2", "", "Welcome to NEAR City"));
     const s = el("section");
     s.append(el("p", "", `You're ${typeof state.flags.name === "string" ? state.flags.name : "Kavi"}, new in town with ${STARTER_COINS} coins in your pocket.`));
-    s.append(el("p", "", "The market square ahead runs on trade. Four merchants buy and sell all day, and each keeps their own account on NEAR. Prices move with every crate."));
+    s.append(el("p", "", "The market square ahead runs on trade. Four merchants buy and sell all day, each with their own till. Prices move with every crate."));
     s.append(el("p", "", "Auntie Pema's fruit stall is in trouble. Go and see her."));
     card.append(s);
     footer(card, "Let's go", () => { state.flags.welcomed = true; closeOverlay(); save(); });
@@ -1263,7 +1352,7 @@ export async function createPlay(game: Game): Promise<Play> {
       tickIn = TICK_EVERY_SEC;
       const me = playerId()!;
       void marketTick().then((t) => { hungry(t); return syncMerchants(); }).then(syncResidents).then(() => claimDividends(me)).then((r) => {
-        if (Number(r.coins) > 0 && r.status === "onchain") { hud.toast(`+${String(r.coins)} c in dividends, paid on NEAR`, true); void audio.sfx("coin_big"); }
+        if (Number(r.coins) > 0 && r.status === "onchain") { hud.toast(`+${String(r.coins)} c in dividends from your stall shares`, true); void audio.sfx("coin_big"); }
         return syncPlayer(me); // every turn re-reads the wallet, so the purse can never drift from the chain for long
       });
     }
@@ -1306,7 +1395,7 @@ export async function createPlay(game: Game): Promise<Play> {
     if (!r.ok) { hud.toast(r.message); return; }
     const m = state.merchants[id];
     const cost = shareCost(id, n);
-    if (mode.kind === "trade") { mode = { ...mode, say: `Buying ${n} ${n === 1 ? "share" : "shares"} for ${cost} c. Recording it on NEAR…`, tone: "", done: AWAITING }; renderTrade(); }
+    if (mode.kind === "trade") { mode = { ...mode, say: `Buying ${n} ${n === 1 ? "share" : "shares"} for ${cost} c. Recording it…`, tone: "", done: AWAITING }; renderTrade(); }
     record("invest", `Bought ${n} ${n === 1 ? "share" : "shares"} of ${m.shop} for ${cost} c`, buyPosted(id, `share:${id}`, n, cost), () => applyInvest(id, n), refusedAt(id));
   };
   /** Sells shares back to the stall: its reserve pays exactly the backing. Coins and shares move once NEAR confirms. */
@@ -1314,7 +1403,7 @@ export async function createPlay(game: Game): Promise<Play> {
     if (mode.kind === "trade" && mode.done > 0) return;
     if (n <= 0 || n > sharesToSell(id)) { hud.toast("You don't own that many shares."); return; }
     const m = state.merchants[id], pay = shareRefund(id, n);
-    if (mode.kind === "trade") { mode = { ...mode, say: `Selling ${n} shares back for ${pay} c. Recording it on NEAR…`, tone: "", done: AWAITING }; renderTrade(); }
+    if (mode.kind === "trade") { mode = { ...mode, say: `Selling ${n} shares back for ${pay} c. Recording it…`, tone: "", done: AWAITING }; renderTrade(); }
     record("invest", `Sold ${n} shares of ${m.shop} back for ${pay} c`, sellPosted(id, `share:${id}`, n, pay), () => {
       sellShares(state, id, n);
       if (mode.kind === "trade") { mode = { ...mode, say: `Done: ${pay} c for ${n} shares. You still own ${state.player.shares[id]}.`, tone: "good", done: RESULT_HOLD }; renderTrade(); }
@@ -1407,7 +1496,7 @@ export async function createPlay(game: Game): Promise<Play> {
     hud.acct.innerHTML = "";
     const who = el("div", "who");
     const name = typeof state.flags.name === "string" ? state.flags.name : null; // display only, never an account
-    who.append(el("b", "", !id ? name ?? "Offline" : label || name || "Guest"), el("span", "", id ? (label ? " · saved on NEAR" : " · saved in this browser") : " · trades stay here"));
+    who.append(el("b", "", !id ? name ?? "Offline" : label || name || "Guest"), el("span", "", id ? (label ? " · saved to your account" : " · saved in this browser") : " · trades stay here"));
     hud.acct.append(who);
     if (!id || (!label && !socialAvailable())) return; // sign-in appears once Google/email login is configured
     if (label) return; // signed in: sign-out is in the menu (Esc), behind a confirmation
@@ -1540,7 +1629,7 @@ export async function createPlay(game: Game): Promise<Play> {
     },
     signIn: () => signIn(),
     signOut: () => signOut(),
-    account: () => ({ id: playerId(), label: playerLabel(), canSignIn: socialAvailable() }),
+    account: () => ({ id: playerId(), label: playerLabel(), canSignIn: socialAvailable(), offline: isOffline() }),
     interact() {
       if (mode.kind !== "walk" || ff) return;
       if (!market.nearest(player.root.position) && atOrchard()) { void pickAtOrchard(); return; }

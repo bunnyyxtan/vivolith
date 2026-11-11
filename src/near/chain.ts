@@ -62,6 +62,8 @@ async function post(route: string, body: unknown): Promise<Record<string, unknow
 export async function chainStatus(): Promise<ChainStatus> {
   if (status) return status;
   try {
+    // ?offline: play with the local economy only (playtests and demos without touching NEAR); the HUD says "Offline"
+    if (new URLSearchParams(location.search).has("offline")) throw new Error("offline by request");
     const r = await fetch("/api/near/status");
     if (!r.ok) throw new Error(String(r.status));
     status = (await r.json()) as ChainStatus;
@@ -90,6 +92,9 @@ export async function lastMarketTurn(): Promise<LastTick | null> {
     return null;
   }
 }
+
+/** True once we know NEAR is not available (not configured, unreachable or ?offline): the game runs locally. */
+export const isOffline = (): boolean => status !== null && !status.configured;
 
 /** The current on-chain market day, numbered exactly as the relayer does (floor(now / marketDayMs)); null offline. */
 export const marketDay = (): number | null => (status?.marketDayMs ? Math.floor(Date.now() / status.marketDayMs) : null);

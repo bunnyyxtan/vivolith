@@ -36,8 +36,8 @@ Controls: WASD move, Shift run, F talk or trade, B bag, J goals, H help, N NEAR 
 
 - One market day on chain is 10 real minutes; rent is due every 2 market days. A market turn (`POST /api/near/tick`)
   reprices merchants, lets them trade with each other, and records street shoppers, harbor freight and the tea
-  kitchen. Players' browsers trigger turns while they play, and `.github/workflows/tick.yml` runs one every 5 minutes
-  so the city keeps trading when nobody plays. Only one turn runs at a time (an atomic lock held 75 s), and rent and
+  kitchen. Players' browsers trigger turns while they play, and `.github/workflows/tick.yml` is ready to run one every 5 minutes
+  so the city keeps trading when nobody plays (not switched on yet). Only one turn runs at a time (an atomic lock held 75 s), and rent and
   settlement are once per market day in the contract, so missed, late or repeated triggers never double anything.
   The proof screen (**N**) shows when the last turn ran.
 - Players sign moves with a function-call key limited to `buy`, `sell` and `deal`; the relayer pays gas (NEP-366

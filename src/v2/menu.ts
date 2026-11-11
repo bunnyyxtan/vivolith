@@ -140,8 +140,8 @@ export function createMenu(game: Game, play: Play): { open(): void } {
   let nameDraft = "", nameErr = "";
   const where = (): string => {
     const a = play.account();
-    const who = cap(a.label ? `signed in as ${a.label}` : savedName() ? `playing as ${savedName()}` : a.id ? "playing as guest" : "connecting to NEAR");
-    if (!play.restored && !started) return `Saltlight Market, a NEAR city where every merchant has a wallet. ${who}.`;
+    const who = cap(a.label ? `signed in as ${a.label}` : savedName() ? `playing as ${savedName()}` : a.id ? "playing as guest" : a.offline ? "playing offline" : "connecting");
+    if (!play.restored && !started) return `Saltlight Market, where every merchant keeps their own till. ${who}.`;
     const s = play.state;
     const shares = MERCHANT_IDS.filter((id) => s.player.shares[id] > 0).map((id) => `${s.player.shares[id]}/${shareSupply(s, id)} of ${s.merchants[id].shop}`);
     return `${clockOf(s.minute).replace(/^(Day \d+) /, "$1, ")}. ${s.player.coins} ${s.player.coins === 1 ? "coin" : "coins"}${shares.length ? `, ${shares.join(", ")}` : ""}. ${who}.`;
@@ -170,7 +170,7 @@ export function createMenu(game: Game, play: Play): { open(): void } {
   // Google needs the guest account first (its progress moves into the Google account), so it waits for NEAR.
   const google = (): Item => {
     const ready = Boolean(play.account().id);
-    return { label: "Continue with Google", note: ready ? "Keep your market on any device" : "Connecting to NEAR…", run: () => { if (ready) void play.signIn().then(render); } };
+    return { label: "Continue with Google", note: ready ? "Keep your market on any device" : "Connecting…", run: () => { if (ready) void play.signIn().then(render); } };
   };
 
   const build = (): void => {
@@ -224,7 +224,7 @@ export function createMenu(game: Game, play: Play): { open(): void } {
     const caret = prev?.selectionStart ?? nameDraft.length;
     build();
     if (items.map((it) => it.label).join("|") !== before) sel = 0; // the list changed: never leave a stale selection
-    root.innerHTML = `<div class="col"><h1>VIVOLITH</h1><div class="where"></div><ul></ul>${sheetHtml()}</div><div class="foot">NEAR testnet</div>`;
+    root.innerHTML = `<div class="col"><h1>VIVOLITH</h1><div class="where"></div><ul></ul>${sheetHtml()}</div><div class="foot">Built on NEAR</div>`;
     root.querySelector(".where")!.textContent = where();
     const ul = root.querySelector("ul")!;
     items.forEach((it, i) => {
