@@ -11423,10 +11423,65 @@ function keyPairFromSeed(seed) {
 	const pub = Buffer.from(createPublicKey(priv).export({ format: "jwk" }).x, "base64url");
 	return KeyPair.fromString(`ed25519:${baseEncode(Buffer.concat([seed, pub]))}`);
 }
+/** A resident's buy/sell-only key (scripts/near/resident-check.ts creates the account with it). */
+function residentKey(id, secret) {
+	if (secret.length < 32) throw new Error("NEAR_MERCHANT_SECRET too short");
+	return keyPairFromSeed(createHash("sha256").update(`vivolith-resident:${id}:${secret}`).digest());
+}
 /** A merchant's function-call key, derived from NEAR_MERCHANT_SECRET so only one secret lives in env. */
 function merchantKey(id, secret) {
 	if (secret.length < 32) throw new Error("NEAR_MERCHANT_SECRET too short");
 	return keyPairFromSeed(createHash("sha256").update(`vivolith-merchant:${id}:${secret}`).digest());
+}
+// src/economy/residents.ts
+const RESIDENTS = [{
+	id: "picker",
+	name: "Lin",
+	job: "orchard picker",
+	good: "mango",
+	perDay: 6,
+	reason: "orchard picking",
+	food: "lassi"
+}, {
+	id: "porter",
+	name: "Dev",
+	job: "harbor porter",
+	good: "lemon",
+	perDay: 4,
+	reason: "harbor unloading",
+	food: "lassi"
+}];
+/** What a resident does today, from the posted orders and the coin they will hold after selling. */
+function planResident(r, offers, coin, holding) {
+	const bid = offers.filter((o) => o.side === "bid" && o.token_id === r.good && Number(o.qty) > 0).sort((a, b) => Number(b.price) - Number(a.price))[0];
+	const qty = bid ? Math.min(holding, Number(bid.qty)) : 0;
+	const sell = bid && qty > 0 ? {
+		buyer: bid.account_id,
+		merchant: bid.merchant,
+		qty,
+		price: Number(bid.price)
+	} : null;
+	const purse = coin + (sell ? sell.qty * sell.price : 0);
+	const ask = offers.filter((o) => o.side === "ask" && o.token_id === r.food && Number(o.qty) > 0).sort((a, b) => Number(a.price) - Number(b.price))[0];
+	if (!ask) return {
+		sell,
+		eat: null,
+		hungry: null
+	};
+	const price = Number(ask.price);
+	return purse >= price ? {
+		sell,
+		eat: {
+			seller: ask.account_id,
+			merchant: ask.merchant,
+			price
+		},
+		hungry: null
+	} : {
+		sell,
+		eat: null,
+		hungry: price
+	};
 }
 // src/economy/state.ts
 const MERCHANT_IDS = [
@@ -12588,6 +12643,93 @@ async function claimTick(cfg) {
 	tickHeldUntil = now + TICK_GAP_SEC * 1e3;
 	return true;
 }
+/** True the first time `key` is claimed (Redis SET NX, else this process's memory): a once-per-day guard that,
+*  unlike a fixed window, cannot pass twice when a day straddles a window boundary. */
+const onceMemory = /* @__PURE__ */ new Set();
+async function claimOnce(cfg, key, ttlSec) {
+	if (cfg.redisUrl && cfg.redisToken) {
+		const r = await fetch(cfg.redisUrl, {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${cfg.redisToken}`,
+				"content-type": "application/json"
+			},
+			body: JSON.stringify([
+				"SET",
+				`vivolith:once:${key}`,
+				"1",
+				"NX",
+				"EX",
+				String(ttlSec)
+			])
+		});
+		if (!r.ok) throw new HttpError(503, "market clock unavailable");
+		return (await r.json()).result === "OK";
+	}
+	if (onceMemory.has(key)) return false;
+	onceMemory.add(key);
+	return true;
+}
+/** Residents' day (see src/economy/residents.ts). Returns what they ate per `merchant:good`, so tourists buy less. */
+async function residentTurn(cfg, provider, relayer, secret, day, log, txs) {
+	const ate = {};
+	for (const r of RESIDENTS) {
+		const accountId = `${r.id}.${cfg.relayerId}`;
+		if (!await view(provider, cfg.contractId, "is_registered", { account_id: accountId }).catch(() => false)) continue;
+		if (!await claimOnce(cfg, `resident:${r.id}:${day}`, Math.ceil(600) * 2)) continue;
+		const me = new Account(accountId, provider, new KeyPairSigner(residentKey(r.id, secret)));
+		const call = async (who, method, args) => {
+			const res = outcome(await who.signAndSendTransaction({
+				receiverId: cfg.contractId,
+				actions: [actions.functionCall(method, args, TICK_GAS, 0n)],
+				throwOnFailure: false
+			}));
+			txs.push(res.txHash);
+			return res;
+		};
+		const work = await call(relayer, "operator_mint", {
+			account_id: accountId,
+			token_id: r.good,
+			amount: String(r.perDay),
+			reason: r.reason
+		});
+		if (!work.ok) {
+			log.push(`${r.id} work FAILED: ${work.error}`);
+			continue;
+		}
+		const held = Object.fromEntries((await view(provider, cfg.contractId, "get_balances", { account_id: accountId })).map(([t, v]) => [t, Number(v)]));
+		const plan = planResident(r, await view(provider, cfg.contractId, "get_offers", {}), held.coin ?? 0, held[r.good] ?? 0);
+		if (plan.sell) {
+			const s = await call(me, "sell", {
+				buyer: plan.sell.buyer,
+				token_id: r.good,
+				qty: String(plan.sell.qty),
+				min_price: String(plan.sell.price)
+			});
+			log.push(`resident ${r.id} sold ${plan.sell.qty} ${r.good} to ${plan.sell.merchant} at ${plan.sell.price} c${s.ok ? "" : ` FAILED: ${s.error}`}`);
+			if (!s.ok) continue;
+		}
+		if (plan.eat) {
+			const b = await call(me, "buy", {
+				seller: plan.eat.seller,
+				token_id: r.food,
+				qty: "1",
+				max_price: String(plan.eat.price)
+			});
+			if (b.ok) {
+				const e = await call(relayer, "operator_burn", {
+					account_id: accountId,
+					token_id: r.food,
+					amount: "1",
+					reason: "eaten"
+				});
+				ate[`${plan.eat.merchant}:${r.food}`] = (ate[`${plan.eat.merchant}:${r.food}`] ?? 0) + 1;
+				log.push(`resident ${r.id} bought 1 ${r.food} from ${plan.eat.merchant} at ${plan.eat.price} c and ate it${e.ok ? "" : ` (eat FAILED: ${e.error})`}`);
+			} else log.push(`resident ${r.id} buy ${r.food} FAILED: ${b.error}`);
+		} else if (plan.hungry !== null) log.push(`resident ${r.id} could not afford ${r.food} at ${plan.hungry} c`);
+	}
+	return ate;
+}
 async function tick(cfg, env) {
 	if (!await claimTick(cfg)) return json(200, {
 		status: "skipped",
@@ -12714,19 +12856,20 @@ async function tick(cfg, env) {
 		txs.push(r.txHash);
 		log.push(`${t.buyer} bought ${t.qty} ${t.good} from ${t.seller} at ${t.price} c (${t.reason})${r.ok ? "" : ` FAILED: ${r.error}`}`);
 	}
+	const ate = await residentTurn(cfg, provider, relayer, secret, day, log, txs);
 	const op = [];
 	for (const id of MERCHANTS) {
 		const m = st.merchants[id];
 		if (m.status !== "open") continue;
 		for (const good of m.sells) {
-			const units = Math.min(m.stock[good], Math.floor(shopperWant(st, id, good) * TICK_HOURS));
+			const units = Math.max(0, Math.min(m.stock[good], Math.floor(shopperWant(st, id, good) * TICK_HOURS)) - (ate[`${id}:${good}`] ?? 0));
 			if (units > 0) op.push(actions.functionCall("street_sale", {
 				merchant: id,
 				token_id: good,
 				qty: String(units),
 				unit_price: String(quote(st, id, good, false).price)
 			}, TICK_GAS, 0n));
-			if (units > 0) log.push(`street shoppers bought ${units} ${good} from ${id}`);
+			if (units > 0) log.push(`tourists bought ${units} ${good} from ${id}`);
 		}
 	}
 	const tomas = st.merchants.tomas;

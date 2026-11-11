@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { initialEconomy } from "./state.ts";
 import { accrueSale, advance, challengeStandingContract, invest, payReleaseFee, pemaBuysFromTomas, recordRestock, reopenGap, sellShares, shareSupply, teahouseForwardBuy, tryReopen } from "./sim.ts";
 import { bidFor, quote } from "./pricing.ts";
+import { RESIDENTS, planResident, type Offer } from "./residents.ts";
 
 // 0. A closed stall still bids for stock, and reopens the moment deliveries cover the gap (not before).
 const shut = initialEconomy();
@@ -24,6 +25,20 @@ assert.equal(reopenGap(shut, "pema"), gap - 3);
 shut.merchants.pema.stock.mango = gap - 3; recordRestock(shut, "pema", gap - 3);
 assert.equal(tryReopen(shut, "pema"), true);
 assert.equal(shut.flags["reopenNeed.pema"], undefined);
+
+// 0b. Residents (WP6): sell the day's work into the best bid, then eat only what the purse covers.
+{
+  const picker = RESIDENTS[0];
+  const o = (merchant: string, side: string, token_id: string, qty: number, price: number): Offer => ({ merchant, account_id: `${merchant}.x`, token_id, side, qty: String(qty), price: String(price) });
+  const book = [o("arin", "bid", "mango", 6, 6), o("pema", "bid", "mango", 6, 5), o("arin", "ask", "lassi", 8, 3)];
+  const p = planResident(picker, book, 0, 6);
+  assert.deepEqual(p.sell, { buyer: "arin.x", merchant: "arin", qty: 6, price: 6 }, "sells to the best bid");
+  assert.deepEqual(p.eat, { seller: "arin.x", merchant: "arin", price: 3 }, "eats from what it earned");
+  const broke = planResident(picker, [o("arin", "ask", "lassi", 8, 3)], 2, 0); // no buyer and 2 c: hungry
+  assert.equal(broke.sell, null); assert.equal(broke.eat, null); assert.equal(broke.hungry, 3);
+  const partial = planResident(picker, [o("arin", "bid", "mango", 2, 6)], 0, 6);
+  assert.equal(partial.sell?.qty, 2, "never sells more than the bid takes");
+}
 
 const hours = (h: number) => h * 60;
 

@@ -14,6 +14,12 @@ export function keyPairFromSeed(seed: Buffer): KeyPair {
   return KeyPair.fromString(`ed25519:${baseEncode(Buffer.concat([seed, pub]))}` as KeyPairString);
 }
 
+/** A resident's buy/sell-only key (scripts/near/resident-check.ts creates the account with it). */
+export function residentKey(id: string, secret: string): KeyPair {
+  if (secret.length < 32) throw new Error("NEAR_MERCHANT_SECRET too short");
+  return keyPairFromSeed(createHash("sha256").update(`vivolith-resident:${id}:${secret}`).digest());
+}
+
 /** A merchant's function-call key, derived from NEAR_MERCHANT_SECRET so only one secret lives in env. */
 export function merchantKey(id: MerchantId, secret: string): KeyPair {
   if (secret.length < 32) throw new Error("NEAR_MERCHANT_SECRET too short");

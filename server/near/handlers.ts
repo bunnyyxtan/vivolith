@@ -10,7 +10,8 @@ import os from "node:os";
 import path from "node:path";
 import { deserialize } from "borsh";
 import { Account, JsonRpcProvider, KeyPairSigner, PublicKey, SCHEMA, actions, nearToYocto, teraToGas, type KeyPairString } from "near-api-js";
-import { MERCHANTS, keyPairFromSeed, merchantKey, type MerchantId } from "./keys.ts";
+import { MERCHANTS, keyPairFromSeed, merchantKey, residentKey, type MerchantId } from "./keys.ts";
+import { RESIDENTS, planResident, type Offer } from "../../src/economy/residents.ts";
 import { bidFor, planMerchantTrades, quote } from "../../src/economy/pricing.ts";
 import { closingNeed, shopperWant } from "../../src/economy/sim.ts";
 import { initialEconomy, type EconomyState } from "../../src/economy/state.ts";
@@ -682,6 +683,54 @@ export async function claimTick(cfg: Config): Promise<boolean> {
   return true;
 }
 
+/** True the first time `key` is claimed (Redis SET NX, else this process's memory): a once-per-day guard that,
+ *  unlike a fixed window, cannot pass twice when a day straddles a window boundary. */
+const onceMemory = new Set<string>();
+async function claimOnce(cfg: Config, key: string, ttlSec: number): Promise<boolean> {
+  if (cfg.redisUrl && cfg.redisToken) {
+    const r = await fetch(cfg.redisUrl, { method: "POST", headers: { authorization: `Bearer ${cfg.redisToken}`, "content-type": "application/json" }, body: JSON.stringify(["SET", `vivolith:once:${key}`, "1", "NX", "EX", String(ttlSec)]) });
+    if (!r.ok) throw new HttpError(503, "market clock unavailable");
+    return ((await r.json()) as { result: string | null }).result === "OK";
+  }
+  if (onceMemory.has(key)) return false;
+  onceMemory.add(key);
+  return true;
+}
+
+/** Residents' day (see src/economy/residents.ts). Returns what they ate per `merchant:good`, so tourists buy less. */
+async function residentTurn(cfg: Config, provider: JsonRpcProvider, relayer: Account, secret: string, day: number, log: string[], txs: string[]): Promise<Record<string, number>> {
+  const ate: Record<string, number> = {};
+  for (const r of RESIDENTS) {
+    const accountId = `${r.id}.${cfg.relayerId}`;
+    if (!(await view<boolean>(provider, cfg.contractId, "is_registered", { account_id: accountId }).catch(() => false))) continue; // not created yet (resident-check.ts --run)
+    if (!(await claimOnce(cfg, `resident:${r.id}:${day}`, Math.ceil(MARKET_DAY_MS / 1000) * 2))) continue;
+    const me = new Account(accountId, provider, new KeyPairSigner(residentKey(r.id, secret)));
+    const call = async (who: Account, method: string, args: Record<string, unknown>): Promise<TxResult> => {
+      const res = outcome(await who.signAndSendTransaction({ receiverId: cfg.contractId, actions: [actions.functionCall(method, args, TICK_GAS, 0n)], throwOnFailure: false }));
+      txs.push(res.txHash);
+      return res;
+    };
+    const work = await call(relayer, "operator_mint", { account_id: accountId, token_id: r.good, amount: String(r.perDay), reason: r.reason });
+    if (!work.ok) { log.push(`${r.id} work FAILED: ${work.error}`); continue; }
+    const held = Object.fromEntries((await view<[string, string][]>(provider, cfg.contractId, "get_balances", { account_id: accountId })).map(([t, v]) => [t, Number(v)]));
+    const plan = planResident(r, await view<Offer[]>(provider, cfg.contractId, "get_offers", {}), held.coin ?? 0, held[r.good] ?? 0);
+    if (plan.sell) {
+      const s = await call(me, "sell", { buyer: plan.sell.buyer, token_id: r.good, qty: String(plan.sell.qty), min_price: String(plan.sell.price) });
+      log.push(`resident ${r.id} sold ${plan.sell.qty} ${r.good} to ${plan.sell.merchant} at ${plan.sell.price} c${s.ok ? "" : ` FAILED: ${s.error}`}`);
+      if (!s.ok) continue;
+    }
+    if (plan.eat) {
+      const b = await call(me, "buy", { seller: plan.eat.seller, token_id: r.food, qty: "1", max_price: String(plan.eat.price) });
+      if (b.ok) {
+        const e = await call(relayer, "operator_burn", { account_id: accountId, token_id: r.food, amount: "1", reason: "eaten" });
+        ate[`${plan.eat.merchant}:${r.food}`] = (ate[`${plan.eat.merchant}:${r.food}`] ?? 0) + 1;
+        log.push(`resident ${r.id} bought 1 ${r.food} from ${plan.eat.merchant} at ${plan.eat.price} c and ate it${e.ok ? "" : ` (eat FAILED: ${e.error})`}`);
+      } else log.push(`resident ${r.id} buy ${r.food} FAILED: ${b.error}`);
+    } else if (plan.hungry !== null) log.push(`resident ${r.id} could not afford ${r.food} at ${plan.hungry} c`);
+  }
+  return ate;
+}
+
 async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
   if (!(await claimTick(cfg))) return json(200, { status: "skipped", message: "the merchants moved less than a minute ago" });
   const secret = (env.NEAR_MERCHANT_SECRET ?? "").trim();
@@ -770,15 +819,20 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
     log.push(`${t.buyer} bought ${t.qty} ${t.good} from ${t.seller} at ${t.price} c (${t.reason})${r.ok ? "" : ` FAILED: ${r.error}`}`);
   }
 
-  // 3. Operator: street shoppers, the harbor contract, the tea kitchen.
+  // 2b. Residents (WP6): once a market day each, a day's piece work is sold into the best bid and one meal is bought
+  // from what they hold; the meal is eaten (burned). Same keys and contract calls WP0 proved on testnet.
+  const ate = await residentTurn(cfg, provider, relayer, secret, day, log, txs);
+
+  // 3. Operator: tourists (street shoppers), the harbor contract, the tea kitchen.
   const op: ReturnType<typeof actions.functionCall>[] = [];
   for (const id of MERCHANTS) {
     const m = st.merchants[id];
     if (m.status !== "open") continue; // shutters down: no shoppers
     for (const good of m.sells) {
-      const units = Math.min(m.stock[good], Math.floor(shopperWant(st, id, good) * TICK_HOURS));
+      // residents now buy part of the lassi the street used to: tourists take only the rest
+      const units = Math.max(0, Math.min(m.stock[good], Math.floor(shopperWant(st, id, good) * TICK_HOURS)) - (ate[`${id}:${good}`] ?? 0));
       if (units > 0) op.push(actions.functionCall("street_sale", { merchant: id, token_id: good, qty: String(units), unit_price: String(quote(st, id, good, false).price) }, TICK_GAS, 0n));
-      if (units > 0) log.push(`street shoppers bought ${units} ${good} from ${id}`);
+      if (units > 0) log.push(`tourists bought ${units} ${good} from ${id}`);
     }
   }
   // The harbor's standing contract: once a market day when Tomas runs below his normal stock, and on any turn he is

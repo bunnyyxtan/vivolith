@@ -11,6 +11,7 @@ import { calibrateSoles } from "./soles";
 import { advance, invest, MAX_PACKS, payReleaseFee, recordRestock, REOPEN_SHARE, reopenGap, sellShares, SHARE_PACK, shareCost, shareRefund, shareSupply, tryReopen, UPGRADE_AT } from "../economy/sim";
 import { bidFor, quote, lassiPrice, stallPull, type Quote } from "../economy/pricing";
 import { clockOf, dayOf, MERCHANT_IDS, MINUTES_PER_DAY, STARTER_COINS, type EconomyState, type Good, type MerchantId, type Receipt } from "../economy/state";
+import { RESIDENTS } from "../economy/residents";
 import { applyTactic, closeDeal, dealTotal, dealUnit, isLocked, lockKey, openHaggle, thoughts, tickPatience, modeFor, PERSONALITY, TACTICS, type HaggleSession, type Tactic } from "../economy/haggle";
 import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
@@ -1103,7 +1104,7 @@ export async function createPlay(game: Game): Promise<Play> {
     if (tickIn <= 0 && playerId()) {
       tickIn = TICK_EVERY_SEC;
       const me = playerId()!;
-      void marketTick().then(syncMerchants).then(() => claimDividends(me)).then((r) => {
+      void marketTick().then((t) => { hungry(t); return syncMerchants(); }).then(syncResidents).then(() => claimDividends(me)).then((r) => {
         if (Number(r.coins) > 0 && r.status === "onchain") hud.toast(`+${String(r.coins)} c in dividends, paid on NEAR`, true);
         return syncPlayer(me); // every turn re-reads the wallet, so the purse can never drift from the chain for long
       });
@@ -1211,6 +1212,32 @@ export async function createPlay(game: Game): Promise<Play> {
     }
     drawBoards();
     if (mode.kind === "trade") renderTrade();
+  };
+  /** Residents (src/economy/residents.ts) are acted out by the first townsfolk: a confirmed sale or meal on NEAR sends
+   *  them to that stall to say it. Only receipts newer than the first look count, so history is not replayed. */
+  const residentSeen: Record<string, number> = {};
+  const nameOf = (acct: string): string => state.merchants[acct.split(".")[0] as MerchantId]?.name ?? acct.split(".")[0];
+  const syncResidents = async (): Promise<void> => {
+    await Promise.all(RESIDENTS.map(async (r, who) => {
+      const rc = await chainReceipts(merchantAccount(r.id)).catch(() => null);
+      if (!rc) return;
+      const from = residentSeen[r.id];
+      residentSeen[r.id] = Math.max(from ?? 0, ...rc.map((x) => x.block_height));
+      if (from === undefined || ff) return;
+      for (const x of rc.filter((y) => y.block_height > from).sort((a, b) => a.block_height - b.block_height)) {
+        const mer = x.counterparty.split(".")[0], qty = Number(x.qty), price = Number(x.price);
+        if (x.kind === "sold") market.life.errand(who, mer, `${r.name}: ${qty} ${x.token_id === "mango" ? "mangoes" : `${x.token_id}s`} for ${nameOf(x.counterparty)}. +${qty * price} c`);
+        else if (x.kind === "bought") market.life.errand(who, mer, `${r.name}: one ${x.token_id}, ${price} c. Lunch!`);
+      }
+    }));
+  };
+  /** A market turn's log: a resident who could not afford food goes and stands at the stall, saying the real price. */
+  const hungry = (t: Record<string, unknown>): void => {
+    for (const line of Array.isArray(t.log) ? (t.log as string[]) : []) {
+      const m = /^resident (\w+) could not afford (\w+) at (\d+) c$/.exec(line);
+      const who = m ? RESIDENTS.findIndex((r) => r.id === m[1]) : -1;
+      if (m && who >= 0) market.life.errand(who, "arin", `${RESIDENTS[who].name}: a ${m[2]} is ${m[3]} c and I can't afford it.`);
+    }
   };
   let signingIn = false;
   const renderAcct = (): void => {

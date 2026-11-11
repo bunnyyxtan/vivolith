@@ -77,7 +77,7 @@ export interface Market {
   /** A merchant says a line (speech bubble above their head). */
   say(id: string, text: string, sec?: number): void;
   /** Townsfolk rhythm, gossip and harbor deliveries (see npc.ts Life). */
-  readonly life: Pick<Life, "setHour" | "setGossip" | "deliver">;
+  readonly life: Pick<Life, "setHour" | "setGossip" | "deliver" | "errand">;
 }
 
 export interface StallState {

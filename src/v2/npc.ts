@@ -69,6 +69,8 @@ interface Ent extends Pedestrian {
   baseSpeed: number;
   /** View culling: drawn this frame, animation time owed while off screen, ink/shadow detail (near only). */
   onScreen: boolean; lag: number; near: boolean; inks: THREE.Object3D[]; bodies: THREE.Mesh[];
+  /** Residents: confirmed trades to act out (walk to the stall, then say it), and the line being walked to now. */
+  errands: { mer: string; line: string }[]; errand: string | null;
 }
 
 const WALK = 1.3, PLAYER_R = 0.32, HEAD = 1.85;
@@ -91,6 +93,8 @@ export interface Life {
   setGossip(lines: readonly string[]): void;
   /** A shipment landed at the Harbor Depot: up to `crates` crates appear on the dock for porters to carry. */
   deliver(crates: number): void;
+  /** Townsperson `who` walks to merchant `mer`'s stall and says `line` there (a resident's confirmed trade). */
+  errand(who: number, mer: string, line: string): void;
 }
 
 export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Object3D | null, mers: readonly MerchantRef[], folkChars: readonly FolkChar[], floor: FloorHeight = (_x, _z, g) => g): Life {
@@ -173,7 +177,7 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
     r: 0.33, fixed, cd: 0, svx: 0, svz: 0, stag: 0, head: new THREE.Vector3(),
     state: "idle", spot: null, slot: 0, path: [], pi: 0, speed: rnd(1.0, 1.5), spd: 0, t: 0, phase: 0, last: null, carrying: false,
     stuckT: 0, sx: 0, sz: 0, carry: null, mer: null, hx: root.position.x, hz: root.position.z, hy: root.position.y, by: root.position.y, jogLeft: 0, baseSpeed: 1.2,
-    onScreen: true, lag: 0, near: true, inks: [], bodies: [],
+    onScreen: true, lag: 0, near: true, inks: [], bodies: [], errands: [], errand: null,
   });
   const merEnts = mers.map((m) => { const e = mkEnt(m.character, m.root, true); e.mer = m; return e; });
   const folk = folkChars.map((f) => {
@@ -258,7 +262,21 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
     }
     e.spot = null; e.pose.sit = 0; e.pose.phone = 0;
   };
+  /** Next errand: stand at the merchant's customer point facing them (a private spot nobody else can claim). */
+  const startErrand = (e: Ent): boolean => {
+    const job = e.errands.shift();
+    const m = job && mers.find((x) => x.id === job.mer);
+    if (!job || !m) return false;
+    const st = m.post.stall, np = m.post.npc;
+    const s: Spot = { kind: "wait", area: null, x: st.x, z: st.z, yaw: Math.atan2(np.x - st.x, np.z - st.z), cap: 1, users: 1, name: "errand", deep: false, mer: null, next: null, slots: [e, null], t: 0, turn: 0, has: false, crate: null };
+    if (nav.nearestFree(s.x, s.z, cell)) { s.x = cell.x; s.z = cell.z; }
+    e.spot = s; e.slot = 0; e.errand = job.line; e.jogLeft = 0; e.speed = e.baseSpeed;
+    if (goTo(e, s)) return true;
+    release(e); e.errand = null;
+    return false;
+  };
   const decide = (e: Ent): void => {
+    if (e.errands.length && startErrand(e)) return;
     e.state = "idle"; e.t = rnd(0.5, 2);
     // a trip to the N Spire district (lobby, gardens, square, yard, lawn); porters with a crate always deliver it
     const spire = !e.carrying && Math.random() < phase.spire;
@@ -300,6 +318,7 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
       case "crate": e.t = 0.9; break;
       case "stallq": e.t = s.next ? 999 : rnd(4, 7); if (!s.next && s.mer) { s.mer.serving = true; s.mer.attend = new THREE.Vector3(e.x, 0, e.z); } break;
     }
+    if (e.errand) { e.t = 4; bubbles.say(e.head, e.errand, 4); e.errand = null; } // at the stall: the trade, as recorded on NEAR
   };
 
   const faceTo = (e: Ent, yaw: number, dt: number, k = 8): void => { e.yaw += wrap(yaw - e.yaw) * (1 - Math.exp(-k * dt)); };
@@ -466,6 +485,12 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
     },
     setGossip(lines) { if (lines.length) gossip = lines; },
     deliver(crates) { stock("depot", crates); },
+    errand(who, mer, line) {
+      const e = folk[who];
+      if (!e) return;
+      e.errands.push({ mer, line });
+      if (e.errand === null && e.state !== "stag") { release(e); e.carrying = false; if (e.carry) e.carry.visible = false; e.pose.carry = 0; decide(e); }
+    },
     say(at, text, sec = 3.2) { bubbles.say(at, text, sec); },
     bind(b, c) { pb = b; cam = c; lpx = b.x; lpz = b.z; },
     update(dt) {

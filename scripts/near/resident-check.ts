@@ -6,11 +6,10 @@
 // The resident is `picker.<relayer>`: created once, reused afterwards. It signs with a function-call key limited
 // to the market contract's `buy` and `sell`, derived from NEAR_MERCHANT_SECRET. Nothing secret is printed.
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { Account, JsonRpcProvider, KeyPairSigner, actions, nearToYocto, teraToGas } from "near-api-js";
 import { MARKET_DAY_MS, handle, readConfig, type RelayEnv } from "../../server/near/handlers.ts";
-import { keyPairFromSeed } from "../../server/near/keys.ts";
+import { residentKey as residentKeyOf } from "../../server/near/keys.ts";
 
 const RUN = process.argv.includes("--run");
 const TICKS = process.argv.includes("--ticks");
@@ -84,7 +83,7 @@ const fmt = (b: Record<string, number>): string => `coin ${b.coin ?? 0}, mango $
 const secret = (env.NEAR_MERCHANT_SECRET ?? "").trim();
 assert.ok(cfg.relayerId.endsWith(".testnet") && cfg.relayerKey && secret.length >= 32, "relayer id, relayer key and NEAR_MERCHANT_SECRET must be configured (testnet only)");
 const residentId = `${RESIDENT}.${cfg.relayerId}`;
-const residentKey = keyPairFromSeed(createHash("sha256").update(`vivolith-resident:${RESIDENT}:${secret}`).digest());
+const residentKey = residentKeyOf(RESIDENT, secret);
 const relayer = new Account(cfg.relayerId, provider, cfg.relayerKey!);
 const resident = new Account(residentId, provider, new KeyPairSigner(residentKey));
 
@@ -201,7 +200,7 @@ if (RUN) {
 
 if (TICKS) {
   const stalls = (): Promise<Stall[]> => view<Stall[]>("get_stalls");
-  const sales = (log: string[]): number => log.filter((l) => /street shoppers bought/.test(l)).length;
+  const sales = (log: string[]): number => log.filter((l) => /(street shoppers|tourists) bought/.test(l)).length;
   const dayNow = (): number => Math.floor(Date.now() / MARKET_DAY_MS);
   // Stay clear of the limiter's minute boundary and of a market-day rollover for the first pair.
   const intoMinute = Date.now() % 60000;
