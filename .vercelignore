@@ -12,6 +12,6 @@ blender/
 contracts/market/target/
 docs/evidence/
 tools/
-New folder/
 *.blend
 *.blend1
+public/ref/

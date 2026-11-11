@@ -1,9 +1,9 @@
 // Independent check of VIVOLITH on NEAR testnet, straight from public RPC (no keys, no dependencies, Node 18+):
 // the deployed contract's code hash, its merchants and live order book, token supply, and a list of real
 // transactions with their status and the NEP-245 events they emitted.
-//   npm run verify:near            (or: node scripts/near/verify.mjs [contract-id])
+//   node scripts/near/verify.mjs [contract-id]   (archival RPC by default: older transactions are pruned from regular nodes)
 const CONTRACT = process.argv[2] ?? "market.bunnyy-nearworld.testnet";
-const RPC = process.env.NEAR_RPC_URL ?? "https://rpc.testnet.fastnear.com";
+const RPC = process.env.NEAR_RPC_URL ?? "https://archival-rpc.testnet.fastnear.com";
 const EXPLORER = "https://testnet.nearblocks.io/txns/";
 
 /** Real transactions from the running game: [what it shows, tx hash, signer]. */

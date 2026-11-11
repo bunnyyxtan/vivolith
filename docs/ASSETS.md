@@ -8,7 +8,8 @@ Assets we created ourselves (Blender scripts in `blender/`, code-built geometry 
 | File in repo | Original | Notes |
 |---|---|---|
 | `assets-src/brand/near-wordmark.svg` | `logo.svg` | NEAR wordmark + symbol (black). Used as `public/brand/near-wordmark-white.svg` (fill set to white) on the title card |
-| `assets-src/brand/near-symbol.svg` | `favicon.svg` | NEAR symbol. Used as `public/brand/favicon.svg` |
+| `assets-src/brand/near-symbol.svg` | `favicon.svg` | NEAR symbol. Used as `public/brand/near-symbol.svg` (the tab icon is our own `public/brand/vivolith-mark.svg`) |
+| `public/brand/nearai-primary-color.svg`, `nearai-tile-color.svg`, `nearintents-Logo-Icon.svg` | near.ai/brand; defuse-protocol/defuse-frontend | NEAR AI and NEAR Intents marks on the fictional landmark buildings (`blender/build_landmarks.py`); sources in `public/brand/README.md` |
 | `assets-src/brand/kit/Tertiary/*` | brand kit zip | NEAR app-tile symbol. `tile-color.svg` is the tower clock face |
 | `assets-src/brand/kit/Primary/*`, `Secondary/*` | brand kit zip | **NEAR AI** wordmarks: kept for reference, not used in game (this is a NEAR game, not a NEAR AI product) |
 
@@ -110,6 +111,28 @@ textures capped (named 1k, crowd 512, only that character's images), NLA tracks 
 
 Not yet checked per character: foot sliding at every walk speed (stride is scaled by speed/clip speed), clothing
 intersections during Talking. Unused: `Stop Walking.fbx` (Remy).
+
+## Generated with Tripo (AI 3D)
+
+Generated on tripo3d.ai with the team's paid API credits, then made game-ready by `blender/build_kavi_tripo.py`,
+`blender/build_tripo_props.py` and `blender/fix_cars.py` (scale, ground, collision, texture cap, wheel split, shading).
+Raw outputs stay in `assets-src/tripo/out/` and `library/` (git-ignored); prompts, costs and inputs are in
+`assets-src/tripo/PLAN.md`.
+
+| Game file | What |
+|---|---|
+| `public/models/v2/kavi.glb` | Kavi, the player (multiview model, Mixamo-spec auto-rig, preset idle/walk/run/jump/turn) |
+| `public/models/v2/cast/merchant_fruit.glb` | Pema's model |
+| `public/models/v2/props/*.glb` | EV sedan, EV pickup, fruit stall, corner shop, kiosk, vending machine, food and coffee trucks |
+
+The other anime cast files in `public/models/v2/cast/` are built parametrically by `blender/build_cast_v2.py` on the
+Mixamo rig.
+
+## Audio (ElevenLabs, AI-generated)
+
+All 50 files in `public/audio/` (merchant voices, effects, ambience, music) were generated once by
+`scripts/audio/generate.ts` from `src/v2/audio-manifest.ts` with ElevenLabs `eleven_v4` (voices, ElevenLabs
+pre-made voices), `eleven_text_to_sound_v3` (effects, ambience) and `music_v2_5` (music), on the ElevenLabs Starter plan.
 
 ## Other runtime files
 

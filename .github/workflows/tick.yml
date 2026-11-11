@@ -1,10 +1,12 @@
-# Keeps the city trading when nobody plays: one market turn every 5 minutes on the deployed relayer.
+# One market turn on the deployed relayer: reprices merchants, records street trade, collects rent once per market day.
+# MANUAL ONLY: no schedule, so pushing this repo never starts automated testnet transactions.
 # Missed or late runs are harmless: the market day comes from the wall clock, the relayer takes one turn at a time
 # (atomic lock), and rent and settlement are once per market day in the contract.
+# To keep the city trading when nobody plays, the owner can add back, under `on:`:
+#   schedule:
+#     - cron: "*/5 * * * *"
 name: market turn
 on:
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch:
 permissions: {}
 jobs:
