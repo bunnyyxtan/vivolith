@@ -12,6 +12,7 @@ import { deserialize } from "borsh";
 import { Account, JsonRpcProvider, KeyPairSigner, PublicKey, SCHEMA, actions, nearToYocto, teraToGas, type KeyPairString } from "near-api-js";
 import { MERCHANTS, keyPairFromSeed, merchantKey, residentKey, type MerchantId } from "./keys.ts";
 import { RESIDENTS, planResident, type Offer } from "../../src/economy/residents.ts";
+import { answer, factsFor } from "./talk.ts";
 import { bidFor, planMerchantTrades, quote } from "../../src/economy/pricing.ts";
 import { closingNeed, shopperWant } from "../../src/economy/sim.ts";
 import { initialEconomy, type EconomyState } from "../../src/economy/state.ts";
@@ -66,6 +67,7 @@ const LIMITS = {
   // starter grant once; this keeps "make guests, merge them into one account" from multiplying it.
   merge: { max: 3, windowSec: 30 * 24 * 3600 },
   save: { max: 20, windowSec: 60 }, // per account: cloud save reads and writes
+  talk: { max: 10, windowSec: 60 }, // per IP: "Ask why" (each may be one NEAR AI call)
 } as const;
 
 export function readConfig(env: RelayEnv): Config {
@@ -867,6 +869,24 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
   return json(200, { status: "onchain", txHashes: txs, log });
 }
 
+/** "Ask why": a merchant explains its price and its day from facts read on NEAR (see talk.ts). Read-only on chain;
+ *  NEAR AI phrases it when NEAR_AI_KEY and NEAR_AI_MODEL are set (server-side only), else the scripted line. */
+async function talk(cfg: Config, req: Request, env: RelayEnv): Promise<Response> {
+  const b = await readJson(req);
+  const id = String(b.npc ?? "") as MerchantId;
+  if (!(MERCHANTS as readonly string[]).includes(id)) throw new HttpError(400, "unknown merchant");
+  if (!(await hit(cfg, `talk:${clientIp(req)}`, LIMITS.talk.max, LIMITS.talk.windowSec))) throw new HttpError(429, "slow down");
+  const { provider } = account(cfg);
+  const [st, offers, receipts] = await Promise.all([
+    chainEconomy(provider, cfg),
+    view<OfferRow[]>(provider, cfg.contractId, "get_offers", {}),
+    view<{ kind: string; token_id: string; qty: string; price: string; counterparty: string }[]>(provider, cfg.contractId, "get_receipts", { account_id: `${id}.${cfg.relayerId}` }).catch(() => []),
+  ]);
+  const { facts, script } = factsFor(st, id, offers, receipts);
+  const ai = { key: (env.NEAR_AI_KEY ?? "").trim() || null, model: (env.NEAR_AI_MODEL ?? "").trim() || null };
+  return json(200, await answer(ai, id, facts, script, typeof b.question === "string" ? b.question : ""));
+}
+
 /** Pays a player the whole coins of dividends they are owed (the contract can only ever pay what is owed). Players'
  *  own trades claim too; this lets dividends land for someone who is only watching. */
 async function claim(cfg: Config, req: Request): Promise<Response> {
@@ -910,6 +930,7 @@ export async function handle(route: string, req: Request, env: RelayEnv): Promis
     if (route === "settle") return await settle(cfg);
     if (route === "deal") return await deal(cfg, req, env);
     if (route === "tick") return await tick(cfg, env);
+    if (route === "talk") return await talk(cfg, req, env);
     if (route === "social") return await social(cfg, req, env);
     if (route === "claim") return await claim(cfg, req);
     if (route === "register") return await register(cfg, req);

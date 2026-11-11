@@ -44,6 +44,11 @@ Controls: WASD move, Shift run, F talk or trade, B bag, J goals, H help, N NEAR 
   meta-transactions). A display name is guest access only and never names an account or key.
 - Signing in with Google moves a guest's coins, goods and shares into the Google account with one starter purse kept.
 - Merchant pricing rules live in one readable file: `src/economy/pricing.ts`.
+- **Ask a merchant why** (trade panel, *Why … c?*, then *Ask*): the merchant explains its price and its day from
+  facts read on NEAR (till, rent, stock, orders, recent receipts). With `NEAR_AI_KEY` and `NEAR_AI_MODEL` set on the
+  server, NEAR AI (cloud-api.near.ai) phrases it in character; a reply with any number not in those facts, an error or a
+  4 s timeout falls back to a scripted line from the same facts. Only real NEAR AI answers are labelled as such. The
+  model decides nothing: it moves no coin and sets no price (`server/near/talk.ts`).
 - Economy rules and proofs: [docs/ECONOMY_MATH.md](docs/ECONOMY_MATH.md).
 
 ## Run it

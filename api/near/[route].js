@@ -11845,6 +11845,114 @@ const stockValue = (m) => m.sells.reduce((v, g) => v + m.stock[g] * m.baseCost[g
 const shelfGap = (m) => Math.max(0, Math.ceil((m.rent * REOPEN_SHARE - stockValue(m)) / Math.max(1, m.baseCost.mango)));
 /** Mangoes a stall that closes right now must be brought before it reopens (the relayer passes it to charge_rent). */
 const closingNeed = (state, id) => Math.max(1, shelfGap(state.merchants[id]));
+// src/economy/haggle.ts
+const PERSONALITY = {
+	pema: {
+		name: "Auntie Pema",
+		trait: "Loyal",
+		patience: 90
+	},
+	tomas: {
+		name: "Tomas Vell",
+		trait: "Greedy",
+		patience: 75
+	},
+	mira: {
+		name: "Mira Sol",
+		trait: "Arbitrageur",
+		patience: 60
+	},
+	arin: {
+		name: "Arin Okoye",
+		trait: "Steady",
+		patience: 100
+	}
+};
+// server/near/talk.ts
+const AI_URL = "https://cloud-api.near.ai/v1/chat/completions";
+const AI_TIMEOUT_MS = 4e3;
+const MAX_LINE = 280;
+/** Plain sentences, each a fact from the chain or the readable pricing rules (src/economy/pricing.ts). */
+function factsFor(st, id, offers, receipts) {
+	const m = st.merchants[id];
+	const good = id === "arin" ? "lassi" : "mango";
+	const q = quote(st, id, good, true);
+	const reasons = q.factors.filter((f) => Math.abs(f.multiplier - 1) > .015).map((f) => f.label);
+	const mine = offers.filter((o) => o.merchant === id && Number(o.qty) > 0);
+	return {
+		facts: [
+			`You are ${m.name} and you run ${m.shop} in Saltlight Market.`,
+			`Your stall is ${m.status === "open" ? "open" : "closed because rent went unpaid"}.`,
+			`Your till holds ${Math.floor(m.cash)} coins. Rent is ${m.rent} coins every ${m.rentEveryDays} market days.`,
+			`On your shelves: ${m.stock.mango} mangoes, ${m.stock.lemon} lemons, ${m.stock.lassi} lassi.`,
+			`Your price for a ${good} today is ${q.price} coins.${reasons.length ? ` Why: ${reasons.join("; ")}.` : " It is a normal day."}`,
+			...mine.map((o) => `You ${o.side === "ask" ? "sell" : "buy"} ${o.token_id} at ${o.price} coins, up to ${o.qty}.`),
+			...receipts.slice(-3).map((r) => `Recently you ${r.kind} ${r.qty} ${r.token_id} at ${r.price} coins with ${r.counterparty.split(".")[0]}.`)
+		],
+		script: m.status !== "open" ? `My shutters are down until rent is sorted. My till holds ${Math.floor(m.cash)} coins.` : `${q.price} coins a ${good} today${reasons.length ? `: ${reasons[0].toLowerCase()}` : ", a normal day"}. My till holds ${Math.floor(m.cash)} coins and rent is ${m.rent}.`
+	};
+}
+const numbers = (s) => s.match(/\d+(?:\.\d+)?/g) ?? [];
+/** True if every number in `line` is one of the facts' numbers (the model may not invent a price, stock or sum). */
+function grounded(line, facts) {
+	const known = new Set(facts.flatMap(numbers));
+	return numbers(line).every((n) => known.has(n));
+}
+/** One short in-character answer. `fetchImpl` is swappable for the offline check (no network there). */
+async function answer(ai, id, facts, script, question, fetchImpl = fetch) {
+	if (!ai.key || !ai.model) return {
+		source: "script",
+		line: script
+	};
+	const voice = PERSONALITY[id];
+	const system = [
+		`You are ${voice.name}, a market merchant in a cosy anime city. Your trading style: ${voice.trait}.`,
+		"Answer in one or two short sentences, warm and in character, in plain words a child understands.",
+		"Use only the facts below. Never state a number that is not in them. Never mention blockchains, wallets, tokens or AI.",
+		"Facts:",
+		...facts.map((f) => `- ${f}`)
+	].join("\n");
+	try {
+		const r = await fetchImpl(AI_URL, {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${ai.key}`,
+				"content-type": "application/json"
+			},
+			body: JSON.stringify({
+				model: ai.model,
+				max_tokens: 120,
+				temperature: .6,
+				messages: [{
+					role: "system",
+					content: system
+				}, {
+					role: "user",
+					content: question.slice(0, 160) || "Why is your price what it is today?"
+				}]
+			}),
+			signal: AbortSignal.timeout(AI_TIMEOUT_MS)
+		});
+		if (!r.ok) return {
+			source: "script",
+			line: script
+		};
+		const line = ((await r.json()).choices?.[0]?.message?.content ?? "").replace(/\s+/g, " ").trim();
+		if (!line || line.length > MAX_LINE || !grounded(line, facts)) return {
+			source: "script",
+			line: script
+		};
+		return {
+			source: "ai",
+			line
+		};
+	} catch {
+		return {
+			source: "script",
+			line: script
+		};
+	}
+}
 // server/near/handlers.ts
 const MAX_BODY = 4096;
 const MAX_GAS = teraToGas("100");
@@ -11907,6 +12015,10 @@ const LIMITS = {
 	},
 	save: {
 		max: 20,
+		windowSec: 60
+	},
+	talk: {
+		max: 10,
 		windowSec: 60
 	}
 };
@@ -12933,6 +13045,26 @@ async function tick(cfg, env) {
 		log
 	});
 }
+/** "Ask why": a merchant explains its price and its day from facts read on NEAR (see talk.ts). Read-only on chain;
+*  NEAR AI phrases it when NEAR_AI_KEY and NEAR_AI_MODEL are set (server-side only), else the scripted line. */
+async function talk(cfg, req, env) {
+	const b = await readJson(req);
+	const id = String(b.npc ?? "");
+	if (!MERCHANTS.includes(id)) throw new HttpError(400, "unknown merchant");
+	if (!await hit(cfg, `talk:${clientIp(req)}`, LIMITS.talk.max, LIMITS.talk.windowSec)) throw new HttpError(429, "slow down");
+	const { provider } = account(cfg);
+	const [st, offers, receipts] = await Promise.all([
+		chainEconomy(provider, cfg),
+		view(provider, cfg.contractId, "get_offers", {}),
+		view(provider, cfg.contractId, "get_receipts", { account_id: `${id}.${cfg.relayerId}` }).catch(() => [])
+	]);
+	const { facts, script } = factsFor(st, id, offers, receipts);
+	const ai = {
+		key: (env.NEAR_AI_KEY ?? "").trim() || null,
+		model: (env.NEAR_AI_MODEL ?? "").trim() || null
+	};
+	return json(200, await answer(ai, id, facts, script, typeof b.question === "string" ? b.question : ""));
+}
 /** Pays a player the whole coins of dividends they are owed (the contract can only ever pay what is owed). Players'
 *  own trades claim too; this lets dividends land for someone who is only watching. */
 async function claim(cfg, req) {
@@ -13000,6 +13132,7 @@ async function handle(route, req, env) {
 		if (route === "settle") return await settle(cfg);
 		if (route === "deal") return await deal(cfg, req, env);
 		if (route === "tick") return await tick(cfg, env);
+		if (route === "talk") return await talk(cfg, req, env);
 		if (route === "social") return await social(cfg, req, env);
 		if (route === "claim") return await claim(cfg, req);
 		if (route === "register") return await register(cfg, req);

@@ -69,6 +69,12 @@ export async function chainStatus(): Promise<ChainStatus> {
   return status;
 }
 
+/** A merchant explains its price and day (relayer route `talk`): `ai` only when NEAR AI phrased it. */
+export async function askMerchant(id: string): Promise<{ line: string; ai: boolean } | null> {
+  const r = await post("talk", { npc: id }).catch(() => null);
+  return r && typeof r.line === "string" ? { line: r.line, ai: r.source === "ai" } : null;
+}
+
 /** When the market last took a turn on NEAR (a fresh read, not the cached status). */
 export interface LastTick { readonly at: number; readonly day: number; readonly txs: number; readonly failed: number }
 export async function lastMarketTurn(): Promise<LastTick | null> {

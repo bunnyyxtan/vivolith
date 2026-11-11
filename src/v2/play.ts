@@ -17,7 +17,7 @@ import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
 import {
   EXPLORER_ACCOUNT, EXPLORER_TX, balances, buyPosted, sellPosted, connectGuest, haggleDeal, marketTick, merchantAccount, playerId, playerLabel, receipts as chainReceipts,
-  settleDay, claimDividends, lastMarketTurn, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
+  settleDay, claimDividends, lastMarketTurn, askMerchant, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
 } from "../near/chain";
 
 const GAME_MIN_PER_SEC = 2.4; // 09:00 -> 21:00 in five real minutes
@@ -527,6 +527,16 @@ export async function createPlay(game: Game): Promise<Play> {
         for (const r of reasonsOf(priceOf(state, id))) ul.append(el("li", "", r));
         if (!ul.children.length) ul.append(el("li", "", "A normal day: the usual price."));
         hud.panel.append(ul);
+        // The merchant says it in their own words, from facts read on NEAR (NEAR AI when available, else scripted).
+        const first = PERSONALITY[id].name.split(" ").pop();
+        if (asked?.id === id) {
+          hud.panel.append(el("div", "tp-say", `“${asked.line}”`));
+          if (asked.ai) hud.panel.append(el("div", "tp-text tp-note", "Answered by NEAR AI from the stall's live numbers."));
+        } else if (playerId()) {
+          const ask = button(asking ? `${first} is thinking…` : `Ask ${first}`, "tp-why", () => { void askWhy(id); });
+          ask.disabled = asking;
+          hud.panel.append(ask);
+        }
       }
     }
     const total = unit * mode.qty;
@@ -553,6 +563,16 @@ export async function createPlay(game: Game): Promise<Play> {
     }
     acts.append(button("Leave", "ghost full", () => endPanel(), "Esc"));
     hud.panel.append(acts);
+  };
+
+  let asked: { id: MerchantId; line: string; ai: boolean } | null = null, asking = false;
+  const askWhy = async (id: MerchantId): Promise<void> => {
+    if (asking) return;
+    asking = true; renderTrade();
+    const r = await askMerchant(id);
+    asking = false;
+    asked = r ? { id, ...r } : { id, line: "Not now, I'm busy with customers.", ai: false };
+    if (mode.kind === "trade" && mode.id === id) renderTrade();
   };
 
   /** Closed stall: how far its shelves are from reopening (stock is the only thing that reopens it). */
