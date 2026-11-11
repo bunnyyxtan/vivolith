@@ -7,7 +7,6 @@ import * as THREE from "three";
 import { loadGLB, prepareModel } from "../assets";
 import type { Box } from "../physics/collision";
 import type { Player } from "./player";
-import { applyToon } from "./toon";
 import { pedestrians } from "./npc";
 
 interface Poly { x: Float32Array; z: Float32Array; c: Float32Array; n: number; len: number }
@@ -17,16 +16,25 @@ interface Spot {
   inP: Poly; outP: Poly; reverseOut: boolean; busy: boolean;
 }
 const DRIVE = 0, PARK_IN = 1, PARKED = 2, HIDDEN = 3, LEAVE = 4;
-interface Car {
-  obj: THREE.Object3D; wheels: THREE.Object3D[]; halfL: number; halfW: number;
+/** Drivable rig read from a car GLB (blender/fix_cars.py): wheel_* spin about local X, steer_* turn about Y. */
+interface Rig { wheels: THREE.Object3D[]; steers: THREE.Object3D[]; body: THREE.Object3D | null; wb: number; r: number; mid: number }
+interface Car extends Rig {
+  obj: THREE.Object3D; halfL: number; halfW: number;
+  /** Axle positions (x, z): the leading one follows the road, the trailing one is dragged behind it. */
+  fx: number; fz: number; rx: number; rz: number; steer: number; pv: number; pitch: number; roll: number;
   mode: number; poly: Poly; seg: number; s: number; dir: number; v: number;
   lane: number; next: number; claim: number; spot: number; wantSpot: number; timer: number; stuck: number;
   x: number; z: number; yaw: number; hx: number; hz: number; spin: number; despawn: boolean;
 }
 interface RoadsJson { lanes: { id: string; points: number[][]; next?: string[]; speed?: number }[]; parking?: { x: number; z: number; yaw?: number; dx?: number; dz?: number }[] }
 
-const MODELS = ["ev_sedan", "ev_pickup", "car_hatch", "car_van", "car_taxi"];
-const POOL = 7, WHEEL_R = 0.34, ACCEL = 3, BRAKE = 9, COMFORT = 4, MAX_SPEED = 7;
+const MODELS = ["ev_sedan", "ev_pickup"];
+const POOL = 7, ACCEL = 3, BRAKE = 9, COMFORT = 4, MAX_SPEED = 7;
+/** Top of the town's asphalt (measured by raycast: 0.024 m everywhere on the lanes); tyres stand on it. */
+const ROAD_Y = 0.024;
+/** Sky reflection and clear coat on car paint: enough for a highlight, not so much that the sky bleaches the colour. */
+const CAR_REFLECT = 0.5, CAR_COAT = 0.35;
+const MAX_STEER = 0.6, PITCH_PER_ACCEL = 0.006, ROLL_PER_LATERAL = 0.004, MAX_TILT = 0.035;
 const PROBES = [1.5, 3, 4.5, 6, 7.5, 9, 10.5, 12, 13.5, 15, 16.5, 18, 19.5];
 const MAX_PARKED = 2, PARK_CHANCE = 0.5, RING_UTURN = 0.4, MIN_SPAWN_GAP = 18, MIN_SPAWN_PLAYER = 30;
 
@@ -75,6 +83,23 @@ function bezier(p: Poly, x0: number, z0: number, d0x: number, d0z: number, x1: n
     pts.push([u * u * u * x0 + 3 * u * u * t * ax + 3 * u * t * t * bx + t * t * t * x1, u * u * u * z0 + 3 * u * u * t * az + 3 * u * t * t * bz + t * t * t * z1]);
   }
   return fillPoly(p, pts);
+}
+
+/** Wheels, steer pivots, wheelbase, tyre radius and where the axles' midpoint sits from the model origin (local Z). */
+function rigOf(obj: THREE.Object3D): Rig {
+  const wheels: THREE.Object3D[] = [], steers: THREE.Object3D[] = [];
+  let body: THREE.Object3D | null = null;
+  obj.updateMatrixWorld(true);
+  obj.traverse((o) => {
+    if (/^wheel_/.test(o.name)) wheels.push(o);
+    else if (/^steer_/.test(o.name)) steers.push(o);
+    else if (o.name === "body") body = o;
+  });
+  const inv = new THREE.Matrix4().copy(obj.matrixWorld).invert();
+  const at = wheels.map((w) => w.getWorldPosition(new THREE.Vector3()).applyMatrix4(inv));
+  if (at.length < 4) return { wheels, steers, body, wb: 2.8, r: 0.34, mid: 0 }; // an unrigged model still drives
+  const front = Math.max(...at.map((p) => p.z)), rear = Math.min(...at.map((p) => p.z));
+  return { wheels, steers, body, wb: front - rear, r: at.reduce((n, p) => n + p.y, 0) / at.length, mid: (front + rear) / 2 };
 }
 
 async function loadRoads(): Promise<{ json: RoadsJson; real: boolean }> {
@@ -156,7 +181,15 @@ export async function installTraffic(scene: THREE.Scene, colliders: Box[], playe
     try {
       const gltf = await loadGLB(`/models/v2/props/${m}.glb`);
       prepareModel(gltf.scene);
-      applyToon(gltf.scene, 0.02, undefined, true);
+      // Cars keep their PBR materials (coated paint, glossy glass): toon shading flattens them into clay.
+      gltf.scene.traverse((o) => {
+        if (!(o instanceof THREE.Mesh)) return;
+        o.castShadow = true; o.receiveShadow = true;
+        for (const mat of Array.isArray(o.material) ? o.material : [o.material]) {
+          if (mat instanceof THREE.MeshStandardMaterial) { mat.envMap = scene.environment; mat.envMapIntensity = CAR_REFLECT; }
+          if (mat instanceof THREE.MeshPhysicalMaterial) mat.clearcoat = Math.min(mat.clearcoat, CAR_COAT);
+        }
+      });
       const b = new THREE.Box3().setFromObject(gltf.scene);
       templates.push({ obj: gltf.scene, halfL: (b.max.z - b.min.z) / 2, halfW: (b.max.x - b.min.x) / 2 });
     } catch { /* model missing */ }
@@ -249,15 +282,46 @@ export async function installTraffic(scene: THREE.Scene, colliders: Box[], playe
     }
   };
 
+  /** Kinematic bicycle: the leading axle (front, or rear when reversing) rides the path at s ± wheelbase/2; the other
+   *  axle is dragged after it at a fixed wheelbase, so the body always points where it moves and never slides. */
   const place = (c: Car, snap: boolean, dt: number): void => {
     c.seg = sample(c.poly, c.s, c.seg, tmp);
-    c.x = tmp[0]; c.z = tmp[1];
-    const want = Math.atan2(tmp[2], tmp[3]);
-    const diff = Math.atan2(Math.sin(want - c.yaw), Math.cos(want - c.yaw));
-    c.yaw += snap ? diff : diff * Math.min(1, dt * 18);
-    c.hx = Math.sin(c.yaw); c.hz = Math.cos(c.yaw);
-    c.obj.position.set(c.x, 0, c.z);
+    const half = c.wb / 2;
+    sampleAhead(c, half, tmp2); // leading axle and the road's direction there
+    if (snap) {
+      const back = c.dir > 0 ? -1 : 1;
+      c.fx = tmp[0] + tmp[2] * half; c.fz = tmp[1] + tmp[3] * half;
+      c.rx = tmp[0] - tmp[2] * half; c.rz = tmp[1] - tmp[3] * half;
+      if (back > 0) { c.rx = tmp2[0]; c.rz = tmp2[1]; } else { c.fx = tmp2[0]; c.fz = tmp2[1]; }
+    } else if (c.dir > 0) {
+      c.fx = tmp2[0]; c.fz = tmp2[1];
+      const dx = c.fx - c.rx, dz = c.fz - c.rz, d = Math.hypot(dx, dz) || 1;
+      c.rx = c.fx - (dx / d) * c.wb; c.rz = c.fz - (dz / d) * c.wb;
+    } else {
+      c.rx = tmp2[0]; c.rz = tmp2[1];
+      const dx = c.fx - c.rx, dz = c.fz - c.rz, d = Math.hypot(dx, dz) || 1;
+      c.fx = c.rx + (dx / d) * c.wb; c.fz = c.rz + (dz / d) * c.wb;
+    }
+    const hl = Math.hypot(c.fx - c.rx, c.fz - c.rz) || 1;
+    c.hx = (c.fx - c.rx) / hl; c.hz = (c.fz - c.rz) / hl;
+    c.yaw = Math.atan2(c.hx, c.hz);
+    c.x = (c.fx + c.rx) / 2 - c.hx * c.mid; c.z = (c.fz + c.rz) / 2 - c.hz * c.mid;
+    c.obj.position.set(c.x, ROAD_Y, c.z);
     c.obj.rotation.y = c.yaw;
+    // Front wheels turn toward the road's direction at the front axle.
+    const want = c.dir > 0 ? Math.atan2(Math.sin(Math.atan2(tmp2[2], tmp2[3]) - c.yaw), Math.cos(Math.atan2(tmp2[2], tmp2[3]) - c.yaw)) : 0;
+    const k = snap ? 1 : Math.min(1, dt * 8);
+    c.steer += (Math.max(-MAX_STEER, Math.min(MAX_STEER, want)) - c.steer) * k;
+    for (const s of c.steers) s.rotation.y = c.steer;
+    // The body dips under braking and leans out of turns (small, smoothed).
+    if (c.body && dt > 0) {
+      const accel = (c.v - c.pv) / dt;
+      const pitch = Math.max(-MAX_TILT, Math.min(MAX_TILT, -accel * PITCH_PER_ACCEL));
+      const roll = Math.max(-MAX_TILT, Math.min(MAX_TILT, c.v * c.v * (c.steer / c.wb) * ROLL_PER_LATERAL));
+      c.pitch += (pitch - c.pitch) * Math.min(1, dt * 4); c.roll += (roll - c.roll) * Math.min(1, dt * 4);
+      c.body.rotation.set(c.pitch, 0, c.roll);
+    }
+    c.pv = c.v;
   };
 
   const hide = (c: Car, delay: number): void => {
@@ -293,10 +357,9 @@ export async function installTraffic(scene: THREE.Scene, colliders: Box[], playe
   for (let i = 0; i < POOL; i++) {
     const t = templates[i % templates.length];
     const obj = t.obj.clone(true);
-    const wheels: THREE.Object3D[] = [];
-    obj.traverse((o) => { if (/^wheel_/.test(o.name)) wheels.push(o); });
     const car: Car = {
-      obj, wheels, halfL: t.halfL, halfW: t.halfW, mode: HIDDEN, poly: lanes[0].poly, seg: 0, s: 0, dir: 1, v: 0,
+      obj, ...rigOf(obj), halfL: t.halfL, halfW: t.halfW, fx: 0, fz: 0, rx: 0, rz: 0, steer: 0, pv: 0, pitch: 0, roll: 0,
+      mode: HIDDEN, poly: lanes[0].poly, seg: 0, s: 0, dir: 1, v: 0,
       lane: 0, next: -1, claim: -1, spot: -1, wantSpot: -1, timer: i * 1.5, stuck: 0, x: 0, z: 0, yaw: 0, hx: 0, hz: 1, spin: 0, despawn: false,
     };
     obj.visible = false;
@@ -422,7 +485,7 @@ export async function installTraffic(scene: THREE.Scene, colliders: Box[], playe
     }
 
     place(c, false, dt);
-    c.spin += (c.dir * c.v * dt) / WHEEL_R;
+    c.spin += (c.dir * c.v * dt) / c.r; // rolling: the tyre's rim covers exactly the distance driven
     for (const w of c.wheels) w.rotation.x = c.spin;
   };
 
