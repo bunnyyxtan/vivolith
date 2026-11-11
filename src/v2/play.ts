@@ -981,7 +981,7 @@ export async function createPlay(game: Game): Promise<Play> {
   const showWelcome = (): void => openCard((card) => {
     card.append(el("h2", "", "Welcome to NEAR City"));
     const s = el("section");
-    s.append(el("p", "", `You're Kavi, new in town with ${STARTER_COINS} coins in your pocket.`));
+    s.append(el("p", "", `You're ${typeof state.flags.name === "string" ? state.flags.name : "Kavi"}, new in town with ${STARTER_COINS} coins in your pocket.`));
     s.append(el("p", "", "The market square ahead runs on trade. Four merchants buy and sell all day, and each keeps their own account on NEAR. Prices move with every crate."));
     s.append(el("p", "", "Auntie Pema's fruit stall is in trouble. Go and see her."));
     card.append(s);
@@ -1212,7 +1212,8 @@ export async function createPlay(game: Game): Promise<Play> {
     const id = playerId(), label = playerLabel();
     hud.acct.innerHTML = "";
     const who = el("div", "who");
-    who.append(el("b", "", !id ? "Offline" : label || "Guest"), el("span", "", id ? (label ? " · saved on NEAR" : " · saved in this browser") : " · trades stay here"));
+    const name = typeof state.flags.name === "string" ? state.flags.name : null; // display only, never an account
+    who.append(el("b", "", !id ? name ?? "Offline" : label || name || "Guest"), el("span", "", id ? (label ? " · saved on NEAR" : " · saved in this browser") : " · trades stay here"));
     hud.acct.append(who);
     if (!id || (!label && !socialAvailable())) return; // sign-in appears once Google/email login is configured
     if (label) return; // signed in: sign-out is in the menu (Esc), behind a confirmation

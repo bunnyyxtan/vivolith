@@ -40,6 +40,14 @@ const CSS = /* css */ `
 #menu .sheet button { font:600 14px "Inter Tight",system-ui,sans-serif; color:#fff; background:rgba(10,20,40,.35); border:1px solid rgba(255,255,255,.7); padding:7px 12px 7px 8px; cursor:pointer; }
 #menu .sheet button:hover { background:#fff; color:#10151f; }
 #menu .sheet table { border-collapse:collapse; } #menu .sheet td { padding:3px 18px 3px 0; vertical-align:top; }
+#menu .name { display:flex; align-items:center; gap:10px; margin-top:clamp(4px, 1vh, 8px); max-width:360px; }
+#menu .name input { flex:1; min-width:0; font:600 clamp(16px, min(1.7vw, 3.6vh), 22px) "Inter Tight",system-ui,sans-serif; color:#fff; caret-color:#00ec97;
+  background:rgba(8,14,26,.35); border:0; border-bottom:2px solid rgba(255,255,255,.55); padding:6px 8px; outline:none; transition:border-color .15s, background .15s; }
+#menu .name input::placeholder { color:rgba(255,255,255,.45); }
+#menu .name input:focus { border-bottom-color:#00ec97; background:rgba(8,14,26,.55); }
+#menu .name button { font:700 14px "Inter Tight",system-ui,sans-serif; color:#0b1a14; background:#00ec97; border:0; padding:8px 14px; cursor:pointer; }
+#menu .name button:hover { background:#fff; }
+#menu li .err { color:#ffb4a8; }
 #menu .foot { position:absolute; left:clamp(16px, 7.5vw, 144px); bottom:clamp(10px, 3vh, 28px); right:16px; height:var(--foot-h); line-height:var(--foot-h); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:rgba(255,255,255,.7); text-shadow:0 1px 6px rgba(0,20,50,.6); }
 body.in-menu .hud, body.in-menu #hint { display:none !important; }
 @media (max-width:640px) { #menu { background:linear-gradient(180deg, rgba(8,14,26,.6) 0%, rgba(8,14,26,.3) 55%, rgba(8,14,26,0) 80%); } }
@@ -89,7 +97,16 @@ export function createBoot(): Boot {
 interface Item {
   label: string;
   note?: string;
+  /** The item holds the name field (Enter or its button plays). */
+  name?: boolean;
   run: () => void;
+}
+
+/** A display name is guest access only: it never names an account, a key or a wallet. */
+export const NAME_MAX = 16;
+export function cleanName(raw: string): string | null {
+  const n = raw.replace(/\s+/g, " ").trim();
+  return n.length >= 2 && n.length <= NAME_MAX && /^[\p{L}\p{N}][\p{L}\p{N} '._-]*$/u.test(n) ? n : null;
 }
 
 /** Main menu over the live scene. Opens after loading and again on Esc during play. */
@@ -116,9 +133,13 @@ export function createMenu(game: Game, play: Play): { open(): void } {
 
   const esc = (t: string): string => t.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
   const cap = (s: string): string => s[0].toUpperCase() + s.slice(1);
+  const savedName = (): string => (typeof play.state.flags.name === "string" ? play.state.flags.name : "");
+  /** A brand-new player who is not signed in picks: a name (guest) or Google. */
+  const firstVisit = (): boolean => !started && !play.restored && !play.account().label && !savedName();
+  let nameDraft = "", nameErr = "";
   const where = (): string => {
     const a = play.account();
-    const who = cap(a.label ? `signed in as ${a.label}` : a.id ? "playing as guest" : "connecting to NEAR");
+    const who = cap(a.label ? `signed in as ${a.label}` : savedName() ? `playing as ${savedName()}` : a.id ? "playing as guest" : "connecting to NEAR");
     if (!play.restored && !started) return `Saltlight Market, a NEAR city where every merchant has a wallet. ${who}.`;
     const s = play.state;
     const shares = MERCHANT_IDS.filter((id) => s.player.shares[id] > 0).map((id) => `${s.player.shares[id]}/${shareSupply(s, id)} of ${s.merchants[id].shop}`);
@@ -138,13 +159,32 @@ export function createMenu(game: Game, play: Play): { open(): void } {
     if (!player.frozen) game.input.setUi(false); // leaves UI mode now (not next frame) and locks
   };
 
+  const playWithName = (): void => {
+    const n = cleanName(nameDraft);
+    if (!n) { nameErr = `2 to ${NAME_MAX} letters or numbers`; render(); return; }
+    play.state.flags.name = n; // saved with the story by enterWorld; local to this browser unless signed in
+    nameErr = "";
+    enter();
+  };
+  // Google needs the guest account first (its progress moves into the Google account), so it waits for NEAR.
+  const google = (): Item => {
+    const ready = Boolean(play.account().id);
+    return { label: "Continue with Google", note: ready ? "Keep your market on any device" : "Connecting to NEAR…", run: () => { if (ready) void play.signIn().then(render); } };
+  };
+
   const build = (): void => {
     const a = play.account();
-    items = [{ label: started ? "Resume" : play.restored ? "Continue" : "Play", run: enter }];
-    if (play.restored || started) items.push({ label: "New Game", run: () => { sheet = "new"; render(); } });
-    // Signing out asks first: it is the one item that changes whose account is playing.
-    if (a.label) items.push({ label: "Sign out", note: a.label, run: () => { sheet = "signout"; render(); } });
-    else if (a.canSignIn && a.id) items.push({ label: "Sign in with email or Google", note: "Keep your market on any device", run: () => { void play.signIn().then(render); } });
+    if (firstVisit()) {
+      items = [{ label: "Play with a name", name: true, run: playWithName }];
+      if (a.canSignIn) items.push(google());
+    } else {
+      const who = a.label ? undefined : savedName() || undefined;
+      items = [{ label: started ? "Resume" : play.restored ? "Continue" : "Play", note: who, run: enter }];
+      if (play.restored || started) items.push({ label: "New Game", run: () => { sheet = "new"; render(); } });
+      // Signing out asks first: it is the one item that changes whose account is playing.
+      if (a.label) items.push({ label: "Sign out", note: a.label, run: () => { sheet = "signout"; render(); } });
+      else if (a.canSignIn && a.id) items.push(google());
+    }
     items.push({ label: "How to play", run: () => { sheet = sheet === "how" ? "" : "how"; render(); } });
     sel = Math.min(sel, items.length - 1);
   };
@@ -170,6 +210,9 @@ export function createMenu(game: Game, play: Play): { open(): void } {
 
   const render = (): void => {
     const before = items.map((it) => it.label).join("|");
+    const prev = root.querySelector<HTMLInputElement>(".name input");
+    const typing = prev !== null && document.activeElement === prev; // re-renders (NEAR connecting) keep the caret
+    const caret = prev?.selectionStart ?? nameDraft.length;
     build();
     if (items.map((it) => it.label).join("|") !== before) sel = 0; // the list changed: never leave a stale selection
     root.innerHTML = `<div class="col"><h1>VIVOLITH</h1><div class="where"></div><ul></ul>${sheetHtml()}</div><div class="foot">NEAR testnet</div>`;
@@ -181,9 +224,26 @@ export function createMenu(game: Game, play: Play): { open(): void } {
       li.textContent = it.label;
       if (it.note) { const s = document.createElement("small"); s.textContent = it.note; li.append(s); }
       li.onmouseenter = () => { sel = i; [...ul.children].forEach((el, j) => el.classList.toggle("on", j === sel)); };
-      li.onclick = () => it.run();
+      if (it.name) {
+        const row = document.createElement("div");
+        row.className = "name";
+        const input = document.createElement("input");
+        Object.assign(input, { type: "text", value: nameDraft, maxLength: NAME_MAX, placeholder: "Your name", autocomplete: "nickname", spellcheck: false });
+        input.setAttribute("aria-label", "Your name");
+        input.oninput = () => { nameDraft = input.value; if (nameErr) { nameErr = ""; li.querySelector(".err")?.remove(); } };
+        input.onfocus = () => { sel = i; [...ul.children].forEach((el, j) => el.classList.toggle("on", j === sel)); };
+        const go = document.createElement("button");
+        go.textContent = "Play";
+        go.onclick = (e) => { e.stopPropagation(); it.run(); };
+        row.append(input, go);
+        li.append(row);
+        if (nameErr) { const s = document.createElement("small"); s.className = "err"; s.textContent = nameErr; li.append(s); }
+        li.onclick = () => input.focus();
+      } else li.onclick = () => it.run();
       ul.append(li);
     });
+    const field = root.querySelector<HTMLInputElement>(".name input");
+    if (field && (typing || (sel === 0 && isOpen && !sheet))) { field.focus(); field.setSelectionRange(caret, caret); }
     root.querySelector<HTMLButtonElement>("[data-act=reset]")?.addEventListener("click", () => play.reset());
     root.querySelector<HTMLButtonElement>("[data-act=signout]")?.addEventListener("click", () => { sheet = ""; void play.signOut().then(render); });
     root.querySelector<HTMLButtonElement>("[data-act=keep]")?.addEventListener("click", () => { sheet = ""; render(); });
@@ -200,6 +260,15 @@ export function createMenu(game: Game, play: Play): { open(): void } {
   window.addEventListener("keydown", (e) => {
     if (!isOpen) {
       if (e.code === "Escape" && started && play.mode === "walk" && !document.pointerLockElement && !game.input.escapeReleasedLock) menu.open();
+      return;
+    }
+    const t = e.target as HTMLElement | null;
+    if (t?.tagName === "INPUT") { // typing a name: only Enter (play), Esc (leave the field) and the arrows are ours
+      if (e.code === "Enter") items[sel]?.run();
+      else if (e.code === "Escape") t.blur();
+      else if (e.code === "ArrowDown" || e.code === "ArrowUp") { t.blur(); sel = (sel + (e.code === "ArrowDown" ? 1 : -1) + items.length) % items.length; render(); }
+      else return;
+      e.preventDefault();
       return;
     }
     if (sheet === "new") {

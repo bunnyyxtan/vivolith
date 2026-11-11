@@ -104,12 +104,16 @@ export interface SignedIn { readonly accountId: string; readonly label: string; 
 export interface SignInConflict { readonly conflict: true; readonly existing: Record<string, number>; readonly guestHoldings: Record<string, number> }
 export type SignInResult = SignedIn | SignInConflict;
 
+/** Auth0's Google connection: the button says "Continue with Google", so it goes straight to Google. */
+const GOOGLE = "google-oauth2";
+
 export async function signInSocial(): Promise<SignInResult> {
+  const authorizationParams = { prompt: "login" as const, connection: GOOGLE };
   try {
-    await authClient().loginWithPopup({ authorizationParams: { prompt: "login" } });
+    await authClient().loginWithPopup({ authorizationParams });
   } catch (e) {
     if (!/popup/i.test(e instanceof Error ? e.message : "") || /closed|cancel/i.test(e instanceof Error ? e.message : "")) throw e;
-    await authClient().loginWithRedirect({ authorizationParams: { prompt: "login" } }); // leaves the page
+    await authClient().loginWithRedirect({ authorizationParams }); // leaves the page
     throw new Error("redirecting to sign in");
   }
   return finishSignIn();
