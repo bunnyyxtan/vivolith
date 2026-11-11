@@ -32,7 +32,7 @@ const MODEL_FALLBACK: Record<NpcId, string> = {
   harbor: "/models/vendor_lewis.glb", engineer: "/models/npc_engineer.glb",
 };
 /** Anime cast file per role (public/models/v2/cast/<name>.glb). Harbor Dispatch has no cast model yet. */
-const CAST: Partial<Record<NpcId, string>> = { pema: "merchant_fruit", tomas: "tomas", mira: "pema", arin: "marta", engineer: "ines" }; // pema: Tripo model
+const CAST: Partial<Record<NpcId, string>> = { pema: "merchant_fruit", tomas: "tomas", mira: "mira", arin: "arin", harbor: "bram", engineer: "ines" }; // all Tripo models
 /** Town posts by role; Harbor Dispatch takes the v3 stall at the gate end of the square. */
 const TOWN_POST: Record<NpcId, string> = { pema: "pema", tomas: "tomas", mira: "v2", arin: "teahouse", harbor: "v3", engineer: "engineer" };
 const CAST_HEIGHT = 1.7;

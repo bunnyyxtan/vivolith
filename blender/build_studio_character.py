@@ -23,6 +23,11 @@ CAST = {
              {"idle": "Idle", "walk": "Walk", "run": "Run", "turn": "Turn", "jump": "Jump", "jump_down": "JumpDown",
               "fall": "Fall", "sit": "Sit", "scared_01": "Startled", "greet_01": "Wave", "look_around": "Look"},
              {"Jump": (13, 29)}),  # the preset hops more than once; the game holds one hop while airborne
+    # named merchants and the NEAR Labs engineer: idle, walk, a talking gesture (complain_01), wave, nod, flinch, look
+    **{name: (f"public/models/v2/cast/{name}.glb",
+              {"idle": "Idle", "walk": "Walk", "complain_01": "Talking", "greet_01": "Wave", "agree": "Agree",
+               "scared_01": "Startled", "look_around": "Look"}, {})
+       for name in ("tomas", "mira", "arin", "ines", "bram")},
     "noor": ("public/models/v2/cast/folk1.glb",
              {"idle": "Idle", "walk": "Walk", "run": "Run", "sit": "Sit", "scared_01": "Startled", "look_around": "Look",
               "greet_01": "Wave"}, {}),
