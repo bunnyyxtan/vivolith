@@ -55,6 +55,12 @@ export function trackGlow(m: THREE.Material): void {
   m.emissiveIntensity = m.userData.glow0 * glowLevel;
   glowing.add(m);
 }
+/** Changes a tracked material's full-glow strength (0 = dark, e.g. a closed stall's lantern). */
+export function setGlowBase(m: THREE.Material, base: number): void {
+  if (!glowing.has(m as THREE.MeshStandardMaterial)) return;
+  m.userData.glow0 = base;
+  (m as THREE.MeshStandardMaterial).emissiveIntensity = base * glowLevel;
+}
 /** 0..1: how lit the city's lamps and windows are (WP4 drives this from the clock). */
 export function setGlow(level: number): void {
   glowLevel = level;

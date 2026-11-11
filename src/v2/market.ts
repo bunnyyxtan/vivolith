@@ -6,7 +6,7 @@ import * as THREE from "three";
 import { loadGLB, prepareModel } from "../assets";
 import { loadCharacter, type AnimatedCharacter } from "../character";
 import { groundHeightAt, type Box } from "../physics/collision";
-import { applyToon, trackGlow } from "./toon";
+import { applyToon, setGlowBase, trackGlow } from "./toon";
 import { installProps } from "./props";
 import { createLife, type FolkChar, type Life } from "./npc";
 import { createFloor, type FloorHeight } from "./floor";
@@ -42,7 +42,7 @@ const NOTICE_RADIUS = 7;
 
 export interface Board {
   readonly mesh: THREE.Mesh;
-  draw(lines: { title: string; price: string; sub: string; closed: boolean }): void;
+  draw(lines: { title: string; price: string; sub: string; closed: boolean; rent?: { text: string; ok: boolean } }): void;
 }
 
 export interface Npc {
@@ -89,6 +89,7 @@ export interface StallState {
 }
 
 const CRATE_UNITS = 4; // one crate on the pile per 4 units of stock
+const LANTERN_GLOW = 2.6; // full-night strength: above the bloom threshold, so open stalls glow after dark
 const MAX_CRATES = 9;
 
 /** Crate pile, closed shutter and upgrade dressing beside a stall; meshes are created once and toggled. */
@@ -141,12 +142,19 @@ function makeStallDressing(scene: THREE.Scene, post: Post, y: number): (s: Stall
     up.add(b);
   }
   scene.add(up);
+  // Lantern under the canopy: lit at dusk while the stall trades, dark once the shutters come down.
+  const lampMat = new THREE.MeshStandardMaterial({ color: "#3a2a18", emissive: "#ffc46b", emissiveIntensity: LANTERN_GLOW, roughness: 0.6 });
+  trackGlow(lampMat);
+  const lamp = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.14, 0.3, 10), lampMat);
+  lamp.position.set(front + side * 0.35, y + 2.05, post.npc.z);
+  scene.add(lamp);
   applyToon(g, 0.008, undefined, true);
   return (s) => {
     const n = Math.min(MAX_CRATES, Math.ceil(s.stock / CRATE_UNITS));
     crates.forEach((c, i) => { c.visible = i < n; });
     shutter.visible = !s.open;
     up.visible = s.upgraded;
+    setGlowBase(lampMat, s.open ? LANTERN_GLOW : 0);
   };
 }
 
@@ -165,7 +173,7 @@ function makeBoard(): Board {
   face.position.z = 0.028;
   frame.add(face, leg);
   frame.castShadow = true;
-  const draw: Board["draw"] = ({ title, price, sub, closed }) => {
+  const draw: Board["draw"] = ({ title, price, sub, closed, rent }) => {
     ctx.fillStyle = "#1f2a26";
     ctx.fillRect(0, 0, 512, 384);
     ctx.fillStyle = "#e9efe6";
@@ -183,7 +191,14 @@ function makeBoard(): Board {
     }
     ctx.fillStyle = "#b8c7bd";
     ctx.font = "400 30px 'Inter Tight', system-ui, sans-serif";
-    ctx.fillText(sub, 256, 320);
+    ctx.fillText(sub, 256, rent ? 300 : 320);
+    if (rent) { // rent strip: can this stall pay what it owes? (its real till against its real rent)
+      ctx.fillStyle = rent.ok ? "#2f6b4c" : "#8a2f2a";
+      ctx.fillRect(0, 326, 512, 58);
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "600 28px 'Inter Tight', system-ui, sans-serif";
+      ctx.fillText(rent.text, 256, 365);
+    }
     tex.needsUpdate = true;
   };
   return { mesh: frame as THREE.Mesh, draw };

@@ -241,11 +241,23 @@ export async function createPlay(game: Game): Promise<Play> {
         price: `${priceOf(state, id).price} c`,
         sub: b ? `We buy mangoes · ${b.price} c` : id === "arin" ? `${m.stock.lassi} glasses` : `${m.stock.mango} in stock`,
         closed: m.status !== "open",
+        // the stall's real till against its real rent: green when it can pay, red when it is at risk of closing
+        rent: m.status === "open" ? { ok: m.cash >= m.rent, text: m.cash >= m.rent ? `Rent ${m.rent} c · covered` : `Rent ${m.rent} c · till only ${m.cash} c` } : undefined,
       });
     }
   };
 
   // ---------------------------------------------------------------- wallet + NEAR status ----
+  /** Something to grow into besides surviving rent: a rank from what the player is worth (coins, goods at what a
+   *  merchant would pay, shares at their guaranteed buy-back value). */
+  const RANKS: readonly [number, string][] = [[400, "Market patron"], [150, "Merchant"], [60, "Trader"], [0, "Newcomer"]];
+  const traderRank = (): string => {
+    const p = state.player;
+    const goods = (p.inventory.mango + p.inventory.lemon) * 3 + p.inventory.lassi * 3;
+    const shares = MERCHANT_IDS.reduce((n, id) => n + shareRefund(id, p.shares[id]), 0);
+    const worth = p.coins + goods + shares;
+    return RANKS.find(([min]) => worth >= min)![1];
+  };
   let walletKey = "";
   let nearTimer = 0;
   const nearLine = el("div", "hud-near");
@@ -255,7 +267,8 @@ export async function createPlay(game: Game): Promise<Play> {
     const day = dayOf(state.minute), rentDay = (day - 1) % 2 === 0;
     const clock = clockOf(state.minute).replace(/^Day (\d+) /, "Day $1 · ");
     const shares = MERCHANT_IDS.reduce((n, id) => n + p.shares[id], 0);
-    const key = `${p.coins}|${p.inventory.mango}|${p.inventory.lemon}|${p.inventory.lassi}|${shares}|${showClock ? clock : ""}|${ff ? 1 : 0}`;
+    const rank = traderRank();
+    const key = `${p.coins}|${p.inventory.mango}|${p.inventory.lemon}|${p.inventory.lassi}|${shares}|${showClock ? clock : ""}|${ff ? 1 : 0}|${rank}`;
     if (key === walletKey) return;
     const prev = walletKey.split("|");
     walletKey = key;
@@ -273,6 +286,7 @@ export async function createPlay(game: Game): Promise<Play> {
     if (p.inventory.lassi > 0) pill("", "lassi", `${p.inventory.lassi}`, "Lassi in your bag", false, () => openNotebook("bag"));
     if (shares > 0) pill("", "share", `${shares}`, "Stall shares you own", prev[4] !== String(shares) && prev.length > 1, () => openNotebook("bag"));
     hud.wallet.append(row);
+    const r = el("div", "hud-clock"); r.textContent = rank; r.title = "Your rank: coins, goods and the buy-back value of your shares"; hud.wallet.append(r);
     if (showClock) {
       const c = el("div", "hud-clock");
       c.append(document.createTextNode(ff ? `${clock} · fast-forward (T to stop)` : clock));
@@ -1012,6 +1026,37 @@ export async function createPlay(game: Game): Promise<Play> {
     mark = snap(state);
     drawBoards(); walletKey = ""; save();
   };
+  /** Rent Night (21:00): before the evening report the camera holds on the market for a few seconds while each
+   *  merchant says where they stand, from their actual till and rent (and the chain's open/closed when connected). */
+  const RENT_HOLD_SEC = 5;
+  let rentHold = 0, rentDone: (() => void) | null = null;
+  const rentLine = (id: MerchantId): string => {
+    const m = state.merchants[id];
+    if (m.status !== "open") { // closed by unpaid rent; deliveries reopen it (the contract's rule)
+      const need = Number(state.flags[`reopenNeed.${id}`] ?? 0);
+      return need > 0 ? `Shutters down since rent went unpaid. ${need} more mangoes and I can reopen.` : "Shutters down since rent went unpaid.";
+    }
+    return m.cash >= m.rent ? `Lights on! ${m.cash} c in the till, the ${m.rent} c rent is covered.` : `Only ${m.cash} c in the till and rent is ${m.rent} c. I'm in trouble.`;
+  };
+  const rentNight = (done: () => void): void => {
+    drawBoards();
+    rentHold = RENT_HOLD_SEC; rentDone = done;
+    player.frozen = true;
+    for (const id of TRADERS) market.say(id, rentLine(id), RENT_HOLD_SEC);
+  };
+  const rentEye = new THREE.Vector3(), rentAt = new THREE.Vector3();
+  game.onUpdate.push((dt) => { // runs after the rig: it owns the camera while the stalls are lit up
+    if (rentHold <= 0) return;
+    rentHold -= dt;
+    const stalls = market.npcs.filter((n) => (TRADERS as readonly string[]).includes(n.id));
+    rentAt.set(0, 0, 0);
+    for (const n of stalls) rentAt.add(n.root.position);
+    rentAt.divideScalar(Math.max(1, stalls.length)).setY(1.4);
+    rentEye.copy(rentAt).add(new THREE.Vector3(0, 6.5, 15));
+    rig.camera.position.copy(rentEye);
+    rig.camera.lookAt(rentAt);
+    if (rentHold <= 0 && rentDone) { const d = rentDone; rentDone = null; player.frozen = false; d(); }
+  });
   const runClock = (minutes: number): void => {
     let left = minutes;
     while (left > 1e-9) {
@@ -1021,7 +1066,7 @@ export async function createPlay(game: Game): Promise<Play> {
       left -= stepMin;
       if (state.minute >= rent - 1e-6) {
         if (ff && state.minute >= ff.until) { endFastForward(false); return; }
-        if (!ff && unlocked(state, "rent")) { showReport(`Evening, Day ${dayOf(state.minute)}`, mark, false); return; }
+        if (!ff && unlocked(state, "rent")) { const from = mark; rentNight(() => showReport(`Evening, Day ${dayOf(state.minute)}`, from, false)); return; }
         if (!ff) mark = snap(state); // during the first mission evenings pass quietly
       }
     }
@@ -1052,7 +1097,7 @@ export async function createPlay(game: Game): Promise<Play> {
     autosaveIn -= dt;
     if (autosaveIn <= 0) { autosaveIn = AUTOSAVE_SEC; save(); }
     state.flags.onchain = playerId() !== null && !ff; // connected: the chain runs the market (see chainLive)
-    if (mode.kind === "walk") runClock(dt * (ff ? FF_MIN_PER_SEC : GAME_MIN_PER_SEC * (unlocked(state, "rent") ? 1 : TUTORIAL_CLOCK)));
+    if (mode.kind === "walk" && rentHold <= 0) runClock(dt * (ff ? FF_MIN_PER_SEC : GAME_MIN_PER_SEC * (unlocked(state, "rent") ? 1 : TUTORIAL_CLOCK)));
     const hour = Math.floor(state.minute / 60);
     if (hour !== lastHour) { townHour(lastHour); lastHour = hour; drawBoards(); save(); }
 
