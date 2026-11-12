@@ -211,28 +211,52 @@ export function lineFor(action: Action, from: number, to: number, s: Record<stri
   return `I'm keeping my mango bid at ${to} coins today. Everything is in balance, dear.`;
 }
 
-const decided = new Map<string, Decision>();
-const history: Decision[] = [];
-const HISTORY_MAX = 20;
+/** Persistent key-value store the guard lives in: Upstash Redis in production (handlers.ts), a Map in dev and tests. */
+export interface DecisionStore {
+  get(key: string): Promise<string | null>;
+  /** SET key value NX EX ttl: true only for the one caller that created it. */
+  setNx(key: string, value: string, ttlSec: number): Promise<boolean>;
+  set(key: string, value: string, ttlSec: number): Promise<void>;
+  del(key: string): Promise<void>;
+}
 
-/** Test hook: forget every decision (the real service keeps them for the life of the server instance). */
-export function resetDecisions(): void { decided.clear(); history.length = 0; }
-export const recentDecisions = (merchant?: MerchantId): readonly Decision[] => history.filter((d) => !merchant || d.merchant === merchant).slice(-10).reverse();
-export const decisionKey = (id: MerchantId, day: number): string => `${id}:${day}`;
-export const decisionFor = (id: MerchantId, day: number): Decision | undefined => decided.get(decisionKey(id, day));
+const DAY_SEC = 600; // one market day (handlers.ts MARKET_DAY_MS = 10 min)
+const DECISION_TTL = DAY_SEC * 3; // kept past the day so the board can still show it
+const LOCK_TTL = 30; // a crashed tick frees the lock after this
+const keyOf = (id: MerchantId, day: number): string => `vivolith:agent:${id}:${day}`;
+export const decisionKey = keyOf;
+
+export async function decisionFor(store: DecisionStore, id: MerchantId, day: number): Promise<Decision | null> {
+  const raw = await store.get(keyOf(id, day));
+  if (!raw) return null;
+  try { return JSON.parse(raw) as Decision; } catch { return null; }
+}
+
+/** The merchant's decisions for this market day and the one before, newest first (read-only, for the board). */
+export async function recentDecisions(store: DecisionStore, id: MerchantId, day: number): Promise<Decision[]> {
+  const out: Decision[] = [];
+  for (const d of [day, day - 1]) { const x = await decisionFor(store, id, d); if (x) out.push(x); }
+  return out;
+}
+
+/** Claims the one right to send this merchant's bid transaction for the market day. Concurrent ticks: exactly one true.
+ *  Release it when the transaction fails so the next tick may retry. */
+export async function claimBidSend(store: DecisionStore, id: MerchantId, day: number): Promise<boolean> {
+  return store.setNx(`${keyOf(id, day)}:bid`, String(Date.now()), DECISION_TTL);
+}
+export const releaseBidSend = (store: DecisionStore, id: MerchantId, day: number): Promise<void> => store.del(`${keyOf(id, day)}:bid`);
 
 /** Records the transaction that carried a decision out (called after the bid is confirmed). */
-export function attachTx(id: MerchantId, day: number, txHash: string | null): Decision | null {
-  const d = decided.get(decisionKey(id, day));
+export async function attachTx(store: DecisionStore, id: MerchantId, day: number, txHash: string | null): Promise<Decision | null> {
+  const d = await decisionFor(store, id, day);
   if (!d) return null;
   const next: Decision = { ...d, txHash };
-  decided.set(decisionKey(id, day), next);
-  const i = history.findIndex((h) => h.merchant === id && h.day === day);
-  if (i >= 0) history[i] = next;
+  await store.set(keyOf(id, day), JSON.stringify(next), DECISION_TTL);
   return next;
 }
 
 export interface DecideInput {
+  readonly store: DecisionStore;
   readonly cfg: AgentConfig;
   readonly st: EconomyState;
   readonly id: MerchantId;
@@ -240,6 +264,9 @@ export interface DecideInput {
   readonly day: number;
   readonly fetchImpl: FetchLike;
   readonly now?: () => number;
+  /** Test hooks for the wait on a concurrent tick. */
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly waitSteps?: number;
 }
 
 export interface Outcome {
@@ -249,15 +276,44 @@ export interface Outcome {
   readonly decision: Decision | null;
   /** True when this market day already had a decision (nothing was asked of the model again). */
   readonly duplicate: boolean;
+  /** True when another tick is deciding right now: this tick must not post this merchant's bid at all. */
+  readonly skipBid: boolean;
 }
 
-/** One decision per merchant per market day. Idempotent: a second call for the same day returns the first. */
+/** One effective decision per merchant per market day, shared by every serverless instance through the store:
+ *  a stored decision is returned as is; otherwise exactly one caller wins the lock and asks the model, while any
+ *  concurrent caller waits briefly for that result (or, if it never lands, skips the bid this turn). If the store
+ *  itself is down nothing is decided and the plain rule price is used, exactly as before the agent existed. */
 export async function decideBid(i: DecideInput): Promise<Outcome> {
-  const { cfg, st, id, offers, day } = i;
+  const { store, cfg, st, id, offers, day } = i;
+  const rule = (): Outcome => ({ price: bidFor(st, id, "mango")?.price ?? 1, decision: null, duplicate: false, skipBid: false });
   const band = cfg.enabled.has(id) ? bandFor(st, id, offers) : null;
-  if (!band) return { price: bidFor(st, id, "mango")?.price ?? 1, decision: null, duplicate: false };
-  const prior = decisionFor(id, day);
-  if (prior) return { price: prior.price, decision: prior, duplicate: true };
+  if (!band) return rule();
+  try {
+    const prior = await decisionFor(store, id, day);
+    if (prior) return { price: prior.price, decision: prior, duplicate: true, skipBid: false };
+    if (!(await store.setNx(`${keyOf(id, day)}:lock`, "1", LOCK_TTL))) { // another tick owns this decision
+      for (let k = 0; k < (i.waitSteps ?? 8); k++) {
+        await (i.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))))(500);
+        const d = await decisionFor(store, id, day);
+        if (d) return { price: d.price, decision: d, duplicate: true, skipBid: true }; // that tick posts the bid
+      }
+      return { price: band.base, decision: null, duplicate: true, skipBid: true };
+    }
+    try {
+      const out = await decideFresh(i, band);
+      await store.set(keyOf(id, day), JSON.stringify(out.decision), DECISION_TTL);
+      return out;
+    } finally {
+      await store.del(`${keyOf(id, day)}:lock`).catch(() => undefined);
+    }
+  } catch {
+    return rule(); // store unavailable: no idempotency guarantee, so no model call and no agent-priced bid
+  }
+}
+
+async function decideFresh(i: DecideInput, band: Band): Promise<Outcome & { decision: Decision }> {
+  const { cfg, st, id, offers, day } = i;
   const state = stateFor(st, id, offers, band, day);
   const at = (i.now ?? Date.now)();
   const make = (action: Action, source: "ai" | "fallback", price: number, ai: AiAnswer | null, why: string | null): Decision => ({
@@ -266,21 +322,16 @@ export async function decideBid(i: DecideInput): Promise<Outcome> {
     receipt: ai?.decisionId ? { id: ai.decisionId, status: "unverified", note: "receipt id captured from X-Generation-Id; NEAR AI verification not run" } : { id: null, status: "none", note: "no inference receipt" },
     justification: justify(action, state), line: lineFor(action, band.base, price, state), fallbackReason: why, txHash: null, at,
   });
-  const store = (d: Decision): Outcome => {
-    decided.set(decisionKey(id, day), d);
-    history.push(d);
-    if (history.length > HISTORY_MAX) history.shift();
-    return { price: d.price, decision: d, duplicate: false };
-  };
+  const done = (d: Decision): Outcome & { decision: Decision } => ({ price: d.price, decision: d, duplicate: false, skipBid: false });
   let ai: AiAnswer;
   try {
     ai = await askModel(cfg, { state, questions: questionsFor(id, band) }, i.fetchImpl);
   } catch (e) {
-    return store(make("hold", "fallback", band.base, null, e instanceof AgentError ? `${e.kind}: ${e.message}` : "unexpected error"));
+    return done(make("hold", "fallback", band.base, null, e instanceof AgentError ? `${e.kind}: ${e.message}` : "unexpected error"));
   }
-  if (ai.confidence !== null && ai.confidence < MIN_CONFIDENCE) return store(make("hold", "ai", band.base, ai, `confidence ${ai.confidence} under ${MIN_CONFIDENCE}: held`));
-  if (ai.action === "raise" && band.raise === null) return store(make("hold", "fallback", band.base, null, "invalid: raise is not permitted (limit or funds)"));
-  if (ai.action === "lower" && band.lower === null) return store(make("hold", "fallback", band.base, null, "invalid: lower is not permitted (limit)"));
+  if (ai.confidence !== null && ai.confidence < MIN_CONFIDENCE) return done(make("hold", "ai", band.base, ai, `confidence ${ai.confidence} under ${MIN_CONFIDENCE}: held`));
+  if (ai.action === "raise" && band.raise === null) return done(make("hold", "fallback", band.base, null, "invalid: raise is not permitted (limit or funds)"));
+  if (ai.action === "lower" && band.lower === null) return done(make("hold", "fallback", band.base, null, "invalid: lower is not permitted (limit)"));
   const price = ai.action === "raise" ? band.raise! : ai.action === "lower" ? band.lower! : band.base;
-  return store(make(ai.action, "ai", price, ai, null));
+  return done(make(ai.action, "ai", price, ai, null));
 }

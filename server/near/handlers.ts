@@ -14,7 +14,7 @@ import { MERCHANTS, keyPairFromSeed, merchantKey, residentKey, type MerchantId }
 import { RESIDENTS, planResident, type Offer } from "../../src/economy/residents.ts";
 import { synthesize } from "./voice.ts";
 import { answer, factsFor } from "./talk.ts";
-import { agentConfig, attachTx, decideBid, recentDecisions, type Decision } from "./agent.ts";
+import { agentConfig, attachTx, claimBidSend, decideBid, recentDecisions, releaseBidSend, type Decision, type DecisionStore } from "./agent.ts";
 import { ORCHARD_PICK, bidFor, planMerchantTrades, quote } from "../../src/economy/pricing.ts";
 import { closingNeed, shopperWant } from "../../src/economy/sim.ts";
 import { initialEconomy, type EconomyState } from "../../src/economy/state.ts";
@@ -136,6 +136,33 @@ async function kv(cfg: Config, cmd: ["GET", string] | ["SET", string, string]): 
   }
   if (cmd[0] === "SET") { kvMemory.set(cmd[1], cmd[2]); return "OK"; }
   return kvMemory.get(cmd[1]) ?? null;
+}
+
+const agentMemory = new Map<string, { v: string; until: number }>();
+/** The decision guard's store: the same Upstash Redis REST the limiter and market clock use (persistent, shared by every
+ *  instance), else per-instance memory for local dev. Redis errors throw: agent.ts then falls back to the rule price. */
+function decisionStore(cfg: Config): DecisionStore {
+  if (cfg.redisUrl && cfg.redisToken) {
+    const cmd = async (args: string[]): Promise<string | null> => {
+      const r = await fetch(cfg.redisUrl!, { method: "POST", headers: { authorization: `Bearer ${cfg.redisToken}`, "content-type": "application/json" }, body: JSON.stringify(args) });
+      if (!r.ok) throw new Error("decision store unavailable");
+      const res = ((await r.json()) as { result: string | number | null }).result;
+      return res === null ? null : String(res);
+    };
+    return {
+      get: (k) => cmd(["GET", k]),
+      setNx: async (k, v, ttl) => (await cmd(["SET", k, v, "NX", "EX", String(ttl)])) === "OK",
+      set: async (k, v, ttl) => { await cmd(["SET", k, v, "EX", String(ttl)]); },
+      del: async (k) => { await cmd(["DEL", k]); },
+    };
+  }
+  const live = (k: string): string | null => { const e = agentMemory.get(k); return e && e.until > Date.now() ? e.v : null; };
+  return {
+    get: async (k) => live(k),
+    setNx: async (k, v, ttl) => { if (live(k) !== null) return false; agentMemory.set(k, { v, until: Date.now() + ttl * 1000 }); return true; },
+    set: async (k, v, ttl) => { agentMemory.set(k, { v, until: Date.now() + ttl * 1000 }); },
+    del: async (k) => { agentMemory.delete(k); },
+  };
 }
 
 // ---------- helpers ----------
@@ -745,6 +772,7 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
   const st = await chainEconomy(provider, cfg);
   const posted = new Map((await view<OfferRow[]>(provider, cfg.contractId, "get_offers", {})).map((o) => [orderKey(o), o]));
   const agentCfg = agentConfig(env);
+  const agentStore = decisionStore(cfg);
   const signerOf = (id: MerchantId): Account => new Account(`${id}.${cfg.relayerId}`, provider, new KeyPairSigner(merchantKey(id, secret)));
   const log: string[] = [];
   const txs: string[] = [];
@@ -798,22 +826,28 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
     // a closed stall sells nothing until it reopens (the contract refuses those sales anyway)
     for (const good of m.sells) want("ask", good, m.status === "open" ? m.stock[good] : 0, quote(st, id, good, false).price);
     // Shares need no orders: their terms are fixed in the contract, which issues and buys back on demand.
-    let agent: Decision | null = null;
+    let agent: Decision | null = null, skipAgentBid = false;
     for (const good of ["mango", "lemon"] as const) {
       const b = bidFor(st, id, good);
       let price = b?.price ?? 1;
       if (good === "mango" && b) { // NEAR AI decides Pema's mango bid (agent.ts); off, or any failure, leaves the rule price
-        const out = await decideBid({ cfg: agentCfg, st, id, offers: [...posted.values()], day, fetchImpl: fetch as never });
+        const out = await decideBid({ store: agentStore, cfg: agentCfg, st, id, offers: [...posted.values()], day, fetchImpl: fetch as never });
         agent = out.decision;
         price = out.price;
+        skipAgentBid = out.skipBid; // another tick holds this day's decision and posts its bid
         if (agent) log.push(`${id} ${agent.source === "ai" ? "NEAR AI" : "rule"} decision: ${agent.action} mango bid ${agent.basePrice} -> ${agent.price} c${agent.fallbackReason ? ` (${agent.fallbackReason})` : ""}`);
       }
+      if (good === "mango" && skipAgentBid) continue; // a concurrent tick owns this merchant's mango bid today
       want("bid", good, b ? Math.min(b.qty, Math.floor(m.cash / Math.max(1, price))) : 0, price);
     }
     // Function-call keys allow one action per transaction: one tx per order, in sequence for this merchant.
     const hashes: string[] = [];
     for (const call of calls) {
+      // the agent-priced mango bid is sent by exactly one tick per market day (Redis claim); a failure releases it for a retry
+      const agentBid = agent !== null && call.functionCall?.methodName === "bid" && (JSON.parse(new TextDecoder().decode(call.functionCall.args)) as { token_id: string }).token_id === "mango";
+      if (agentBid && !(await claimBidSend(agentStore, id, day).catch(() => true))) { hashes.push(""); log.push(`${id} mango bid already sent for market day ${day}`); continue; }
       const r = outcome(await signerOf(id).signAndSendTransaction({ receiverId: cfg.contractId, actions: [call], throwOnFailure: false }));
+      if (agentBid && !r.ok) await releaseBidSend(agentStore, id, day).catch(() => undefined);
       hashes.push(r.txHash);
       const fc = call.functionCall!;
       const a = JSON.parse(new TextDecoder().decode(fc.args)) as { token_id: string; qty: string; price: string; per?: string };
@@ -821,7 +855,7 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
     }
     if (agent) { // keep the hash of the transaction that carried the decision (none when the bid was already posted)
       const at = calls.findIndex((c) => c.functionCall?.methodName === "bid" && (JSON.parse(new TextDecoder().decode(c.functionCall.args)) as { token_id: string }).token_id === "mango");
-      if (at >= 0 && hashes[at]) attachTx(id, day, hashes[at]); // a repeat tick posts nothing: the first hash stays
+      if (at >= 0 && hashes[at]) await attachTx(agentStore, id, day, hashes[at]).catch(() => undefined); // a repeat tick posts nothing: the first hash stays
     }
     return hashes;
   }));
@@ -970,9 +1004,10 @@ export async function handle(route: string, req: Request, env: RelayEnv): Promis
     if (route === "settle") return await settle(cfg);
     if (route === "deal") return await deal(cfg, req, env);
     if (route === "tick") return await tick(cfg, env);
-    if (route === "decisions" && req.method === "GET") { // read-only: the merchants' recent NEAR AI / rule decisions
-      const who = new URL(req.url).searchParams.get("merchant");
-      return json(200, { decisions: recentDecisions((MERCHANTS as readonly string[]).includes(who ?? "") ? (who as MerchantId) : undefined) });
+    if (route === "decisions" && req.method === "GET") { // read-only: the merchant's recent NEAR AI / rule decisions
+      const who = new URL(req.url).searchParams.get("merchant") ?? "";
+      if (!(MERCHANTS as readonly string[]).includes(who)) return json(200, { decisions: [] });
+      return json(200, { decisions: await recentDecisions(decisionStore(cfg), who as MerchantId, Math.floor(Date.now() / MARKET_DAY_MS)).catch(() => []) });
     }
     if (route === "pick") return await pick(cfg, req);
     if (route === "talk") return await talk(cfg, req, env);

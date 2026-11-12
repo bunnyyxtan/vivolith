@@ -2,11 +2,26 @@
 // Mocked-response tests for the merchant decision service. No network, no model call, no credits, no chain.
 import assert from "node:assert/strict";
 import { initialEconomy } from "../../src/economy/state.ts";
-import { MIN_CONFIDENCE, agentConfig, attachTx, bandFor, decideBid, decisionFor, parseAnswer, recentDecisions, resetDecisions, stateFor, type AgentConfig, type BookOffer, type FetchLike } from "./agent.ts";
+import { MIN_CONFIDENCE, agentConfig, attachTx, bandFor, claimBidSend, decideBid, decisionFor, parseAnswer, recentDecisions, releaseBidSend, stateFor, type AgentConfig, type BookOffer, type DecisionStore, type FetchLike } from "./agent.ts";
 
 const cfg: AgentConfig = agentConfig({ NEAR_AGENT_MERCHANTS: "pema", NEAR_AI_KEY: "test-key-not-real" });
 const offers: BookOffer[] = [{ merchant: "tomas", token_id: "mango", side: "ask", qty: "20", price: "6" }];
 const DAY = 7;
+
+/** A shared store like Upstash: several "instances" use the same one; fail() simulates Redis being down. */
+function memStore(): DecisionStore & { down: boolean; data: Map<string, string> } {
+  const data = new Map<string, string>();
+  const s = {
+    down: false, data,
+    get: async (k: string) => { if (s.down) throw new Error("down"); return data.get(k) ?? null; },
+    setNx: async (k: string, v: string) => { if (s.down) throw new Error("down"); if (data.has(k)) return false; data.set(k, v); return true; },
+    set: async (k: string, v: string) => { if (s.down) throw new Error("down"); data.set(k, v); },
+    del: async (k: string) => { if (s.down) throw new Error("down"); data.delete(k); },
+  };
+  return s;
+}
+let store = memStore();
+const resetDecisions = (): void => { store = memStore(); };
 
 const stall = () => {
   const st = initialEconomy();
@@ -20,7 +35,7 @@ const reply = (answer: unknown, id: string | null = "gen-123", status = 200): Fe
 const choice = (c: string, confidence = 0.9) => ({ type: "choice", choice: c, confidence, probabilities: { raise: 0.1, hold: 0.1, lower: 0.1, [c]: confidence } });
 let calls = 0;
 const counting = (f: FetchLike): FetchLike => async (...a) => { calls++; return f(...a); };
-const decide = (st = stall(), f: FetchLike = reply(choice("raise")), c = cfg) => decideBid({ cfg: c, st, id: "pema", offers, day: DAY, fetchImpl: counting(f), now: () => 1000 });
+const decide = (st = stall(), f: FetchLike = reply(choice("raise")), c = cfg) => decideBid({ store, cfg: c, st, id: "pema", offers, day: DAY, fetchImpl: counting(f), now: () => 1000, sleep: async () => undefined });
 
 // The band comes from the economy's own rules.
 {
@@ -52,9 +67,9 @@ const decide = (st = stall(), f: FetchLike = reply(choice("raise")), c = cfg) =>
   assert.ok(o.decision.justification.length >= 3 && o.decision.justification.join(" ").includes("4 of "));
   assert.ok(o.decision.line.includes(String(o.price)));
   assert.equal(o.decision.txHash, null);
-  attachTx("pema", DAY, "TXHASH123");
-  assert.equal(decisionFor("pema", DAY)?.txHash, "TXHASH123");
-  assert.equal(recentDecisions("pema")[0].txHash, "TXHASH123");
+  await attachTx(store, "pema", DAY, "TXHASH123");
+  assert.equal((await decisionFor(store, "pema", DAY))?.txHash, "TXHASH123");
+  assert.equal((await recentDecisions(store, "pema", DAY))[0].txHash, "TXHASH123");
 }
 
 // 2. Lower and hold map to their prices too.
@@ -74,7 +89,7 @@ const decide = (st = stall(), f: FetchLike = reply(choice("raise")), c = cfg) =>
   assert.equal(calls, 1, "the model is asked once per merchant per market day");
   assert.ok(b.duplicate); assert.equal(b.price, a.price); assert.equal(b.decision?.action, a.decision?.action);
   // a new market day is a new decision
-  const c = await decideBid({ cfg, st: stall(), id: "pema", offers, day: DAY + 1, fetchImpl: counting(reply(choice("hold"))) });
+  const c = await decideBid({ store, cfg, st: stall(), id: "pema", offers, day: DAY + 1, fetchImpl: counting(reply(choice("hold"))) });
   assert.ok(!c.duplicate); assert.equal(calls, 2);
 }
 
@@ -116,7 +131,7 @@ assert.equal(parseAnswer({ answers: { bid_action: { type: "choice", choice: "rai
   const tight: BookOffer[] = [{ merchant: "tomas", token_id: "mango", side: "ask", qty: "20", price: "1" }];
   const band = bandFor(st, "pema", tight)!;
   assert.equal(band.raise, null, "never bid above the cheapest rival ask");
-  const o = await decideBid({ cfg, st, id: "pema", offers: tight, day: DAY, fetchImpl: reply(choice("raise")) });
+  const o = await decideBid({ store, cfg, st, id: "pema", offers: tight, day: DAY, fetchImpl: reply(choice("raise")) });
   assert.equal(o.price, band.base);
   resetDecisions();
   const st2 = stall();
@@ -157,7 +172,7 @@ assert.equal(parseAnswer({ answers: { bid_action: { type: "choice", choice: "rai
   resetDecisions(); calls = 0;
   const off = await decide(stall(), reply(choice("raise")), agentConfig({ NEAR_AI_KEY: "k" }));
   assert.equal(calls, 0); assert.equal(off.decision, null, "disabled: the tick behaves exactly as before");
-  const tomas = await decideBid({ cfg, st: stall(), id: "tomas", offers, day: DAY, fetchImpl: counting(reply(choice("raise"))) });
+  const tomas = await decideBid({ store, cfg, st: stall(), id: "tomas", offers, day: DAY, fetchImpl: counting(reply(choice("raise"))) });
   assert.equal(calls, 0); assert.equal(tomas.decision, null, "only enabled merchants decide");
 }
 
@@ -174,6 +189,59 @@ assert.equal(parseAnswer({ answers: { bid_action: { type: "choice", choice: "rai
   const q = seen!.body.questions.bid_action;
   assert.equal(q.type, "choice"); assert.deepEqual(Object.keys(q.criteria).sort(), ["hold", "lower", "raise"]);
   assert.equal(seen!.body.state.mangoes_on_shelf, 4);
+}
+
+// 12. Persistence: a "restarted" instance (fresh module state, same Redis) sees the stored decision and asks nothing.
+{
+  resetDecisions(); calls = 0;
+  const first = await decide(stall(), reply(choice("hold")));
+  const after = await decide(stall(), reply(choice("raise"))); // a new instance would call decide() again: same store
+  assert.equal(calls, 1, "one model call per merchant per market day, across restarts");
+  assert.ok(after.duplicate && after.price === first.price && !after.skipBid);
+  assert.ok([...store.data.keys()].every((k) => k.startsWith("vivolith:agent:pema:")), "keys are namespaced per merchant and day");
+}
+
+// 13. Concurrent ticks: both start together; exactly one asks the model, the other waits for that result and skips the bid.
+{
+  resetDecisions(); calls = 0;
+  const slow: FetchLike = async (...a) => { await new Promise((r) => setTimeout(r, 30)); return reply(choice("hold"))(...a); };
+  let waits = 0;
+  const run = () => decideBid({ store, cfg, st: stall(), id: "pema", offers, day: DAY, fetchImpl: counting(slow), now: () => 1000, sleep: async () => { waits++; await new Promise((r) => setTimeout(r, 20)); } });
+  const [a, b] = await Promise.all([run(), run()]);
+  assert.equal(calls, 1, "the model is asked once for two concurrent ticks");
+  const winner = a.duplicate ? b : a, loser = a.duplicate ? a : b;
+  assert.ok(!winner.duplicate && !winner.skipBid, "the winner posts the bid");
+  assert.ok(loser.duplicate && loser.skipBid, "the other tick does not post a bid");
+  assert.equal(loser.price, winner.price); assert.ok(waits >= 1);
+  assert.equal(store.data.has("vivolith:agent:pema:" + DAY + ":lock"), false, "the lock is released");
+}
+
+// 14. A lock that never resolves (the other tick crashed): wait, then skip the bid this turn, no model call.
+{
+  resetDecisions(); calls = 0;
+  store.data.set("vivolith:agent:pema:" + DAY + ":lock", "1");
+  const o = await decideBid({ store, cfg, st: stall(), id: "pema", offers, day: DAY, fetchImpl: counting(reply(choice("raise"))), sleep: async () => undefined, waitSteps: 3 });
+  assert.equal(calls, 0); assert.ok(o.skipBid && o.decision === null);
+  assert.equal(o.price, bandFor(stall(), "pema", offers)!.base, "deterministic price");
+}
+
+// 15. Redis down: no idempotency guarantee, so no model call and the plain rule price, exactly as before the agent.
+{
+  resetDecisions(); calls = 0;
+  store.down = true;
+  const o = await decide(stall(), reply(choice("raise")));
+  assert.equal(calls, 0); assert.equal(o.decision, null); assert.ok(!o.skipBid);
+  assert.equal(o.price, bandFor(stall(), "pema", offers)!.base);
+}
+
+// 16. Bid send claim: of concurrent ticks exactly one may send the transaction; a failed send is released for a retry.
+{
+  resetDecisions();
+  const claims = await Promise.all([1, 2, 3, 4].map(() => claimBidSend(store, "pema", DAY)));
+  assert.equal(claims.filter(Boolean).length, 1, "one bid transaction per merchant per market day");
+  assert.equal(await claimBidSend(store, "pema", DAY + 1), true, "a new market day is a new claim");
+  await releaseBidSend(store, "pema", DAY);
+  assert.equal(await claimBidSend(store, "pema", DAY), true, "released after a failed send, the retry may go");
 }
 
 console.log("agent decision checks passed");
