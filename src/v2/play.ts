@@ -1249,11 +1249,14 @@ export async function createPlay(game: Game): Promise<Play> {
   const targetAt = (id: Target): THREE.Vector3 | null => (id === "orchard" ? game.look.scene.getObjectByName("PLACARD_orchard")?.getWorldPosition(new THREE.Vector3()) ?? null : market.npcs.find((n) => n.id === id)?.root.position ?? null);
 
   // ---------------------------------------------------------------- city map ----
+  const camDir = new THREE.Vector3();
+  let lastYaw = 0;
   const cityMap = createCityMap({
     scene: game.look.scene, colliders: game.colliders,
     player: () => ({ x: player.body.x, z: player.body.z, heading: player.heading }),
     objective: () => { const o = guide.current(state); return o?.target ? targetAt(o.target) : null; },
-    merchants: () => TRADERS.flatMap((id) => { const n = market.npcs.find((x) => x.id === id); return n ? [{ name: state.merchants[id].name, at: n.root.position }] : []; }),
+    cameraYaw: () => { const f = rig.camera.getWorldDirection(camDir); if (Math.hypot(f.x, f.z) > 0.02) lastYaw = Math.atan2(f.x, f.z); return lastYaw; },
+    merchants: () => TRADERS.flatMap((id) => { const n = market.npcs.find((x) => x.id === id); return n ? [{ name: state.merchants[id].name, at: n.root.position, stall: n.post.stall }] : []; }),
     allowed: () => mode.kind === "walk" && !play.paused && !ff,
     setFrozen: (on) => { player.frozen = on; game.input.setUi(on); },
   });
