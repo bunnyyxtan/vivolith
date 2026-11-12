@@ -11,6 +11,10 @@ function gradient(steps: number[]): THREE.DataTexture {
   return t;
 }
 const RAMP = gradient([120, 175, 225, 255]);
+/** Characters get a softer top step: under the 3.4 sun a full 255 clipped cream fabric to flat white (no texture left). */
+const CHAR_RAMP = gradient([112, 160, 200, 226]);
+/** Tripo's baked normal maps read as scratchy, wet highlights through toon bands; kept at this fraction of their strength. */
+const CHAR_NORMAL = 0.35;
 
 /** Ink line width on screen (CSS pixels) close up; with distance it thins with the world thickness instead. */
 const INK_PX = 1.6;
@@ -40,7 +44,12 @@ void main() {
   }
   gl_Position = clip;
 }`;
-const OUTLINE_FRAG = /* glsl */ `uniform vec3 inkColor; void main() { gl_FragColor = vec4(inkColor, 1.0); }`;
+const OUTLINE_FRAG = /* glsl */ `uniform vec3 inkColor; uniform float inkLight; void main() { gl_FragColor = vec4(inkColor * inkLight, 1.0); }`;
+
+/** Character ink follows the scene light (1 by day): an unlit navy line read lighter than the shaded body at night and
+ *  showed as a pale edge. Props keep a constant 1. */
+const charInkLight = { value: 1 };
+export function setInkLight(v: number): void { charInkLight.value = v; }
 
 // ---------- glow: every emissive surface (lamps, bulbs, lit windows) follows one level, near 0 by day ----------
 const glowing = new Set<THREE.MeshStandardMaterial | THREE.MeshToonMaterial>();
@@ -67,12 +76,12 @@ export function setGlow(level: number): void {
   for (const m of glowing) m.emissiveIntensity = Number(m.userData.glow0) * level;
 }
 
-function toToon(src: THREE.Material): THREE.MeshToonMaterial {
+function toToon(src: THREE.Material, character = false): THREE.MeshToonMaterial {
   const s = src as THREE.MeshStandardMaterial;
   const m = new THREE.MeshToonMaterial({
     color: s.color?.clone() ?? new THREE.Color("#fff"),
     map: s.map ?? null,
-    gradientMap: RAMP,
+    gradientMap: character ? CHAR_RAMP : RAMP,
     emissive: s.emissive?.clone() ?? new THREE.Color(0),
     emissiveIntensity: s.emissiveIntensity ?? 1,
     emissiveMap: s.emissiveMap ?? null,
@@ -81,16 +90,23 @@ function toToon(src: THREE.Material): THREE.MeshToonMaterial {
     alphaTest: s.alphaTest,
   });
   m.onBeforeCompile = (sh) => {
-    // cool fresnel rim light
+    // Props: cool fresnel rim light. Characters: the rim only brightens the surface's own lit colour (a fixed cool
+    // add painted a white-cyan halo on every character at night), and the lit result is eased 10% toward grey so the
+    // post grade's saturation does not turn sunset skin orange.
     sh.fragmentShader = sh.fragmentShader.replace(
       "#include <opaque_fragment>",
-      `float rimF = pow(1.0 - saturate(dot(normalize(vNormal), normalize(vViewPosition))), 3.0);
-       outgoingLight += rimF * vec3(0.45, 0.7, 1.0) * 0.4;
-       #include <opaque_fragment>`,
+      character
+        ? `float rimF = pow(1.0 - saturate(dot(normalize(vNormal), normalize(vViewPosition))), 3.0);
+           outgoingLight += outgoingLight * rimF * 0.3;
+           outgoingLight = mix(vec3(dot(outgoingLight, vec3(0.2126, 0.7152, 0.0722))), outgoingLight, 0.9);
+           #include <opaque_fragment>`
+        : `float rimF = pow(1.0 - saturate(dot(normalize(vNormal), normalize(vViewPosition))), 3.0);
+           outgoingLight += rimF * vec3(0.45, 0.7, 1.0) * 0.4;
+           #include <opaque_fragment>`,
     );
   };
-  m.customProgramCacheKey = () => "toon-rim";
-  if (s.normalMap) { m.normalMap = s.normalMap; m.normalScale.copy(s.normalScale); } // keep surface detail
+  m.customProgramCacheKey = () => (character ? "toon-char" : "toon-rim");
+  if (s.normalMap) { m.normalMap = s.normalMap; m.normalScale.copy(s.normalScale).multiplyScalar(character ? CHAR_NORMAL : 1); } // keep surface detail
   trackGlow(m);
   return m;
 }
@@ -122,7 +138,8 @@ export function applyToon(root: THREE.Object3D, thickness = 0.012, ink = "#1a223
   root.traverse((o) => { if (o instanceof THREE.Mesh) meshes.push(o); });
   for (const mesh of meshes) {
     mesh.getWorldScale(worldScale);
-    mesh.material = Array.isArray(mesh.material) ? mesh.material.map(toToon) : toToon(mesh.material);
+    const character = mesh instanceof THREE.SkinnedMesh;
+    mesh.material = Array.isArray(mesh.material) ? mesh.material.map((m) => toToon(m, character)) : toToon(mesh.material, character);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     mesh.frustumCulled = false;
@@ -137,6 +154,7 @@ export function applyToon(root: THREE.Object3D, thickness = 0.012, ink = "#1a223
         inkColor: { value: inkFor(first, ink) },
         resolution: inkRes,
         inkPx: { value: INK_PX },
+        inkLight: mesh instanceof THREE.SkinnedMesh ? charInkLight : { value: 1 },
       },
     });
     let hull: THREE.Mesh;

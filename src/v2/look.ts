@@ -5,7 +5,7 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
-import { DAY_GLOW, setGlow } from "./toon";
+import { DAY_GLOW, setGlow, setInkLight } from "./toon";
 
 export interface Pipeline {
   render(): void;
@@ -211,6 +211,8 @@ export function createLook(canvas: HTMLCanvasElement): Look {
       mixC(fog.color, a.fog, b.fog, t);
       renderer.toneMappingExposure = a.exposure + (b.exposure - a.exposure) * t;
       setGlow(a.glow + (b.glow - a.glow) * t);
+      // character ink follows the light of the hour: 1 by day, ~0.5 at dusk, ~0.3 at night
+      setInkLight(Math.pow((sun.intensity * 0.3 + hemi.intensity * 0.7) / (DAY.sunI * 0.3 + DAY.hemiI * 0.7), 1.5));
       // the sky's reflections: re-bake every quarter game-hour (a few ms; never per frame)
       const q = Math.floor(h * 4), now = performance.now();
       if (q !== lastBake && now - bakedAt > 500) { lastBake = q; bakedAt = now; rebakeEnv(); } // fast-forward: twice a second at most
