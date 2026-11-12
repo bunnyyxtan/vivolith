@@ -12721,6 +12721,303 @@ const PERSONALITY = {
 		patience: 100
 	}
 };
+const BID_STRETCH = 1.3;
+const PATIENCE_HIT = 14;
+const PATIENCE_FAIL = 34;
+const LOT = 3;
+const lockKey = (id) => `haggleLock.${id}`;
+const isLocked = (s, id) => s.flags[lockKey(id)] === dayOf(s.minute);
+/** Kavi sells when he carries mangoes and the merchant is bidding for them (Pema restocking, Arin's kitchen,
+*  Mira buying surplus); otherwise he buys. Arin only ever buys mangoes. */
+function modeFor(s, id) {
+	if (id === "arin") return "sell";
+	return s.player.inventory.mango > 0 && bidFor(s, id, "mango") ? "sell" : "buy";
+}
+function context(s, id, good) {
+	const m = s.merchants[id];
+	const ratio = m.stock[good] / Math.max(1, m.target[good]);
+	let rivalName = "Tomas", rivalPrice = null;
+	if (id === "pema" || id === "tomas") {
+		const r = id === "pema" ? "tomas" : "pema";
+		rivalName = s.merchants[r].name;
+		if (s.merchants[r].status === "open" && s.merchants[r].stock[good] > 0) rivalPrice = quote(s, r, good).price;
+	} else {
+		const best = cheapestMango(s);
+		if (best) {
+			rivalName = s.merchants[best.seller].name;
+			rivalPrice = best.price;
+		}
+	}
+	return {
+		needsCash: m.cash < m.rent,
+		comfortable: m.cash > m.rent * 4,
+		scarce: ratio < .5,
+		overstocked: ratio > 1.2,
+		rivalName,
+		rivalPrice
+	};
+}
+function openHaggle(s, id) {
+	const m = s.merchants[id];
+	if (m.status !== "open") return { error: `${m.shop} is closed.` };
+	if (isLocked(s, id)) return { error: `${PERSONALITY[id].name} won't haggle with you again today.` };
+	const good = "mango";
+	const mode = modeFor(s, id);
+	if (mode === "buy") {
+		const q = quote(s, id, good);
+		const qty = Math.min(LOT, m.stock[good], Math.floor(s.player.coins / q.price));
+		if (m.stock[good] <= 0) return { error: "Sold out." };
+		if (qty <= 0) return { error: `Not enough coins (${q.price} c each).` };
+		const floor = Math.min(q.price, m.baseCost[good] * (1 + m.greed * .3) * (m.cash < m.rent ? .9 : 1));
+		return {
+			merchant: id,
+			good,
+			mode,
+			qty,
+			unit: q.price,
+			open: q.price,
+			limit: floor,
+			patience: PERSONALITY[id].patience,
+			used: {},
+			history: [],
+			moves: 0,
+			over: null
+		};
+	}
+	const have = s.player.inventory[good];
+	if (have <= 0) return { error: `${m.name} buys mangoes. You have none to sell.` };
+	const c = context(s, id, good);
+	const scarcity = Math.min(2.2, Math.max(.8, 1 + 1.1 * (1 - m.stock[good] / Math.max(1, m.target[good]))));
+	const bid = bidFor(s, id, good)?.price ?? null;
+	const reach = Math.max(m.baseCost[good] * scarcity, (c.rivalPrice ?? m.baseCost[good]) * 1.15, bid === null ? 0 : bid * BID_STRETCH);
+	const offer = Math.max(1, bid ?? 0, Math.round(reach * .62));
+	const qty = Math.min(LOT, have, Math.floor(m.cash / offer));
+	if (qty <= 0) return { error: `${m.name} can't afford mangoes right now.` };
+	return {
+		merchant: id,
+		good,
+		mode,
+		qty,
+		unit: offer,
+		open: offer,
+		limit: Math.max(offer, Math.min(reach, m.cash / qty)),
+		patience: PERSONALITY[id].patience,
+		used: {},
+		history: [],
+		moves: 0,
+		over: null
+	};
+}
+/** How well a tactic lands (-1..1) and what the merchant says. Personality x situation. */
+function judge(s, h, t) {
+	const c = context(s, h.merchant, h.good);
+	const m = s.merchants[h.merchant];
+	const rivalCheaper = c.rivalPrice !== null && c.rivalPrice < Math.round(h.unit);
+	const rival = c.rivalName.split(" ").pop();
+	const repHigh = s.player.rep[h.merchant] >= 10;
+	if (h.merchant === "pema") switch (t) {
+		case "flatter": return {
+			e: .8,
+			line: "Best mangoes on the Row, that's true. Fine, for you."
+		};
+		case "lowball": return c.needsCash ? {
+			e: .55,
+			line: "...Rent is rent. Take it before I change my mind."
+		} : {
+			e: -.8,
+			line: "You think I grow these in a bucket? No."
+		};
+		case "rival": return rivalCheaper && (c.needsCash || repHigh) ? {
+			e: .35,
+			line: `Vell's fruit is gas-ripened. But... alright, close to his.`
+		} : {
+			e: -.9,
+			line: `Then go and buy from ${rival}. I'll wait.`
+		};
+		case "bundle": return c.scarce || h.qty >= m.stock[h.good] ? {
+			e: -.5,
+			line: "Bundle? I have " + m.stock[h.good] + " mangoes in the whole stall."
+		} : {
+			e: .5,
+			line: "A big order! Now you're talking."
+		};
+	}
+	if (h.merchant === "tomas") switch (t) {
+		case "flatter": return {
+			e: .12,
+			line: "Compliments don't pay my berth fee. Maybe a coin."
+		};
+		case "lowball": return c.overstocked || !c.comfortable ? {
+			e: .5,
+			line: "Crates don't sell themselves. Fine."
+		} : {
+			e: -.7,
+			line: "Ha. My cart came in at six. I can wait, you can't."
+		};
+		case "rival": return rivalCheaper ? {
+			e: .9,
+			line: `Pema at ${c.rivalPrice} c? She's three crates from closing. ...Fine, I'll come down.`
+		} : {
+			e: -.5,
+			line: `${rival} asks more than me and you know it.`
+		};
+		case "bundle": return c.scarce ? {
+			e: -.4,
+			line: "I'm not dumping stock on one customer."
+		} : {
+			e: .7,
+			line: "Volume I like. Volume gets a discount."
+		};
+	}
+	switch (t) {
+		case "flatter": return {
+			e: -.15,
+			line: "Kind. My lassi still costs what the mangoes cost."
+		};
+		case "lowball": return c.scarce ? {
+			e: .55,
+			line: "My kitchen's nearly out. Alright, a little more."
+		} : {
+			e: -.6,
+			line: "I have mangoes. I don't need yours at that price."
+		};
+		case "rival": return c.rivalPrice !== null && c.rivalPrice > h.unit ? {
+			e: .85,
+			line: `${rival} charges ${c.rivalPrice}. Fine, I'll pay closer to that.`
+		} : {
+			e: -.6,
+			line: `${rival} sells cheaper than you're asking. Try again.`
+		};
+		case "bundle": return c.scarce ? {
+			e: .6,
+			line: "A full crate saves me the walk at seven. Deal-ish."
+		} : {
+			e: -.3,
+			line: "More than I can store. No."
+		};
+	}
+}
+/** Apply one tactic. Fair closes the deal at the current price (call closeDeal next). */
+function applyTactic(s, h, t) {
+	if (h.over) return {
+		session: h,
+		success: false,
+		line: ""
+	};
+	if (t === "fair") return {
+		session: {
+			...h,
+			over: "deal"
+		},
+		success: true,
+		line: h.moves === 0 ? "A fair customer. Rare." : "Done."
+	};
+	const used = h.used[t] ?? 0;
+	let { e, line } = judge(s, h, t);
+	if (used > 0) {
+		e = e > 0 ? e * .35 - .15 * used : e - .2;
+		if (e <= 0) line = "You said that already.";
+	}
+	const range = Math.max(.6, Math.abs(h.limit - h.open));
+	const sign = h.mode === "buy" ? -1 : 1;
+	const success = e > 0;
+	let unit = success ? h.unit + sign * e * range * .55 : h.unit - sign * range * .18;
+	let qty = h.qty;
+	if (t === "bundle" && success) {
+		const m = s.merchants[h.merchant];
+		const cap = h.mode === "buy" ? Math.min(m.stock[h.good], Math.floor(s.player.coins / Math.max(unit, .01))) : Math.min(s.player.inventory[h.good], Math.floor(m.cash / Math.max(unit, .01)));
+		qty = Math.max(h.qty, Math.min(h.qty * 2, cap));
+	}
+	const worst = h.mode === "buy" ? h.open * 1.2 : h.open * .8;
+	unit = h.mode === "buy" ? Math.min(worst, Math.max(h.limit, unit)) : Math.max(worst, Math.min(h.limit, unit));
+	const patience = Math.max(0, h.patience - (success ? PATIENCE_HIT : PATIENCE_FAIL));
+	const over = patience <= 0 ? "walked" : null;
+	if (over) line = h.mode === "buy" ? "Enough. Come back tomorrow." : "I have a kitchen to run. Tomorrow.";
+	return {
+		session: {
+			...h,
+			unit,
+			qty,
+			patience,
+			used: {
+				...h.used,
+				[t]: used + 1
+			},
+			history: [...h.history, t],
+			moves: h.moves + 1,
+			over
+		},
+		success,
+		line
+	};
+}
+/** Whole coins per unit (the contract settles whole units), rounded in the player's favour: what the panel shows
+*  is exactly what the chain charges or pays. */
+const dealUnit = (h) => Math.max(1, h.mode === "buy" ? Math.floor(h.unit + 1e-6) : Math.ceil(h.unit - 1e-6));
+const MOVES = [
+	"lowball",
+	"flatter",
+	"rival",
+	"bundle"
+];
+/** Checks a deal's unit price against the authoritative price in `s` (merchant state read from chain, live NEAR AI
+*  prices already applied; the caller sets the player's coins, goods and `rep` for this stall).
+*  - at or worse for the player than the unhaggled price (buy: not lower, sell: not higher): fine, it is the rule price;
+*  - better than that: only if a replay of the claimed tactics reaches a price at least as good, so a client can never
+*    pick its own price. Reputation is the one input the chain does not hold: the client claims it (clamped to -50..50 here); it only unlocks the "likes you" rival/flatter effects. */
+function verifyDealUnit(s, id, side, good, unit, tactics, rep = 0) {
+	const refused = (reason, reference = 0) => ({
+		ok: false,
+		reason,
+		reference,
+		kind: "refused"
+	});
+	if (!Number.isInteger(unit) || unit < 1) return refused("bad unit price");
+	const better = (a, b) => side === "buy" ? a < b : a > b;
+	if (good !== "mango") {
+		const ref = side === "buy" ? quote(s, id, good).price : bidFor(s, id, good)?.price ?? 0;
+		return better(unit, ref) ? refused(`the price is ${ref} c`, ref) : {
+			ok: true,
+			reason: "rule price",
+			reference: ref,
+			kind: "rule"
+		};
+	}
+	const probe = structuredClone(s);
+	probe.player.coins = Math.max(probe.player.coins, 999);
+	probe.player.inventory.mango = side === "sell" ? Math.max(LOT, probe.player.inventory.mango) : 0;
+	probe.player.rep[id] = Math.max(-50, Math.min(50, Math.round(rep) || 0));
+	for (const k of Object.keys(probe.flags)) if (k.startsWith("haggleLock.") || k.startsWith("lock.")) delete probe.flags[k];
+	const opened = openHaggle(probe, id);
+	if ("error" in opened || opened.mode !== side) return refused("nothing to negotiate");
+	const reference = dealUnit(opened);
+	if (!better(unit, reference)) return {
+		ok: true,
+		reason: "rule price",
+		reference,
+		kind: "rule"
+	};
+	if (tactics.length === 0 || tactics.length > 8 || !tactics.every((t) => MOVES.includes(t))) return refused(`the price is ${reference} c: no haggle record for ${unit} c`, reference);
+	let h = opened;
+	for (const t of tactics) {
+		h = applyTactic(probe, h, t).session;
+		if (h.over) return refused("that haggle ended with the merchant walking away", reference);
+	}
+	const replayed = dealUnit(h);
+	return better(unit, replayed) ? refused(`that haggle reaches ${replayed} c, not ${unit} c`, reference) : {
+		ok: true,
+		reason: "haggled",
+		reference,
+		kind: "haggle"
+	};
+}
+/** The two scripted first-day prices (the tutorial's newcomer buy and Pema's delivery sale). They depend on tutorial state
+*  the chain cannot see, so the relayer allows each once per player (a Redis claim) and only inside the old window. */
+function newcomerPrice(side, id, unit, reference) {
+	if (side === "buy" && (id === "tomas" || id === "mira") && unit <= reference && unit >= Math.max(Math.ceil(reference * .55), 4)) return "buy";
+	if (side === "sell" && id === "pema" && unit === 6) return "sell";
+	return null;
+}
 // server/near/talk.ts
 const AI_URL = "https://cloud-api.near.ai/v1/chat/completions";
 const AI_TIMEOUT_MS = 4e3;
@@ -13872,6 +14169,15 @@ async function relay(cfg, req) {
 		message: r.error
 	});
 }
+/** A price better for the player than the stall's current price (live NEAR AI price included) needs a haggle the relayer can
+*  replay from the claimed tactics; anything else must be the current price. The two scripted first-day prices
+*  (newcomer buy, Pema's delivery) are allowed once per player. */
+async function checkNegotiated(cfg, st, id, side, good, unit, b, player) {
+	const c = verifyDealUnit(st, id, side, good, unit, Array.isArray(b.tactics) ? b.tactics.map(String) : [], Number(b.rep));
+	if (c.ok) return;
+	if (newcomerPrice(side, id, unit, c.reference) && await claimOnce(cfg, `newcomer:${player}:${side}`, 2592e3)) return;
+	throw new HttpError(409, c.reason);
+}
 /** The merchant signs a haggled price if it is within its bounds; the player settles it with `deal` (one tx). */
 async function deal(cfg, req, env) {
 	const b = await readJson(req);
@@ -13910,6 +14216,7 @@ async function deal(cfg, req, env) {
 		const bounds = dealBounds(p);
 		if (unit < bounds.min) throw new HttpError(409, `won't go below ${bounds.min} c`);
 		if (unit > bounds.max) throw new HttpError(409, `won't take more than ${bounds.max} c`);
+		await checkNegotiated(cfg, st, id, "buy", good, unit, b, player);
 	} else {
 		const p = bidFor(st, id, good)?.price ?? null;
 		if (p === null) throw new HttpError(409, "not buying that today");
@@ -13917,6 +14224,7 @@ async function deal(cfg, req, env) {
 		if (unit > bounds.max) throw new HttpError(409, `won't pay more than ${bounds.max} c`);
 		if (unit < bounds.min) throw new HttpError(409, `won't pay less than ${bounds.min} c`);
 		if (m.cash < qty * unit) throw new HttpError(409, "not enough coin to pay that");
+		await checkNegotiated(cfg, st, id, "sell", good, unit, b, player);
 	}
 	const secret = (env.NEAR_MERCHANT_SECRET ?? "").trim();
 	if (!secret) throw new HttpError(503, "merchant keys not configured");

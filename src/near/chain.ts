@@ -332,13 +332,13 @@ async function actOnce(method: "buy" | "sell" | "deal", args: Record<string, unk
 
 /** A haggled deal: the merchant signs the agreed price (server), the player settles it in one tx. */
 /** `ref`: the raw NEAR AI price this screen was built on (0 when none): the relayer refuses a deal whose reference is no longer the live price. */
-export async function haggleDeal(merchant: string, side: "buy" | "sell", token: string, qty: number, unit: number, ref = 0): Promise<TxOutcome> {
+export async function haggleDeal(merchant: string, side: "buy" | "sell", token: string, qty: number, unit: number, ref = 0, tactics: readonly string[] = [], rep = 0): Promise<TxOutcome> {
   const id = playerId();
   if (!id) return { status: "local", message: "offline: not connected to NEAR" };
   let signed: Record<string, unknown> | null = null;
   for (let attempt = 0; attempt < SEND_TRIES && !signed; attempt++) { // the merchant's signature moves nothing yet
     if (attempt > 0) await sleep(RETRY_MS);
-    const r = await post("deal", { merchant, side, token, qty, unit, ref, player: id }).catch(() => null);
+    const r = await post("deal", { merchant, side, token, qty, unit, ref, tactics, rep, player: id }).catch(() => null);
     if (r && (r.status === "signed" || Number(r.httpStatus) < 500)) signed = r;
   }
   if (!signed || signed.status !== "signed") return { status: "failed", message: String(signed?.message ?? "merchant unreachable") };

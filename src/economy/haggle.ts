@@ -39,6 +39,8 @@ export interface HaggleSession {
   readonly limit: number;
   readonly patience: number;
   readonly used: Readonly<Record<string, number>>;
+  /** The tactics played, in order: the relayer replays them (verifyDealUnit) to check a negotiated price. */
+  readonly history: readonly Tactic[];
   readonly moves: number;
   readonly over: "deal" | "walked" | null;
 }
@@ -132,7 +134,7 @@ export function openHaggle(s: EconomyState, id: MerchantId): HaggleSession | { e
     if (m.stock[good] <= 0) return { error: "Sold out." };
     if (qty <= 0) return { error: `Not enough coins (${q.price} c each).` };
     const floor = Math.min(q.price, m.baseCost[good] * (1 + m.greed * 0.3) * (m.cash < m.rent ? 0.9 : 1));
-    return { merchant: id, good, mode, qty, unit: q.price, open: q.price, limit: floor, patience: PERSONALITY[id].patience, used: {}, moves: 0, over: null };
+    return { merchant: id, good, mode, qty, unit: q.price, open: q.price, limit: floor, patience: PERSONALITY[id].patience, used: {}, history: [], moves: 0, over: null };
   }
   const have = s.player.inventory[good];
   if (have <= 0) return { error: `${m.name} buys mangoes. You have none to sell.` };
@@ -145,7 +147,7 @@ export function openHaggle(s: EconomyState, id: MerchantId): HaggleSession | { e
   const qty = Math.min(LOT, have, Math.floor(m.cash / offer));
   if (qty <= 0) return { error: `${m.name} can't afford mangoes right now.` };
   const ceiling = Math.max(offer, Math.min(reach, m.cash / qty)); // never haggled past what the till can pay
-  return { merchant: id, good, mode, qty, unit: offer, open: offer, limit: ceiling, patience: PERSONALITY[id].patience, used: {}, moves: 0, over: null };
+  return { merchant: id, good, mode, qty, unit: offer, open: offer, limit: ceiling, patience: PERSONALITY[id].patience, used: {}, history: [], moves: 0, over: null };
 }
 
 /** How well a tactic lands (-1..1) and what the merchant says. Personality x situation. */
@@ -224,7 +226,7 @@ export function applyTactic(s: EconomyState, h: HaggleSession, t: Tactic): MoveR
   const patience = Math.max(0, h.patience - (success ? PATIENCE_HIT : PATIENCE_FAIL));
   const over = patience <= 0 ? "walked" : null;
   if (over) line = h.mode === "buy" ? "Enough. Come back tomorrow." : "I have a kitchen to run. Tomorrow.";
-  return { session: { ...h, unit, qty, patience, used: { ...h.used, [t]: used + 1 }, moves: h.moves + 1, over }, success, line };
+  return { session: { ...h, unit, qty, patience, used: { ...h.used, [t]: used + 1 }, history: [...h.history, t], moves: h.moves + 1, over }, success, line };
 }
 
 /** Patience drains while you think. */
@@ -284,3 +286,53 @@ export function closeDeal(s: EconomyState, h: HaggleSession): DealOutcome {
   log(s, `You ${verb} ${p.name} for ${total} c (opened at ${openTotal} c).`);
   return { ok: true, message: `${h.mode === "buy" ? "Bought" : "Sold"} ${h.qty} for ${total} c`, total, gain, repDelta: rep };
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Verifying a negotiated price (the relayer's `deal` route). A haggle is a deterministic function of the merchant's state,
+// the tactics played and their order, and the player's standing with the stall, so the relayer can replay it.
+
+const MOVES: readonly Tactic[] = ["lowball", "flatter", "rival", "bundle"];
+export const MAX_REPLAY_MOVES = 8;
+
+export interface PriceCheck { readonly ok: boolean; readonly reason: string; readonly reference: number; readonly kind: "rule" | "haggle" | "refused" }
+
+/** Checks a deal's unit price against the authoritative price in `s` (merchant state read from chain, live NEAR AI
+ *  prices already applied; the caller sets the player's coins, goods and `rep` for this stall).
+ *  - at or worse for the player than the unhaggled price (buy: not lower, sell: not higher): fine, it is the rule price;
+ *  - better than that: only if a replay of the claimed tactics reaches a price at least as good, so a client can never
+ *    pick its own price. Reputation is the one input the chain does not hold: the client claims it (clamped to -50..50 here); it only unlocks the "likes you" rival/flatter effects. */
+export function verifyDealUnit(s: EconomyState, id: MerchantId, side: Mode, good: Good, unit: number, tactics: readonly string[], rep = 0): PriceCheck {
+  const refused = (reason: string, reference = 0): PriceCheck => ({ ok: false, reason, reference, kind: "refused" });
+  if (!Number.isInteger(unit) || unit < 1) return refused("bad unit price");
+  const better = (a: number, b: number): boolean => (side === "buy" ? a < b : a > b); // a is a better price for the player than b
+  if (good !== "mango") { // no haggle exists for these: the posted price is the price
+    const ref = side === "buy" ? quote(s, id, good).price : bidFor(s, id, good)?.price ?? 0;
+    return better(unit, ref) ? refused(`the price is ${ref} c`, ref) : { ok: true, reason: "rule price", reference: ref, kind: "rule" };
+  }
+  const probe = structuredClone(s);
+  probe.player.coins = Math.max(probe.player.coins, 999);
+  probe.player.inventory.mango = side === "sell" ? Math.max(LOT, probe.player.inventory.mango) : 0; // modeFor follows what the player holds
+  probe.player.rep[id] = Math.max(-50, Math.min(50, Math.round(rep) || 0));
+  for (const k of Object.keys(probe.flags)) if (k.startsWith("haggleLock.") || k.startsWith("lock.")) delete probe.flags[k];
+  const opened = openHaggle(probe, id);
+  if ("error" in opened || opened.mode !== side) return refused("nothing to negotiate");
+  const reference = dealUnit(opened);
+  if (!better(unit, reference)) return { ok: true, reason: "rule price", reference, kind: "rule" };
+  if (tactics.length === 0 || tactics.length > MAX_REPLAY_MOVES || !tactics.every((t) => (MOVES as readonly string[]).includes(t))) return refused(`the price is ${reference} c: no haggle record for ${unit} c`, reference);
+  let h = opened;
+  for (const t of tactics as readonly Tactic[]) {
+    h = applyTactic(probe, h, t).session;
+    if (h.over) return refused("that haggle ended with the merchant walking away", reference);
+  }
+  const replayed = dealUnit(h);
+  return better(unit, replayed) ? refused(`that haggle reaches ${replayed} c, not ${unit} c`, reference) : { ok: true, reason: "haggled", reference, kind: "haggle" };
+}
+
+/** The two scripted first-day prices (the tutorial's newcomer buy and Pema's delivery sale). They depend on tutorial state
+ *  the chain cannot see, so the relayer allows each once per player (a Redis claim) and only inside the old window. */
+export function newcomerPrice(side: Mode, id: MerchantId, unit: number, reference: number): "buy" | "sell" | null {
+  if (side === "buy" && (id === "tomas" || id === "mira") && unit <= reference && unit >= Math.max(Math.ceil(reference * 0.55), 4)) return "buy";
+  if (side === "sell" && id === "pema" && unit === 6) return "sell";
+  return null;
+}
+

@@ -763,7 +763,7 @@ export async function createPlay(game: Game): Promise<Play> {
     const unit = tab === "buy" ? buyUnit(id) : sellPrice(id);
     if (!unit || maxQty(id, tab) < 1) return;
     const qty = Math.min(mode.qty, maxQty(id, tab));
-    settleDeal({ merchant: id, good: goodFor(id, tab), mode: tab === "buy" ? "buy" : "sell", qty, unit, open: unit, limit: unit, patience: 100, used: {}, moves: 0, over: "deal" });
+    settleDeal({ merchant: id, good: goodFor(id, tab), mode: tab === "buy" ? "buy" : "sell", qty, unit, open: unit, limit: unit, patience: 100, used: {}, history: [], moves: 0, over: "deal" });
   };
 
   /** A closed deal (simple or haggled): checked on a copy, sent to NEAR, and only applied once NEAR confirms it. */
@@ -776,7 +776,7 @@ export async function createPlay(game: Game): Promise<Play> {
     mode = { ...mode, h: null, say: `Shaking on it: ${total} c. Recording the deal…`, tone: "", done: AWAITING };
     renderTrade();
     record("trade", `${h.mode === "buy" ? "Bought" : "Sold"} ${goodName(h.good, h.qty)} ${h.mode === "buy" ? "from" : "to"} ${name} for ${total} c`,
-      haggleDeal(h.merchant, h.mode, h.good, h.qty, unit, aiPrice(h.merchant, h.mode === "buy" ? "ask" : "bid") ?? 0), () => applyDeal(h, npc), refusedAt(h.merchant, h.mode));
+      haggleDeal(h.merchant, h.mode, h.good, h.qty, unit, aiPrice(h.merchant, h.mode === "buy" ? "ask" : "bid") ?? 0, h.history, state.player.rep[h.merchant]), () => applyDeal(h, npc), refusedAt(h.merchant, h.mode));
   };
   /** NEAR settled the deal: move the goods and coins in the game, then react (story beats, reopened stalls). */
   const applyDeal = (h: HaggleSession, npc: Npc): void => {

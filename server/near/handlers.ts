@@ -16,6 +16,7 @@ import { synthesize } from "./voice.ts";
 import { answer, factsFor } from "./talk.ts";
 import { LEVERS, agentConfig, applyLivePrices, attachTx, claimBidSend, decideBid, decideResident, livePrices, priceMoved, recentDecisions, releaseBidSend, type AgentConfig, type Decision, type DecisionStore } from "./agent.ts";
 import { ORCHARD_PICK, bidFor, dealBounds, planMerchantTrades, quote } from "../../src/economy/pricing.ts";
+import { newcomerPrice, verifyDealUnit } from "../../src/economy/haggle.ts";
 import { closingNeed, shopperWant } from "../../src/economy/sim.ts";
 import { initialEconomy, type EconomyState } from "../../src/economy/state.ts";
 
@@ -351,6 +352,17 @@ interface OfferRow {
   price: string;
 }
 
+/** A price better for the player than the stall's current price (live NEAR AI price included) needs a haggle the relayer can
+ *  replay from the claimed tactics; anything else must be the current price. The two scripted first-day prices
+ *  (newcomer buy, Pema's delivery) are allowed once per player. */
+async function checkNegotiated(cfg: Config, st: EconomyState, id: MerchantId, side: "buy" | "sell", good: string, unit: number, b: Record<string, unknown>, player: string): Promise<void> {
+  const tactics = Array.isArray(b.tactics) ? b.tactics.map(String) : [];
+  const c = verifyDealUnit(st, id, side, good as "mango" | "lemon" | "lassi", unit, tactics, Number(b.rep));
+  if (c.ok) return;
+  if (newcomerPrice(side, id, unit, c.reference) && (await claimOnce(cfg, `newcomer:${player}:${side}`, 30 * 24 * 3600))) return;
+  throw new HttpError(409, c.reason);
+}
+
 /** The merchant signs a haggled price if it is within its bounds; the player settles it with `deal` (one tx). */
 async function deal(cfg: Config, req: Request, env: RelayEnv): Promise<Response> {
   const b = await readJson(req);
@@ -394,6 +406,7 @@ async function deal(cfg: Config, req: Request, env: RelayEnv): Promise<Response>
     const bounds = dealBounds(p); // the executed unit must sit inside the haggling range around the authoritative ask
     if (unit < bounds.min) throw new HttpError(409, `won't go below ${bounds.min} c`);
     if (unit > bounds.max) throw new HttpError(409, `won't take more than ${bounds.max} c`);
+    await checkNegotiated(cfg, st, id, "buy", good, unit, b, player);
   } else {
     const p = bidFor(st, id, good)?.price ?? null;
     if (p === null) throw new HttpError(409, "not buying that today");
@@ -401,6 +414,7 @@ async function deal(cfg: Config, req: Request, env: RelayEnv): Promise<Response>
     if (unit > bounds.max) throw new HttpError(409, `won't pay more than ${bounds.max} c`);
     if (unit < bounds.min) throw new HttpError(409, `won't pay less than ${bounds.min} c`);
     if (m.cash < qty * unit) throw new HttpError(409, "not enough coin to pay that");
+    await checkNegotiated(cfg, st, id, "sell", good, unit, b, player);
   }
   const secret = (env.NEAR_MERCHANT_SECRET ?? "").trim();
   if (!secret) throw new HttpError(503, "merchant keys not configured");

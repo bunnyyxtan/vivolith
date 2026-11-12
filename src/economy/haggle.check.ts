@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { initialEconomy } from "./state.ts";
 import { agentPrice, agentPriceKey, bidFor, dealBounds, quote } from "./pricing.ts";
-import { applyTactic, closeDeal, dealTotal, dealUnit, openHaggle, type HaggleSession } from "./haggle.ts";
+import { applyTactic, closeDeal, dealTotal, dealUnit, newcomerPrice, openHaggle, verifyDealUnit, type HaggleSession, type Tactic } from "./haggle.ts";
 
 const open = (s: ReturnType<typeof initialEconomy>, id: "pema" | "tomas" | "arin"): HaggleSession => {
   const h = openHaggle(s, id);
@@ -95,6 +95,37 @@ assert.equal(dealTotal(frac("sell")), 12);
   for (const unit of [b.min, base + 3, b.max]) assert.ok(unit >= b.min && unit <= b.max);
   assert.ok(0 < b.min && b.max < 10 * (base + 3), "no arbitrary client price fits: 1 c or 1000 c are outside");
   assert.ok(!(1000 >= b.min && 1000 <= b.max)); assert.ok(b.min > 1);
+}
+
+// Server-side price verification: the rule price needs no haggle; a better price needs a replayable haggle.
+{
+  const s = initialEconomy();
+  const ref = quote(s, "tomas", "mango").price;
+  assert.equal(verifyDealUnit(s, "tomas", "buy", "mango", ref, []).kind, "rule", "buying at the current price is fine");
+  assert.equal(verifyDealUnit(s, "tomas", "buy", "mango", ref + 1, []).ok, true, "paying more is never refused here");
+  const cheap = verifyDealUnit(s, "tomas", "buy", "mango", ref - 1, []);
+  assert.ok(!cheap.ok && cheap.reference === ref, "a lower price with no haggle record is refused");
+  // a real haggle (Pema buying mangoes from Kavi): play tactics, then the same price verifies; one coin better does not
+  const sref = verifyDealUnit(s, "pema", "sell", "mango", 1, []).reference;
+  const hs = initialEconomy(); hs.player.inventory.mango = 3; hs.player.coins = 99;
+  let h = open(hs, "pema"); const played: Tactic[] = []; const probe = structuredClone(hs);
+  for (const t of ["lowball", "flatter", "rival"] as const) { h = applyTactic(probe, h, t).session; played.push(t); }
+  const won = dealUnit(h);
+  assert.ok(won > sref, `the haggle beat the opening offer (${won} vs ${sref})`);
+  assert.equal(verifyDealUnit(s, "pema", "sell", "mango", won, played).kind, "haggle", "a replayed haggle verifies");
+  assert.ok(!verifyDealUnit(s, "pema", "sell", "mango", won + 1, played).ok, "one coin above the replay is refused");
+  assert.ok(!verifyDealUnit(s, "pema", "sell", "mango", won, []).ok, "the same price without the tactics is refused");
+  assert.ok(!verifyDealUnit(s, "tomas", "buy", "mango", 1, ["lowball", "lowball", "lowball", "lowball", "lowball", "lowball", "lowball", "lowball", "lowball"]).ok, "too many or unknown tactics are refused");
+  assert.ok(!verifyDealUnit(s, "tomas", "buy", "mango", ref - 1, ["fair"]).ok, "fair is not a haggle move");
+  // a live NEAR AI price becomes the reference
+  const live = initialEconomy(); live.flags[agentPriceKey("tomas", "ask", "mango")] = ref + 3;
+  const lref = quote(live, "tomas", "mango").price;
+  assert.ok(lref !== ref && !verifyDealUnit(live, "tomas", "buy", "mango", lref - 1, []).ok, "the live price is the one to beat");
+  assert.ok(verifyDealUnit(s, "pema", "sell", "mango", sref, []).ok && !verifyDealUnit(s, "pema", "sell", "mango", sref + 1, []).ok, "selling above the reference needs a haggle");
+  // scripted first-day prices are only a candidate; the relayer still claims them once per player
+  assert.equal(newcomerPrice("sell", "pema", 6, sref), "sell");
+  assert.equal(newcomerPrice("sell", "pema", 9, sref), null);
+  assert.equal(newcomerPrice("buy", "pema", ref - 1, ref), null);
 }
 
 console.log("haggle checks passed");
