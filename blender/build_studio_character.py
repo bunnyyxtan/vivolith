@@ -34,8 +34,8 @@ CAST = {
                "scared_01": "Startled", "look_around": "Look", "greet_01": "Wave"}, {})
        for n, name in ((2, "joon"), (3, "hadi"), (4, "lena"), (5, "suki"), (6, "rafa"))},
     "noor": ("public/models/v2/cast/folk1.glb",
-             {"idle": "Idle", "walk": "Walk", "run": "Run", "sit": "Sit", "scared_01": "Startled", "look_around": "Look",
-              "greet_01": "Wave"}, {}),
+             {"idle": "Idle", "walk": "Walk", "run": "Run", "sit": "Sit", "complain_01": "Talking", "scared_01": "Startled",
+              "look_around": "Look", "greet_01": "Wave"}, {}),
 }
 
 
