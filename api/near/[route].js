@@ -11701,10 +11701,39 @@ function rivalBest(state, self, good) {
 	}
 	return best;
 }
+/** How far a deal's unit price may sit from the authoritative price (the posted ask when buying, the bid when selling,
+*  both already carrying any live NEAR AI price): haggling can move it down to 55% or up to 150%, never outside. The
+*  relayer (`deal`) refuses anything else, whatever the client sends. */
+const HAGGLE_FLOOR = .55;
+const HAGGLE_CEILING = 1.5;
+const dealBounds = (authoritative) => ({
+	min: Math.floor(authoritative * HAGGLE_FLOOR),
+	max: Math.ceil(authoritative * HAGGLE_CEILING)
+});
+/** A price set by a live NEAR AI decision: `flags["agentPrice.<merchant>.<ask|bid>.<good>"]`. The relayer and the client
+*  write it from the same decision, and only while that decision is confirmed and its order is still posted on chain
+*  (server/near/agent.ts livePrices). Absent, every price is exactly the rule price below. */
+const agentPriceKey = (id, side, good) => `agentPrice.${id}.${side}.${good}`;
+function agentPrice(state, id, side, good) {
+	const v = state.flags[agentPriceKey(id, side, good)];
+	return typeof v === "number" && Number.isFinite(v) && v >= 1 ? Math.round(v) : null;
+}
 /** Price per unit `merchant` asks from the player (or from another NPC when forPlayer is false). */
 function quote(state, merchantId, good, forPlayer = true) {
 	const m = state.merchants[merchantId];
 	if (merchantId === "arin" && good === "lassi") return lassiPrice(state);
+	const ap = agentPrice(state, merchantId, "ask", good);
+	if (ap !== null && m.status === "open" && m.baseCost[good] > 0) {
+		const factors = [{
+			label: `Today's price comes from ${m.name}'s NEAR AI decision`,
+			multiplier: ap / m.baseCost[good]
+		}];
+		if (forPlayer) factors.push(relationship(m, state.player.rep[merchantId]));
+		return {
+			price: Math.max(1, Math.round(factors.reduce((p, f) => p * f.multiplier, m.baseCost[good]))),
+			factors
+		};
+	}
 	const factors = [
 		scarcity(m, good),
 		demand(m, good),
@@ -11758,8 +11787,18 @@ function cheapestMango(state) {
 	}
 	return best;
 }
-/** What a merchant will pay other stalls (and the player) per unit of `good`, or null if not buying. */
+/** What a merchant will pay other stalls (and the player) per unit of `good`, or null if not buying. A live NEAR AI
+*  decision (agentPrice) sets the price of an open stall that the rule says is buying; the rule decides whether it buys. */
 function bidFor(state, id, good) {
+	const b = bidForRule(state, id, good);
+	const ap = agentPrice(state, id, "bid", good);
+	return b && ap !== null && state.merchants[id].status === "open" ? {
+		...b,
+		price: ap,
+		reason: `${b.reason} (price set by a NEAR AI decision)`
+	} : b;
+}
+function bidForRule(state, id, good) {
 	const m = state.merchants[id];
 	if (m.status !== "open" && good === "mango") {
 		const left = state.flags[`reopenNeed.${id}`];
@@ -12773,10 +12812,10 @@ const ACTIONS = [
 	"hold",
 	"lower"
 ];
-/** Below this confidence in the chosen option the merchant simply holds. */
+/** Below this confidence in the chosen option the agent uses its deterministic choice instead. */
 const MIN_CONFIDENCE = .5;
 const STEP = 1;
-/** Reads the service's settings; it stays off unless NEAR_AGENT_MERCHANTS lists a merchant and NEAR_AI_KEY is set. */
+/** Reads the service's settings; it stays off unless NEAR_AGENT_MERCHANTS lists an agent and NEAR_AI_KEY is set. */
 function agentConfig(env) {
 	const ids = (env.NEAR_AGENT_MERCHANTS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 	return {
@@ -12788,46 +12827,91 @@ function agentConfig(env) {
 		retries: 1
 	};
 }
-/** Cheapest mango ask other stalls have posted (the competing offer), or null. */
-function rivalAsk(offers, id) {
+/** The one price each merchant may move, using only orders the contract already supports (`bid` / `list`). */
+const LEVERS = {
+	pema: {
+		side: "bid",
+		good: "mango",
+		goal: "Keep the shelves stocked so customers can buy, and keep enough coin in the till for the rent. You buy mangoes from other stalls and from pickers."
+	},
+	tomas: {
+		side: "ask",
+		good: "mango",
+		goal: "Earn the best margin on the mangoes you hold without letting stock sit unsold: raise your price when mangoes are scarce on the street, lower it when you hold far more than the street wants."
+	},
+	mira: {
+		side: "bid",
+		good: "mango",
+		goal: "Buy surplus mangoes cheaply and resell them where they are scarce. Do not overpay and do not empty the till."
+	},
+	arin: {
+		side: "bid",
+		good: "mango",
+		goal: "Keep enough mangoes coming in for the lassi kitchen, at a price the tea house can afford."
+	}
+};
+const leverName = (id) => {
+	const l = LEVERS[id];
+	return l ? `${l.side}:${l.good}` : "plan";
+};
+/** Cheapest ask for `good` that other stalls have posted (the competing offer), or null. */
+function rivalAsk(offers, id, good = "mango") {
 	let best = null;
 	for (const o of offers) {
-		if (o.side !== "ask" || o.token_id !== "mango" || Number(o.qty) <= 0 || o.merchant === id) continue;
+		if (o.side !== "ask" || o.token_id !== good || Number(o.qty) <= 0 || o.merchant === id) continue;
 		const p = Number(o.price);
 		if (Number.isFinite(p) && (best === null || p < best)) best = p;
 	}
 	return best;
 }
-/** The permitted prices. lower/raise are null when the step would break a limit: never below half the stall's normal
-*  cost, never above 3x it, never above the cheapest rival ask (no point paying more than the street sells for), and a
-*  raise must leave at least one unit affordable from the till. */
+/** The permitted prices for the merchant's lever. lower/raise are null when the step would break a limit.
+*  Bid: never below half the normal cost, never above 3x it or the cheapest rival ask, and a raise must leave one unit
+*  affordable from the till. Ask: never below 0.8x the normal cost or above 4x it, and only with stock to sell. */
 function bandFor(st, id, offers) {
+	const l = LEVERS[id];
 	const m = st.merchants[id];
-	const b = bidFor(st, id, "mango");
-	if (!b || m.status !== "open") return null;
-	const min = Math.max(1, Math.floor(m.baseCost.mango * .5));
-	const rival = rivalAsk(offers, id);
-	const cap = Math.ceil(m.baseCost.mango * 3);
-	const max = rival === null ? cap : Math.min(cap, rival);
-	const lower = b.price - STEP >= min ? b.price - STEP : null;
-	const up = b.price + STEP;
-	const raise = up <= max && Math.floor(m.cash / up) >= 1 ? up : null;
+	if (!l || !m || m.status !== "open") return null;
+	const cost = m.baseCost[l.good];
+	if (l.side === "bid") {
+		const b = bidFor(st, id, l.good);
+		if (!b) return null;
+		const min = Math.max(1, Math.floor(cost * .5));
+		const rival = rivalAsk(offers, id, l.good);
+		const cap = Math.ceil(cost * 3);
+		const max = rival === null ? cap : Math.min(cap, rival);
+		const lower = b.price - STEP >= min ? b.price - STEP : null;
+		const up = b.price + STEP;
+		const raise = up <= max && Math.floor(m.cash / up) >= 1 ? up : null;
+		return {
+			base: b.price,
+			lower,
+			raise,
+			min,
+			max
+		};
+	}
+	if (!m.sells.includes(l.good) || m.stock[l.good] <= 0) return null;
+	const base = quote(st, id, l.good, false).price;
+	const min = Math.max(1, Math.ceil(cost * .8)), max = Math.ceil(cost * 4);
 	return {
-		base: b.price,
-		lower,
-		raise,
+		base,
+		lower: base - STEP >= min ? base - STEP : null,
+		raise: base + STEP <= max ? base + STEP : null,
 		min,
 		max
 	};
 }
-/** Everything the model is shown: facts read from chain state, nothing else. */
+/** Everything the model is shown about a merchant: facts read from chain state, nothing else. */
 function stateFor(st, id, offers, band, day) {
 	const m = st.merchants[id];
-	const mine = offers.find((o) => o.merchant === id && o.side === "bid" && o.token_id === "mango");
+	const l = LEVERS[id];
+	const mine = offers.find((o) => o.merchant === id && o.side === (l.side === "bid" ? "bid" : "ask") && o.token_id === l.good);
 	return {
 		merchant: m.name,
 		shop: m.shop,
 		market_day: day,
+		role_goal: l.goal,
+		lever: l.side === "bid" ? `your ${l.good}-buying bid` : `your ${l.good} selling price`,
 		mangoes_on_shelf: m.stock.mango,
 		mangoes_normally_stocked: m.target.mango,
 		till_coins: Math.floor(m.cash),
@@ -12837,7 +12921,7 @@ function stateFor(st, id, offers, band, day) {
 		normal_mango_cost_coins: m.baseCost.mango,
 		standing_mango_bid_coins: band.base,
 		posted_bid_coins: mine ? Number(mine.price) : null,
-		cheapest_rival_mango_ask_coins: rivalAsk(offers, id),
+		cheapest_rival_mango_ask_coins: rivalAsk(offers, id, "mango"),
 		allowed_bid_range_coins: {
 			min: band.min,
 			max: band.max
@@ -12848,13 +12932,15 @@ function stateFor(st, id, offers, band, day) {
 	};
 }
 function questionsFor(id, band) {
+	const l = LEVERS[id];
+	const what = l.side === "bid" ? `${l.good}-buying bid` : `${l.good} selling price`;
 	return { bid_action: {
 		type: "choice",
-		instructions: `You manage the mango-buying bid of ${id}, a small market stall. Decide what the bid should do today so the stall keeps enough stock to sell, can still pay its rent, and does not overpay.`,
+		instructions: `You manage the ${what} of ${id}, a small market stall. ${l.goal} Decide what it should do today.`,
 		criteria: {
-			raise: `Raise the mango bid by ${STEP} coin${band.raise === null ? " (not permitted today)" : ""}: stock is low or rent is near and the till can afford it.`,
-			hold: "Keep the current mango bid: stock, till and rent are in balance.",
-			lower: `Lower the mango bid by ${STEP} coin${band.lower === null ? " (not permitted today)" : ""}: the shelves are full or the till is thin.`
+			raise: `Raise the ${what} by ${STEP} coin${band.raise === null ? " (not permitted today)" : ""}: ${l.side === "bid" ? "stock is low or rent is near and the till can afford it." : "mangoes are scarce on the street and your stock is selling."}`,
+			hold: `Keep the current ${what}: stock, till and rent are in balance.`,
+			lower: `Lower the ${what} by ${STEP} coin${band.lower === null ? " (not permitted today)" : ""}: ${l.side === "bid" ? "the shelves are full or the till is thin." : "you hold more than the street wants and stock is not moving."}`
 		}
 	} };
 }
@@ -12867,26 +12953,35 @@ var AgentError = class extends Error {
 		this.retryable = retryable;
 	}
 };
-/** Reads `answers.bid_action`; anything that is not a clean choice of one of the three actions is rejected. */
+/** One question's answer: a clean choice of one of `valid`, else an AgentError (the caller falls back for that question). */
+function parseChoice(a, valid) {
+	const x = a;
+	if (!x || typeof x !== "object") throw new AgentError("malformed", "no answer");
+	if (x.type === "refusal") throw new AgentError("refused", "the model declined to answer");
+	if (x.type !== "choice" || typeof x.choice !== "string") throw new AgentError("malformed", "answer is not a choice");
+	if (!valid.includes(x.choice)) throw new AgentError("invalid_action", `unknown option "${x.choice}"`);
+	const conf = typeof x.confidence === "number" && Number.isFinite(x.confidence) && x.confidence >= 0 && x.confidence <= 1 ? x.confidence : null;
+	const probs = x.probabilities && typeof x.probabilities === "object" ? Object.fromEntries(Object.entries(x.probabilities).filter(([, v]) => typeof v === "number" && Number.isFinite(v))) : null;
+	return {
+		choice: x.choice,
+		confidence: conf,
+		probabilities: probs && Object.keys(probs).length ? probs : null
+	};
+}
+/** Reads `answers.bid_action` (a merchant's price lever). */
 function parseAnswer(json, decisionId, requested) {
 	const j = json;
-	const a = j && typeof j === "object" ? j.answers?.bid_action : void 0;
-	if (!a || typeof a !== "object") throw new AgentError("malformed", "no bid_action answer");
-	if (a.type === "refusal") throw new AgentError("refused", "the model declined to answer");
-	if (a.type !== "choice" || typeof a.choice !== "string") throw new AgentError("malformed", "answer is not a choice");
-	if (!ACTIONS.includes(a.choice)) throw new AgentError("invalid_action", `unknown action "${a.choice}"`);
-	const conf = typeof a.confidence === "number" && Number.isFinite(a.confidence) && a.confidence >= 0 && a.confidence <= 1 ? a.confidence : null;
-	const probs = a.probabilities && typeof a.probabilities === "object" ? Object.fromEntries(Object.entries(a.probabilities).filter(([, v]) => typeof v === "number" && Number.isFinite(v))) : null;
+	const r = parseChoice(j && typeof j === "object" ? j.answers?.bid_action : void 0, ACTIONS);
 	return {
-		action: a.choice,
-		confidence: conf,
-		probabilities: probs && Object.keys(probs).length ? probs : null,
+		action: r.choice,
+		confidence: r.confidence,
+		probabilities: r.probabilities,
 		decisionId: decisionId && decisionId.length <= 200 ? decisionId : null,
 		model: typeof j?.model === "string" ? j.model : requested
 	};
 }
 /** One request to the decision model, with timeout and bounded retries on transient failures. */
-async function askModel(cfg, body, fetchImpl) {
+async function askRaw(cfg, body, fetchImpl) {
 	if (!cfg.key) throw new AgentError("no_key", "NEAR_AI_KEY is not set");
 	let last = null;
 	for (let attempt = 0; attempt <= cfg.retries; attempt++) try {
@@ -12904,7 +12999,12 @@ async function askModel(cfg, body, fetchImpl) {
 			signal: AbortSignal.timeout(cfg.timeoutMs)
 		});
 		if (!r.ok) throw new AgentError("http", `model answered ${r.status}`, r.status >= 500 || r.status === 429);
-		return parseAnswer(await r.json(), r.headers.get("x-generation-id"), cfg.model);
+		const json = await r.json();
+		const bodyId = json?.id;
+		return {
+			json,
+			decisionId: r.headers.get("x-generation-id") ?? (typeof bodyId === "string" ? bodyId : null)
+		};
 	} catch (e) {
 		const err = e instanceof AgentError ? e : e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError") ? new AgentError("timeout", "model timed out", true) : new AgentError("network", e instanceof Error ? e.message : "network error", true);
 		last = err;
@@ -12912,22 +13012,64 @@ async function askModel(cfg, body, fetchImpl) {
 	}
 	throw last ?? new AgentError("network", "no attempt made");
 }
+async function askModel(cfg, body, fetchImpl) {
+	const r = await askRaw(cfg, body, fetchImpl);
+	return parseAnswer(r.json, r.decisionId, cfg.model);
+}
+const receiptOf = (id) => id ? {
+	id,
+	status: "unverified",
+	note: "receipt id captured from the gateway; NEAR AI verification not run"
+} : {
+	id: null,
+	status: "none",
+	note: "no inference receipt"
+};
 /** Plain facts that explain the price step, picked from the state the model saw. */
 function justify(action, s) {
 	const out = [`${s.mangoes_on_shelf} of ${s.mangoes_normally_stocked} mangoes on the shelf`, `${s.till_coins} c in the till`];
 	if (s.rent_due_today) out.push(`rent of ${s.rent_coins} c is due today`);
 	if (s.cheapest_rival_mango_ask_coins !== null) out.push(`the cheapest rival ask is ${s.cheapest_rival_mango_ask_coins} c`);
-	out.push(action === "raise" ? "so a slightly higher bid brings stock in faster" : action === "lower" ? "so a slightly lower bid saves coin" : "so the bid stays where it is");
+	out.push(action === "raise" ? "so a slightly higher price suits today" : action === "lower" ? "so a slightly lower price suits today" : "so the price stays where it is");
 	return out;
 }
-function lineFor(action, from, to, s) {
-	if (action === "raise") return `I'm bidding ${to} coins a mango today, up from ${from}. My shelves are ${Number(s.mangoes_on_shelf) < Number(s.mangoes_normally_stocked) / 2 ? "getting bare" : "not as full as I'd like"}, dear.`;
-	if (action === "lower") return `I'm bidding ${to} coins a mango today, down from ${from}. My shelves are full enough and the till needs care.`;
-	return `I'm keeping my mango bid at ${to} coins today. Everything is in balance, dear.`;
+const TAIL = {
+	pema: {
+		up: ", dear.",
+		down: ", dear.",
+		keep: ", dear."
+	},
+	tomas: {
+		up: ". Take it or leave it.",
+		down: ". Don't get used to it.",
+		keep: ". Not a coin less."
+	},
+	mira: {
+		up: ". Keep up!",
+		down: ". Catch me if you can!",
+		keep: ". Nice and steady."
+	},
+	arin: {
+		up: ". The kitchen is hungry.",
+		down: ". We're well stocked.",
+		keep: ". It's working."
+	}
+};
+/** What the merchant says about their own confirmed decision, in their own manner. Only facts from the decision. */
+function lineFor(action, from, to, s, id = "pema") {
+	const l = LEVERS[id];
+	const what = !l || l.side === "bid" ? "bidding" : "asking";
+	const unit = !l ? "mango" : l.good;
+	const t = TAIL[id] ?? TAIL.pema;
+	const stock = Number(s.mangoes_on_shelf) < Number(s.mangoes_normally_stocked) / 2 ? "My shelves are getting bare" : "My shelves could be fuller";
+	if (action === "raise") return `I'm ${what} ${to} coins a ${unit} today, up from ${from}${l?.side === "ask" ? "" : `. ${stock}`}${t.up}`;
+	if (action === "lower") return `I'm ${what} ${to} coins a ${unit} today, down from ${from}${l?.side === "ask" ? ". The stock needs to move" : ". The till needs care"}${t.down}`;
+	return `I'm keeping my ${unit} ${l?.side === "ask" ? "price" : "bid"} at ${to} coins today${t.keep}`;
 }
 const DECISION_TTL = 1800;
 const LOCK_TTL = 30;
-const keyOf = (id, day) => `vivolith:agent:${id}:${day}`;
+const decisionKey = (id, day) => `vivolith:agent:${id}:${leverName(id)}:${day}`;
+const keyOf = decisionKey;
 async function decisionFor(store, id, day) {
 	const raw = await store.get(keyOf(id, day));
 	if (!raw) return null;
@@ -12937,7 +13079,7 @@ async function decisionFor(store, id, day) {
 		return null;
 	}
 }
-/** The merchant's decisions for this market day and the one before, newest first (read-only, for the board). */
+/** An agent's decisions for this market day and the one before, newest first (read-only, for the board). */
 async function recentDecisions(store, id, day) {
 	const out = [];
 	for (const d of [day, day - 1]) {
@@ -12946,13 +13088,13 @@ async function recentDecisions(store, id, day) {
 	}
 	return out;
 }
-/** Claims the one right to send this merchant's bid transaction for the market day. Concurrent ticks: exactly one true.
+/** Claims the one right to send this agent's transaction for the market day. Concurrent ticks: exactly one true.
 *  Release it when the transaction fails so the next tick may retry. */
 async function claimBidSend(store, id, day) {
-	return store.setNx(`${keyOf(id, day)}:bid`, String(Date.now()), DECISION_TTL);
+	return store.setNx(`${keyOf(id, day)}:send`, String(Date.now()), DECISION_TTL);
 }
-const releaseBidSend = (store, id, day) => store.del(`${keyOf(id, day)}:bid`);
-/** Records the transaction that carried a decision out (called after the bid is confirmed). */
+const releaseBidSend = (store, id, day) => store.del(`${keyOf(id, day)}:send`);
+/** Records the transaction that carried a decision out (called after it is confirmed). */
 async function attachTx(store, id, day, txHash) {
 	const d = await decisionFor(store, id, day);
 	if (!d) return null;
@@ -12963,56 +13105,108 @@ async function attachTx(store, id, day, txHash) {
 	await store.set(keyOf(id, day), JSON.stringify(next), DECISION_TTL);
 	return next;
 }
-/** One effective decision per merchant per market day, shared by every serverless instance through the store:
-*  a stored decision is returned as is; otherwise exactly one caller wins the lock and asks the model, while any
-*  concurrent caller waits briefly for that result (or, if it never lands, skips the bid this turn). If the store
-*  itself is down nothing is decided and the plain rule price is used, exactly as before the agent existed. */
-async function decideBid(i) {
-	const { store, cfg, st, id, offers, day } = i;
-	const rule = () => ({
-		price: bidFor(st, id, "mango")?.price ?? 1,
-		decision: null,
-		duplicate: false,
-		skipBid: false
-	});
-	const band = cfg.enabled.has(id) ? bandFor(st, id, offers) : null;
-	if (!band) return rule();
+/** Prices a NEAR AI decision is setting right now: a real (not fallback) decision for this market day whose transaction
+*  is confirmed AND whose order is still posted on chain at that price. The contract stays authoritative: if the order
+*  moved or was withdrawn, the decision no longer prices anything and the rule price applies. */
+async function livePrices(store, offers, day) {
+	const out = [];
+	for (const id of Object.keys(LEVERS)) {
+		const l = LEVERS[id];
+		const d = await decisionFor(store, id, day).catch(() => null);
+		if (!d || d.kind !== "price" || d.source !== "ai" || !d.txHash) continue;
+		if (offers.some((o) => o.merchant === id && o.token_id === l.good && o.side === l.side && Number(o.price) === d.price && Number(o.qty) > 0)) out.push({
+			id,
+			side: l.side,
+			good: l.good,
+			price: d.price
+		});
+	}
+	return out;
+}
+/** Writes live prices into an economy state's flags, so pricing.ts quote()/bidFor() use them (server `deal`, client). */
+function applyLivePrices(st, live) {
+	for (const k of Object.keys(st.flags)) if (k.startsWith("agentPrice.")) delete st.flags[k];
+	for (const p of live) st.flags[agentPriceKey(p.id, p.side, p.good)] = p.price;
+}
+/** The current agent price when the buyer's reference (the raw decision price their screen was built on) is not it.
+*  null = nothing to refuse: no live decision for this lever, or the reference matches. */
+function priceMoved(st, id, tradeSide, good, ref) {
+	const live = agentPrice(st, id, tradeSide === "buy" ? "ask" : "bid", good);
+	if (live === null || ref === null) return null;
+	return Math.round(ref) === live ? null : live;
+}
+/** Runs `fresh` at most once per agent per market day across every instance (store lock), returning the stored
+*  decision otherwise. null means "no decision": off, or the store is down (no idempotency, so no model call). */
+async function once(c, id, fresh) {
+	const { store, day } = c;
 	try {
 		const prior = await decisionFor(store, id, day);
 		if (prior) return {
-			price: prior.price,
 			decision: prior,
 			duplicate: true,
-			skipBid: false
+			skip: false
 		};
 		if (!await store.setNx(`${keyOf(id, day)}:lock`, "1", LOCK_TTL)) {
-			for (let k = 0; k < (i.waitSteps ?? 8); k++) {
-				await (i.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))))(500);
+			for (let k = 0; k < (c.waitSteps ?? 8); k++) {
+				await (c.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))))(500);
 				const d = await decisionFor(store, id, day);
 				if (d) return {
-					price: d.price,
 					decision: d,
 					duplicate: true,
-					skipBid: true
+					skip: true
 				};
 			}
 			return {
-				price: band.base,
 				decision: null,
 				duplicate: true,
-				skipBid: true
+				skip: true
 			};
 		}
 		try {
-			const out = await decideFresh(i, band);
-			await store.set(keyOf(id, day), JSON.stringify(out.decision), DECISION_TTL);
-			return out;
+			const d = await fresh();
+			await store.set(keyOf(id, day), JSON.stringify(d), DECISION_TTL);
+			return {
+				decision: d,
+				duplicate: false,
+				skip: false
+			};
 		} finally {
 			await store.del(`${keyOf(id, day)}:lock`).catch(() => void 0);
 		}
 	} catch {
-		return rule();
+		return {
+			decision: null,
+			duplicate: false,
+			skip: false
+		};
 	}
+}
+/** One effective decision per merchant per market day, shared by every serverless instance through the store.
+*  If the store itself is down nothing is decided and the plain rule price is used, as before the agent existed. */
+async function decideBid(i) {
+	const { cfg, st, id, offers, day } = i;
+	const l = LEVERS[id];
+	const rule = () => ({
+		price: l ? (l.side === "bid" ? bidFor(st, id, l.good)?.price : quote(st, id, l.good, false).price) ?? 1 : 1,
+		decision: null,
+		duplicate: false,
+		skipBid: false
+	});
+	const band = l && cfg.enabled.has(id) ? bandFor(st, id, offers) : null;
+	if (!band) return rule();
+	const r = await once(i, id, () => decideFresh(i, band));
+	if (!r.decision) return r.skip ? {
+		price: band.base,
+		decision: null,
+		duplicate: true,
+		skipBid: true
+	} : rule();
+	return {
+		price: r.decision.price,
+		decision: r.decision,
+		duplicate: r.duplicate,
+		skipBid: r.skip
+	};
 }
 async function decideFresh(i, band) {
 	const { cfg, st, id, offers, day } = i;
@@ -13020,6 +13214,8 @@ async function decideFresh(i, band) {
 	const at = (i.now ?? Date.now)();
 	const make = (action, source, price, ai, why) => ({
 		merchant: id,
+		lever: leverName(id),
+		kind: "price",
 		day,
 		source,
 		model: ai?.model ?? null,
@@ -13028,26 +13224,13 @@ async function decideFresh(i, band) {
 		price,
 		confidence: ai?.confidence ?? null,
 		probabilities: ai?.probabilities ?? null,
-		receipt: ai?.decisionId ? {
-			id: ai.decisionId,
-			status: "unverified",
-			note: "receipt id captured from X-Generation-Id; NEAR AI verification not run"
-		} : {
-			id: null,
-			status: "none",
-			note: "no inference receipt"
-		},
+		choices: null,
+		receipt: receiptOf(ai?.decisionId ?? null),
 		justification: justify(action, state),
-		line: lineFor(action, band.base, price, state),
+		line: lineFor(action, band.base, price, state, id),
 		fallbackReason: why,
 		txHash: null,
 		at
-	});
-	const done = (d) => ({
-		price: d.price,
-		decision: d,
-		duplicate: false,
-		skipBid: false
 	});
 	let ai;
 	try {
@@ -13056,13 +13239,196 @@ async function decideFresh(i, band) {
 			questions: questionsFor(id, band)
 		}, i.fetchImpl);
 	} catch (e) {
-		return done(make("hold", "fallback", band.base, null, e instanceof AgentError ? `${e.kind}: ${e.message}` : "unexpected error"));
+		return make("hold", "fallback", band.base, null, e instanceof AgentError ? `${e.kind}: ${e.message}` : "unexpected error");
 	}
-	if (ai.confidence !== null && ai.confidence < .5) return done(make("hold", "ai", band.base, ai, `confidence ${ai.confidence} under ${MIN_CONFIDENCE}: held`));
-	if (ai.action === "raise" && band.raise === null) return done(make("hold", "fallback", band.base, null, "invalid: raise is not permitted (limit or funds)"));
-	if (ai.action === "lower" && band.lower === null) return done(make("hold", "fallback", band.base, null, "invalid: lower is not permitted (limit)"));
+	if (ai.confidence !== null && ai.confidence < .5) return make("hold", "ai", band.base, ai, `confidence ${ai.confidence} under ${MIN_CONFIDENCE}: held`);
+	if (ai.action === "raise" && band.raise === null) return make("hold", "fallback", band.base, null, "invalid: raise is not permitted (limit or funds)");
+	if (ai.action === "lower" && band.lower === null) return make("hold", "fallback", band.base, null, "invalid: lower is not permitted (limit)");
 	const price = ai.action === "raise" ? band.raise : ai.action === "lower" ? band.lower : band.base;
-	return done(make(ai.action, "ai", price, ai, null));
+	return make(ai.action, "ai", price, ai, null);
+}
+const bestPerMerchant = (offers, side, token) => {
+	const out = /* @__PURE__ */ new Map();
+	for (const o of offers) {
+		if (o.side !== side || o.token_id !== token || !(Number(o.qty) > 0) || !(Number(o.price) > 0)) continue;
+		const c = {
+			merchant: o.merchant,
+			account: o.account_id,
+			price: Number(o.price),
+			qty: Number(o.qty)
+		};
+		const cur = out.get(o.merchant);
+		if (!cur || (side === "bid" ? c.price > cur.price : c.price < cur.price)) out.set(o.merchant, c);
+	}
+	return out;
+};
+/** Builds a plan from two choices, validating both against the posted orders and the purse. Returns null when a choice
+*  names something that does not exist or cannot be afforded (the caller falls back for that question). */
+function assemble(res, bids, asks, holding, coin, sellTo, mealFrom) {
+	const b = sellTo === "hold" ? null : bids.get(sellTo) ?? null;
+	const qty = b ? Math.min(holding, b.qty) : 0;
+	const sell = b && qty > 0 ? {
+		buyer: b.account,
+		merchant: b.merchant,
+		qty,
+		price: b.price
+	} : null;
+	const sellOk = sellTo === "hold" || sell !== null;
+	const purse = coin + (sell ? sell.qty * sell.price : 0);
+	const a = mealFrom === "skip" ? null : asks.get(mealFrom) ?? null;
+	const eat = a && purse >= a.price ? {
+		seller: a.account,
+		merchant: a.merchant,
+		price: a.price
+	} : null;
+	const mealOk = mealFrom === "skip" || eat !== null;
+	const cheapest = [...asks.values()].sort((x, y) => x.price - y.price)[0];
+	return {
+		plan: {
+			sell,
+			eat,
+			hungry: !eat && mealFrom !== "skip" && cheapest && purse < cheapest.price ? cheapest.price : null
+		},
+		sellOk,
+		mealOk
+	};
+}
+/** One effective decision per resident per market day (same store, lock and fallbacks as the merchants). */
+async function decideResident(i) {
+	const { cfg, res, offers, coin, holding } = i;
+	const rule = planResident(res, offers, coin, holding);
+	const off = {
+		plan: rule,
+		decision: null,
+		duplicate: false,
+		skip: false
+	};
+	if (!cfg.enabled.has(res.id)) return off;
+	const bids = bestPerMerchant(offers, "bid", res.good), asks = bestPerMerchant(offers, "ask", res.food);
+	if (!bids.size && !asks.size) return off;
+	const fb = {
+		sell: rule.sell?.merchant ?? "hold",
+		meal: rule.eat?.merchant ?? "skip"
+	};
+	const r = await once(i, res.id, () => residentFresh(i, bids, asks, fb));
+	if (!r.decision) return r.skip ? {
+		...off,
+		duplicate: true,
+		skip: true
+	} : off;
+	const pick = (q, fallback) => r.decision.choices?.find((c) => c.question === q)?.chosen ?? fallback;
+	let built = assemble(res, bids, asks, holding, coin, pick("sell_to", fb.sell), pick("meal_from", fb.meal));
+	if (!built.sellOk || !built.mealOk) built = assemble(res, bids, asks, holding, coin, built.sellOk ? pick("sell_to", fb.sell) : fb.sell, built.mealOk ? pick("meal_from", fb.meal) : fb.meal);
+	return {
+		plan: built.plan,
+		decision: r.decision,
+		duplicate: r.duplicate,
+		skip: r.skip
+	};
+}
+async function residentFresh(i, bids, asks, fb) {
+	const { cfg, res, coin, holding, day } = i;
+	const at = (i.now ?? Date.now)();
+	const sellOpts = [...bids.keys(), "hold"], mealOpts = [...asks.keys(), "skip"];
+	const state = {
+		name: res.name,
+		job: res.job,
+		market_day: day,
+		role_goal: `You are ${res.name}, a ${res.job}. Earn as much coin as you can for today's ${res.good}, then eat one ${res.food} as cheaply as you can. You can only sell what you hold and only spend what you have.`,
+		goods_held: { [res.good]: holding },
+		coin,
+		daily_output: res.perDay,
+		stalls_buying_what_you_sell: [...bids.values()].map((c) => ({
+			stall: c.merchant,
+			pays_coins_each: c.price,
+			buys_up_to: c.qty
+		})),
+		stalls_selling_your_meal: [...asks.values()].map((c) => ({
+			stall: c.merchant,
+			price_coins: c.price,
+			in_stock: c.qty
+		}))
+	};
+	const questions = {
+		sell_to: {
+			type: "choice",
+			instructions: `Which stall should ${res.name} sell today's ${res.good} to? Prefer the best price; "hold" keeps the goods unsold today.`,
+			criteria: {
+				...Object.fromEntries([...bids.values()].map((c) => [c.merchant, `Sell to ${c.merchant}: pays ${c.price} c each for up to ${c.qty}.`])),
+				hold: "Keep the goods and sell nothing today."
+			}
+		},
+		meal_from: {
+			type: "choice",
+			instructions: `Where should ${res.name} buy one ${res.food} to eat? Choose the cheapest stall the purse can pay; "skip" buys no meal.`,
+			criteria: {
+				...Object.fromEntries([...asks.values()].map((c) => [c.merchant, `Buy from ${c.merchant}: ${c.price} c.`])),
+				skip: "Do not buy a meal today."
+			}
+		}
+	};
+	const rec = (question, chosen, source, confidence, note) => ({
+		question,
+		chosen,
+		source,
+		confidence,
+		note
+	});
+	const wrap = (choices, model, receipt, why) => {
+		const sell = choices.find((c) => c.question === "sell_to").chosen, meal = choices.find((c) => c.question === "meal_from").chosen;
+		const b = sell === "hold" ? null : bids.get(sell);
+		const aiUsed = choices.some((c) => c.source === "ai");
+		return {
+			merchant: res.id,
+			lever: "plan",
+			kind: "plan",
+			day,
+			source: aiUsed ? "ai" : "fallback",
+			model: aiUsed ? model : null,
+			action: `sell_to ${sell}; meal_from ${meal}`,
+			basePrice: Math.max(0, ...[...bids.values()].map((c) => c.price)),
+			price: b?.price ?? 0,
+			confidence: choices.find((c) => c.source === "ai")?.confidence ?? null,
+			probabilities: null,
+			choices,
+			receipt: receiptOf(aiUsed ? receipt : null),
+			justification: [
+				`${holding} ${res.good} held, ${coin} c in the purse`,
+				...[...bids.values()].map((c) => `${c.merchant} bids ${c.price} c`),
+				...[...asks.values()].map((c) => `${c.merchant} sells ${res.food} at ${c.price} c`)
+			],
+			line: sell === "hold" ? `${res.name}: keeping the ${res.good} today.` : `${res.name}: selling ${res.good} to ${sell}${meal === "skip" ? "" : `, then a ${res.food} from ${meal}`}.`,
+			fallbackReason: why,
+			txHash: null,
+			at
+		};
+	};
+	let raw;
+	try {
+		raw = await askRaw(cfg, {
+			state,
+			questions
+		}, i.fetchImpl);
+	} catch (e) {
+		const why = e instanceof AgentError ? `${e.kind}: ${e.message}` : "unexpected error";
+		return wrap([rec("sell_to", fb.sell, "fallback", null, why), rec("meal_from", fb.meal, "fallback", null, why)], null, null, why);
+	}
+	const answers = raw.json?.answers ?? {};
+	const model = typeof raw.json?.model === "string" ? String(raw.json.model) : cfg.model;
+	const choose = (q, valid, fallback) => {
+		try {
+			const a = parseChoice(answers[q], valid);
+			if (a.confidence !== null && a.confidence < .5) return rec(q, fallback, "fallback", a.confidence, `confidence ${a.confidence} under ${MIN_CONFIDENCE}: rule choice used`);
+			return rec(q, a.choice, "ai", a.confidence, null);
+		} catch (e) {
+			return rec(q, fallback, "fallback", null, e instanceof AgentError ? `${e.kind}: ${e.message}` : "invalid");
+		}
+	};
+	let sell = choose("sell_to", sellOpts, fb.sell);
+	if (!assemble(res, bids, asks, holding, coin, sell.chosen, "skip").sellOk) sell = rec("sell_to", fb.sell, "fallback", null, "invalid: nothing to sell to that stall");
+	let meal = choose("meal_from", mealOpts, fb.meal);
+	if (!assemble(res, bids, asks, holding, coin, sell.chosen, meal.chosen).mealOk) meal = rec("meal_from", assemble(res, bids, asks, holding, coin, sell.chosen, fb.meal).mealOk ? fb.meal : "skip", "fallback", null, "invalid: the purse cannot pay that price");
+	return wrap([sell, meal], model, raw.decisionId, null);
 }
 // server/near/handlers.ts
 const MAX_BODY = 4096;
@@ -13079,8 +13445,6 @@ const GOODS = /* @__PURE__ */ new Set([
 ]);
 const DEAL_TTL_MS = 12e4;
 /** How far a haggle may move a merchant off its posted price before it refuses to sign. */
-const HAGGLE_FLOOR = .55;
-const HAGGLE_CEILING = 1.5;
 const GUEST_FUNDING = "0.01";
 /** One on-chain market day settles every 10 real minutes (fast-forward previews run in the client sim). */
 const MARKET_DAY_MS = 6e5;
@@ -13517,6 +13881,9 @@ async function deal(cfg, req, env) {
 	const player = String(b.player ?? "");
 	const qty = Number(b.qty);
 	const unit = Number(b.unit);
+	/** The raw NEAR AI price the player's screen was built on (0 = "no agent price"); absent from older clients. */
+	const ref = b.ref === void 0 || b.ref === null ? null : Number(b.ref);
+	if (ref !== null && !Number.isFinite(ref)) throw new HttpError(400, "bad price reference");
 	if (!MERCHANTS.includes(merchant)) throw new HttpError(400, "unknown merchant");
 	if (side !== "buy" && side !== "sell") throw new HttpError(400, "side must be buy or sell");
 	if (!GOODS.has(token)) throw new HttpError(400, "unknown good");
@@ -13531,17 +13898,24 @@ async function deal(cfg, req, env) {
 	]);
 	if (!registered) throw new HttpError(403, "player not registered");
 	const id = merchant, good = token, m = st.merchants[id];
+	applyLivePrices(st, await livePrices(decisionStore(cfg), offers, Math.floor(Date.now() / MARKET_DAY_MS)).catch(() => []));
+	const moved = priceMoved(st, id, side, good, ref);
+	if (moved !== null) throw new HttpError(409, `price moved: now ${moved} c`);
 	const posted = offers.find((o) => o.merchant === merchant && o.token_id === token && o.side === (side === "buy" ? "ask" : "bid"));
 	if (side === "buy") {
 		if (m.status !== "open") throw new HttpError(409, "stall is closed");
 		if (!m.sells.includes(good)) throw new HttpError(409, "doesn't sell that");
 		if (m.stock[good] < qty) throw new HttpError(409, m.stock[good] > 0 ? `only ${m.stock[good]} on offer` : "sold out");
 		const p = posted ? Number(posted.price) : quote(st, id, good, false).price;
-		if (unit < Math.floor(p * HAGGLE_FLOOR)) throw new HttpError(409, `won't go below ${Math.floor(p * HAGGLE_FLOOR)} c`);
+		const bounds = dealBounds(p);
+		if (unit < bounds.min) throw new HttpError(409, `won't go below ${bounds.min} c`);
+		if (unit > bounds.max) throw new HttpError(409, `won't take more than ${bounds.max} c`);
 	} else {
 		const p = bidFor(st, id, good)?.price ?? null;
 		if (p === null) throw new HttpError(409, "not buying that today");
-		if (unit > Math.ceil(p * HAGGLE_CEILING)) throw new HttpError(409, `won't pay more than ${Math.ceil(p * HAGGLE_CEILING)} c`);
+		const bounds = dealBounds(p);
+		if (unit > bounds.max) throw new HttpError(409, `won't pay more than ${bounds.max} c`);
+		if (unit < bounds.min) throw new HttpError(409, `won't pay less than ${bounds.min} c`);
 		if (m.cash < qty * unit) throw new HttpError(409, "not enough coin to pay that");
 	}
 	const secret = (env.NEAR_MERCHANT_SECRET ?? "").trim();
@@ -13969,7 +14343,7 @@ async function claimOnce(cfg, key, ttlSec) {
 	return true;
 }
 /** Residents' day (see src/economy/residents.ts). Returns what they ate per `merchant:good`, so tourists buy less. */
-async function residentTurn(cfg, provider, relayer, secret, day, log, txs) {
+async function residentTurn(cfg, provider, relayer, secret, day, log, txs, agentCfg, agentStore) {
 	const ate = {};
 	for (const r of RESIDENTS) {
 		const accountId = `${r.id}.${cfg.relayerId}`;
@@ -13996,7 +14370,23 @@ async function residentTurn(cfg, provider, relayer, secret, day, log, txs) {
 			continue;
 		}
 		const held = Object.fromEntries((await view(provider, cfg.contractId, "get_balances", { account_id: accountId })).map(([t, v]) => [t, Number(v)]));
-		const plan = planResident(r, await view(provider, cfg.contractId, "get_offers", {}), held.coin ?? 0, held[r.good] ?? 0);
+		const dec = await decideResident({
+			store: agentStore,
+			cfg: agentCfg,
+			res: r,
+			offers: await view(provider, cfg.contractId, "get_offers", {}),
+			coin: held.coin ?? 0,
+			holding: held[r.good] ?? 0,
+			day,
+			fetchImpl: fetch
+		});
+		if (dec.skip) {
+			log.push(`resident ${r.id} decision is held by another tick`);
+			continue;
+		}
+		const plan = dec.plan;
+		if (dec.decision) log.push(`resident ${r.id} ${dec.decision.source === "ai" ? "NEAR AI" : "rule"} plan: ${dec.decision.action}${dec.decision.fallbackReason ? ` (${dec.decision.fallbackReason})` : ""}`);
+		let carried = null;
 		if (plan.sell) {
 			const s = await call(me, "sell", {
 				buyer: plan.sell.buyer,
@@ -14006,6 +14396,7 @@ async function residentTurn(cfg, provider, relayer, secret, day, log, txs) {
 			});
 			log.push(`resident ${r.id} sold ${plan.sell.qty} ${r.good} to ${plan.sell.merchant} at ${plan.sell.price} c${s.ok ? "" : ` FAILED: ${s.error}`}`);
 			if (!s.ok) continue;
+			carried = s.txHash;
 		}
 		if (plan.eat) {
 			const b = await call(me, "buy", {
@@ -14015,6 +14406,7 @@ async function residentTurn(cfg, provider, relayer, secret, day, log, txs) {
 				max_price: String(plan.eat.price)
 			});
 			if (b.ok) {
+				carried ??= b.txHash;
 				const e = await call(relayer, "operator_burn", {
 					account_id: accountId,
 					token_id: r.food,
@@ -14025,6 +14417,7 @@ async function residentTurn(cfg, provider, relayer, secret, day, log, txs) {
 				log.push(`resident ${r.id} bought 1 ${r.food} from ${plan.eat.merchant} at ${plan.eat.price} c and ate it${e.ok ? "" : ` (eat FAILED: ${e.error})`}`);
 			} else log.push(`resident ${r.id} buy ${r.food} FAILED: ${b.error}`);
 		} else if (plan.hungry !== null) log.push(`resident ${r.id} could not afford ${r.food} at ${plan.hungry} c`);
+		if (dec.decision && carried) await attachTx(agentStore, r.id, day, carried).catch(() => void 0);
 	}
 	return ate;
 }
@@ -14122,35 +14515,41 @@ async function tick(cfg, env) {
 				price: String(price)
 			}, TICK_GAS, 0n));
 		};
-		for (const good of m.sells) want("ask", good, m.status === "open" ? m.stock[good] : 0, quote(st, id, good, false).price);
-		let agent = null, skipAgentBid = false;
+		const lever = LEVERS[id];
+		let agent = null, skipLever = false, leverPrice = null;
+		if (lever && agentCfg.enabled.has(id)) {
+			const out = await decideBid({
+				store: agentStore,
+				cfg: agentCfg,
+				st,
+				id,
+				offers: [...posted.values()],
+				day,
+				fetchImpl: fetch
+			});
+			agent = out.decision;
+			skipLever = out.skipBid;
+			if (agent) leverPrice = out.price;
+			if (agent) log.push(`${id} ${agent.source === "ai" ? "NEAR AI" : "rule"} decision: ${agent.action} ${lever.good} ${lever.side} ${agent.basePrice} -> ${agent.price} c${agent.fallbackReason ? ` (${agent.fallbackReason})` : ""}`);
+		}
+		const isLever = (side, good) => lever !== void 0 && lever.side === side && lever.good === good;
+		for (const good of m.sells) {
+			if (skipLever && isLever("ask", good)) continue;
+			want("ask", good, m.status === "open" ? m.stock[good] : 0, isLever("ask", good) && leverPrice !== null ? leverPrice : quote(st, id, good, false).price);
+		}
 		for (const good of ["mango", "lemon"]) {
 			const b = bidFor(st, id, good);
-			let price = b?.price ?? 1;
-			if (good === "mango" && b) {
-				const out = await decideBid({
-					store: agentStore,
-					cfg: agentCfg,
-					st,
-					id,
-					offers: [...posted.values()],
-					day,
-					fetchImpl: fetch
-				});
-				agent = out.decision;
-				price = out.price;
-				skipAgentBid = out.skipBid;
-				if (agent) log.push(`${id} ${agent.source === "ai" ? "NEAR AI" : "rule"} decision: ${agent.action} mango bid ${agent.basePrice} -> ${agent.price} c${agent.fallbackReason ? ` (${agent.fallbackReason})` : ""}`);
-			}
-			if (good === "mango" && skipAgentBid) continue;
+			const price = isLever("bid", good) && leverPrice !== null ? leverPrice : b?.price ?? 1;
+			if (skipLever && isLever("bid", good)) continue;
 			want("bid", good, b ? Math.min(b.qty, Math.floor(m.cash / Math.max(1, price))) : 0, price);
 		}
 		const hashes = [];
 		for (const call of calls) {
-			const agentBid = agent !== null && call.functionCall?.methodName === "bid" && JSON.parse(new TextDecoder().decode(call.functionCall.args)).token_id === "mango";
+			const isAgentCall = (c) => agent !== null && lever !== void 0 && c.functionCall?.methodName === (lever.side === "ask" ? "list" : "bid") && JSON.parse(new TextDecoder().decode(c.functionCall.args)).token_id === lever.good;
+			const agentBid = isAgentCall(call);
 			if (agentBid && !await claimBidSend(agentStore, id, day).catch(() => true)) {
 				hashes.push("");
-				log.push(`${id} mango bid already sent for market day ${day}`);
+				log.push(`${id} ${lever.good} ${lever.side} already sent for market day ${day}`);
 				continue;
 			}
 			const r = outcome(await signerOf(id).signAndSendTransaction({
@@ -14165,7 +14564,7 @@ async function tick(cfg, env) {
 			log.push(`${id} ${fc.methodName === "list" ? "asks" : "bids"} ${a.qty === "0" ? "withdrawn for" : `${a.qty} x ${a.price} c${a.per ? ` per ${a.per}` : ""} for`} ${a.token_id}${r.ok ? "" : ` FAILED: ${r.error}`}`);
 		}
 		if (agent) {
-			const at = calls.findIndex((c) => c.functionCall?.methodName === "bid" && JSON.parse(new TextDecoder().decode(c.functionCall.args)).token_id === "mango");
+			const at = calls.findIndex((c) => lever !== void 0 && c.functionCall?.methodName === (lever.side === "ask" ? "list" : "bid") && JSON.parse(new TextDecoder().decode(c.functionCall.args)).token_id === lever.good);
 			if (at >= 0 && hashes[at]) await attachTx(agentStore, id, day, hashes[at]).catch(() => void 0);
 		}
 		return hashes;
@@ -14185,7 +14584,7 @@ async function tick(cfg, env) {
 		txs.push(r.txHash);
 		log.push(`${t.buyer} bought ${t.qty} ${t.good} from ${t.seller} at ${t.price} c (${t.reason})${r.ok ? "" : ` FAILED: ${r.error}`}`);
 	}
-	const ate = await residentTurn(cfg, provider, relayer, secret, day, log, txs);
+	const ate = await residentTurn(cfg, provider, relayer, secret, day, log, txs, agentCfg, agentStore);
 	const op = [];
 	for (const id of MERCHANTS) {
 		const m = st.merchants[id];
@@ -14395,8 +14794,20 @@ async function handle(route, req, env) {
 		if (route === "tick") return await tick(cfg, env);
 		if (route === "decisions" && req.method === "GET") {
 			const who = new URL(req.url).searchParams.get("merchant") ?? "";
-			if (!MERCHANTS.includes(who)) return json(200, { decisions: [] });
-			return json(200, { decisions: await recentDecisions(decisionStore(cfg), who, Math.floor(Date.now() / MARKET_DAY_MS)).catch(() => []) });
+			if (![...MERCHANTS, ...RESIDENTS.map((r) => r.id)].includes(who)) return json(200, { decisions: [] });
+			const store = decisionStore(cfg), day = Math.floor(Date.now() / MARKET_DAY_MS);
+			const ds = await recentDecisions(store, who, day).catch(() => []);
+			const live = await (async () => {
+				try {
+					return await livePrices(store, await view(account(cfg).provider, cfg.contractId, "get_offers", {}), day);
+				} catch {
+					return [];
+				}
+			})();
+			return json(200, { decisions: ds.map((d) => ({
+				...d,
+				live: live.some((p) => p.id === d.merchant && d.day === day)
+			})) });
 		}
 		if (route === "pick") return await pick(cfg, req);
 		if (route === "talk") return await talk(cfg, req, env);

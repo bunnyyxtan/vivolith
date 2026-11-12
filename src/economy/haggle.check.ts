@@ -1,7 +1,7 @@
 // Run: node src/economy/haggle.check.ts   (haggling is deterministic and personality matters)
 import assert from "node:assert/strict";
 import { initialEconomy } from "./state.ts";
-import { agentPrice, agentPriceKey, bidFor, quote } from "./pricing.ts";
+import { agentPrice, agentPriceKey, bidFor, dealBounds, quote } from "./pricing.ts";
 import { applyTactic, closeDeal, dealTotal, dealUnit, openHaggle, type HaggleSession } from "./haggle.ts";
 
 const open = (s: ReturnType<typeof initialEconomy>, id: "pema" | "tomas" | "arin"): HaggleSession => {
@@ -82,4 +82,19 @@ assert.equal(dealTotal(frac("sell")), 12);
   pb.flags[agentPriceKey("pema", "bid", "mango")] = ruleBid.price + 1;
   assert.equal(bidFor(pb, "pema", "mango")!.price, ruleBid.price + 1); assert.equal(bidFor(pb, "pema", "mango")!.qty, ruleBid.qty, "only the price moves");
 }
+// The relayer's price window: both sides, around the authoritative price, live AI price included.
+{
+  assert.deepEqual(dealBounds(6), { min: 3, max: 9 });
+  assert.deepEqual(dealBounds(1), { min: 0, max: 2 });
+  const st = initialEconomy();
+  Object.assign(st.merchants.tomas, { status: "open", stock: { mango: 40, lemon: 0, lassi: 0 } });
+  const base = quote(st, "tomas", "mango", false).price;
+  st.flags[agentPriceKey("tomas", "ask", "mango")] = base + 3;
+  const b = dealBounds(quote(st, "tomas", "mango", false).price);
+  assert.ok(b.min > dealBounds(base).min, "the window follows the live AI price, not the old rule price");
+  for (const unit of [b.min, base + 3, b.max]) assert.ok(unit >= b.min && unit <= b.max);
+  assert.ok(0 < b.min && b.max < 10 * (base + 3), "no arbitrary client price fits: 1 c or 1000 c are outside");
+  assert.ok(!(1000 >= b.min && 1000 <= b.max)); assert.ok(b.min > 1);
+}
+
 console.log("haggle checks passed");

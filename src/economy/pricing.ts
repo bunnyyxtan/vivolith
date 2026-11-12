@@ -88,6 +88,12 @@ function rivalBest(state: EconomyState, self: MerchantId, good: Good): { id: Mer
   return best;
 }
 
+/** How far a deal's unit price may sit from the authoritative price (the posted ask when buying, the bid when selling,
+ *  both already carrying any live NEAR AI price): haggling can move it down to 55% or up to 150%, never outside. The
+ *  relayer (`deal`) refuses anything else, whatever the client sends. */
+export const HAGGLE_FLOOR = 0.55, HAGGLE_CEILING = 1.5;
+export const dealBounds = (authoritative: number): { min: number; max: number } => ({ min: Math.floor(authoritative * HAGGLE_FLOOR), max: Math.ceil(authoritative * HAGGLE_CEILING) });
+
 /** A price set by a live NEAR AI decision: `flags["agentPrice.<merchant>.<ask|bid>.<good>"]`. The relayer and the client
  *  write it from the same decision, and only while that decision is confirmed and its order is still posted on chain
  *  (server/near/agent.ts livePrices). Absent, every price is exactly the rule price below. */

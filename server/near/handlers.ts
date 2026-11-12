@@ -15,7 +15,7 @@ import { RESIDENTS, planResident, type Offer } from "../../src/economy/residents
 import { synthesize } from "./voice.ts";
 import { answer, factsFor } from "./talk.ts";
 import { LEVERS, agentConfig, applyLivePrices, attachTx, claimBidSend, decideBid, decideResident, livePrices, priceMoved, recentDecisions, releaseBidSend, type AgentConfig, type Decision, type DecisionStore } from "./agent.ts";
-import { ORCHARD_PICK, bidFor, planMerchantTrades, quote } from "../../src/economy/pricing.ts";
+import { ORCHARD_PICK, bidFor, dealBounds, planMerchantTrades, quote } from "../../src/economy/pricing.ts";
 import { closingNeed, shopperWant } from "../../src/economy/sim.ts";
 import { initialEconomy, type EconomyState } from "../../src/economy/state.ts";
 
@@ -41,8 +41,6 @@ const PLAYER_METHODS = new Set(["buy", "sell", "deal"]);
 const GOODS = new Set(["mango", "lemon", "lassi"]);
 const DEAL_TTL_MS = 2 * 60 * 1000;
 /** How far a haggle may move a merchant off its posted price before it refuses to sign. */
-const HAGGLE_FLOOR = 0.55; // buyer pays at least 55% of the ask
-const HAGGLE_CEILING = 1.5; // merchant pays at most 150% of its bid
 const GUEST_FUNDING = "0.01"; // account + key storage; guests never pay gas (meta-transactions)
 /** One on-chain market day settles every 10 real minutes (fast-forward previews run in the client sim). */
 export const MARKET_DAY_MS = 10 * 60 * 1000;
@@ -393,11 +391,15 @@ async function deal(cfg: Config, req: Request, env: RelayEnv): Promise<Response>
     if (!m.sells.includes(good)) throw new HttpError(409, "doesn't sell that");
     if (m.stock[good] < qty) throw new HttpError(409, m.stock[good] > 0 ? `only ${m.stock[good]} on offer` : "sold out");
     const p = posted ? Number(posted.price) : quote(st, id, good, false).price;
-    if (unit < Math.floor(p * HAGGLE_FLOOR)) throw new HttpError(409, `won't go below ${Math.floor(p * HAGGLE_FLOOR)} c`);
+    const bounds = dealBounds(p); // the executed unit must sit inside the haggling range around the authoritative ask
+    if (unit < bounds.min) throw new HttpError(409, `won't go below ${bounds.min} c`);
+    if (unit > bounds.max) throw new HttpError(409, `won't take more than ${bounds.max} c`);
   } else {
     const p = bidFor(st, id, good)?.price ?? null;
     if (p === null) throw new HttpError(409, "not buying that today");
-    if (unit > Math.ceil(p * HAGGLE_CEILING)) throw new HttpError(409, `won't pay more than ${Math.ceil(p * HAGGLE_CEILING)} c`);
+    const bounds = dealBounds(p); // around the authoritative bid (a live NEAR AI bid when there is one)
+    if (unit > bounds.max) throw new HttpError(409, `won't pay more than ${bounds.max} c`);
+    if (unit < bounds.min) throw new HttpError(409, `won't pay less than ${bounds.min} c`);
     if (m.cash < qty * unit) throw new HttpError(409, "not enough coin to pay that");
   }
   const secret = (env.NEAR_MERCHANT_SECRET ?? "").trim();
