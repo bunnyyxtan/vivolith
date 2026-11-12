@@ -2,7 +2,8 @@
 // Mocked-response tests for the merchant decision service. No network, no model call, no credits, no chain.
 import assert from "node:assert/strict";
 import { initialEconomy } from "../../src/economy/state.ts";
-import { MIN_CONFIDENCE, agentConfig, attachTx, bandFor, claimBidSend, decideBid, decisionFor, parseAnswer, recentDecisions, releaseBidSend, stateFor, type AgentConfig, type BookOffer, type DecisionStore, type FetchLike } from "./agent.ts";
+import { RESIDENTS, planResident, type Offer as ResOffer } from "../../src/economy/residents.ts";
+import { MIN_CONFIDENCE, LEVERS, agentConfig, decideResident, decisionKey, attachTx, bandFor, claimBidSend, decideBid, decisionFor, parseAnswer, recentDecisions, releaseBidSend, stateFor, type AgentConfig, type BookOffer, type DecisionStore, type FetchLike } from "./agent.ts";
 
 const cfg: AgentConfig = agentConfig({ NEAR_AGENT_MERCHANTS: "pema", NEAR_AI_KEY: "test-key-not-real" });
 const offers: BookOffer[] = [{ merchant: "tomas", token_id: "mango", side: "ask", qty: "20", price: "6" }];
@@ -213,13 +214,13 @@ assert.equal(parseAnswer({ answers: { bid_action: { type: "choice", choice: "rai
   assert.ok(!winner.duplicate && !winner.skipBid, "the winner posts the bid");
   assert.ok(loser.duplicate && loser.skipBid, "the other tick does not post a bid");
   assert.equal(loser.price, winner.price); assert.ok(waits >= 1);
-  assert.equal(store.data.has("vivolith:agent:pema:" + DAY + ":lock"), false, "the lock is released");
+  assert.equal(store.data.has(decisionKey("pema", DAY) + ":lock"), false, "the lock is released");
 }
 
 // 14. A lock that never resolves (the other tick crashed): wait, then skip the bid this turn, no model call.
 {
   resetDecisions(); calls = 0;
-  store.data.set("vivolith:agent:pema:" + DAY + ":lock", "1");
+  store.data.set(decisionKey("pema", DAY) + ":lock", "1");
   const o = await decideBid({ store, cfg, st: stall(), id: "pema", offers, day: DAY, fetchImpl: counting(reply(choice("raise"))), sleep: async () => undefined, waitSteps: 3 });
   assert.equal(calls, 0); assert.ok(o.skipBid && o.decision === null);
   assert.equal(o.price, bandFor(stall(), "pema", offers)!.base, "deterministic price");
@@ -242,6 +243,139 @@ assert.equal(parseAnswer({ answers: { bid_action: { type: "choice", choice: "rai
   assert.equal(await claimBidSend(store, "pema", DAY + 1), true, "a new market day is a new claim");
   await releaseBidSend(store, "pema", DAY);
   assert.equal(await claimBidSend(store, "pema", DAY), true, "released after a failed send, the retry may go");
+}
+
+// ---- every agent: the other three merchants -------------------------------------------------------------------------
+const allCfg: AgentConfig = agentConfig({ NEAR_AGENT_MERCHANTS: "pema,tomas,mira,arin,picker,porter", NEAR_AI_KEY: "test-key-not-real" });
+const openAll = () => {
+  const st = initialEconomy();
+  for (const id of ["pema", "tomas", "mira", "arin"] as const) Object.assign(st.merchants[id], { status: "open", cash: 40 });
+  Object.assign(st.merchants.pema, { stock: { mango: 4, lemon: 0, lassi: 0 } });
+  Object.assign(st.merchants.tomas, { stock: { mango: 200, lemon: 10, lassi: 0 } }); // a glut: the only time Mira bids
+  Object.assign(st.merchants.mira, { stock: { mango: 2, lemon: 2, lassi: 0 } });
+  Object.assign(st.merchants.arin, { stock: { mango: 1, lemon: 0, lassi: 6 } });
+  return st;
+};
+const book: BookOffer[] = [{ merchant: "tomas", token_id: "mango", side: "ask", qty: "30", price: "7" }];
+
+for (const id of ["pema", "tomas", "mira", "arin"] as const) {
+  resetDecisions();
+  const st = openAll();
+  const lever = LEVERS[id];
+  const band = bandFor(st, id, book);
+  assert.ok(band, `${id} has a ${lever.side} band on ${lever.good}`);
+  const want = band.raise !== null ? "raise" : "hold";
+  const o = await decideBid({ store, cfg: allCfg, st, id, offers: book, day: DAY, fetchImpl: reply(choice(want)), now: () => 1 });
+  assert.ok(o.decision && o.decision.source === "ai", `${id}: a real decision is recorded as ai`);
+  assert.equal(o.decision.lever, `${lever.side}:${lever.good}`); assert.equal(o.decision.kind, "price");
+  assert.equal(o.price, want === "raise" ? band.raise : band.base, `${id}: price from the band`);
+  assert.ok(o.price >= band.min && o.price <= Math.max(band.max, band.base), `${id}: inside the band`);
+  assert.ok(decisionKey(id, DAY).includes(`:${id}:${lever.side}:${lever.good}:`), "per-agent, per-lever key");
+  resetDecisions();
+  const st2 = openAll(); Object.assign(st2.merchants[id], { cash: 0 });
+  const b2 = bandFor(st2, id, book);
+  if (b2 && b2.raise === null) { const o2 = await decideBid({ store, cfg: allCfg, st: st2, id, offers: book, day: DAY, fetchImpl: reply(choice("raise")) }); assert.equal(o2.price, b2.base); assert.equal(o2.decision?.source, "fallback"); }
+}
+{ // Tomas's lever is an ask: it needs stock, and only moves a selling price
+  const st = openAll();
+  assert.equal(LEVERS.tomas.side, "ask");
+  Object.assign(st.merchants.tomas, { stock: { mango: 0, lemon: 0, lassi: 0 } });
+  assert.equal(bandFor(st, "tomas", book), null, "nothing to sell: no price to set");
+  const ok = openAll(), band = bandFor(ok, "tomas", book)!;
+  assert.ok(band.max <= Math.ceil(ok.merchants.tomas.baseCost.mango * 4) && band.min >= Math.ceil(ok.merchants.tomas.baseCost.mango * 0.8));
+}
+{ // a closed agent never decides
+  const st = openAll(); Object.assign(st.merchants.mira, { status: "closed" });
+  calls = 0; resetDecisions();
+  const o = await decideBid({ store, cfg: allCfg, st, id: "mira", offers: book, day: DAY, fetchImpl: counting(reply(choice("raise"))) });
+  assert.equal(calls, 0); assert.equal(o.decision, null);
+}
+
+// ---- residents: where to sell, where to eat -------------------------------------------------------------------------
+const lin = RESIDENTS[0]; // picker: mangoes, eats lassi
+const racks: ResOffer[] = [
+  { merchant: "pema", account_id: "pema.x.testnet", token_id: "mango", side: "bid", qty: "10", price: "5" },
+  { merchant: "arin", account_id: "arin.x.testnet", token_id: "mango", side: "bid", qty: "10", price: "4" },
+  { merchant: "arin", account_id: "arin.x.testnet", token_id: "lassi", side: "ask", qty: "6", price: "8" },
+  { merchant: "tomas", account_id: "tomas.x.testnet", token_id: "lassi", side: "ask", qty: "6", price: "9" },
+];
+const planReply = (sell: string, meal: string, conf = 0.9): FetchLike => async () => ({
+  ok: true, status: 200, headers: { get: (k: string) => (k.toLowerCase() === "x-generation-id" ? "gen-res-1" : null) },
+  json: async () => ({ model: "typesafe/jev-1.13", answers: { sell_to: choice(sell, conf), meal_from: choice(meal, conf) } }),
+});
+const rdecide = (f: FetchLike, o: { offers?: ResOffer[]; coin?: number; holding?: number; res?: typeof lin } = {}) =>
+  decideResident({ store, cfg: allCfg, res: o.res ?? lin, offers: o.offers ?? racks, coin: o.coin ?? 0, holding: o.holding ?? 6, day: DAY, fetchImpl: counting(f), now: () => 1, sleep: async () => undefined });
+{ // valid: the model prefers Arin's bid (not the rule's best price): honoured, recorded as ai, persisted
+  resetDecisions(); calls = 0;
+  const rule = planResident(lin, racks, 0, 6);
+  assert.equal(rule.sell?.merchant, "pema", "the rule sells to the best bid");
+  const o = await rdecide(planReply("arin", "arin"));
+  assert.equal(calls, 1); assert.equal(o.decision?.source, "ai"); assert.equal(o.decision?.kind, "plan");
+  assert.equal(o.plan.sell?.merchant, "arin"); assert.equal(o.plan.sell?.qty, 6); assert.equal(o.plan.sell?.price, 4);
+  assert.equal(o.plan.eat?.merchant, "arin"); assert.equal(o.plan.eat?.price, 8);
+  assert.deepEqual(o.decision?.choices?.map((c) => [c.question, c.chosen, c.source]), [["sell_to", "arin", "ai"], ["meal_from", "arin", "ai"]]);
+  assert.equal(o.decision?.receipt.status, "unverified");
+  const again = await rdecide(planReply("pema", "tomas"));
+  assert.equal(calls, 1, "one model call per resident per market day"); assert.ok(again.duplicate);
+  assert.equal(again.plan.sell?.merchant, "arin"); assert.equal(again.plan.eat?.merchant, "arin");
+}
+{ // hold: keep the goods, no sale
+  resetDecisions();
+  const o = await rdecide(planReply("hold", "skip"), { coin: 0 });
+  assert.equal(o.plan.sell, null); assert.equal(o.plan.eat, null); assert.equal(o.decision?.source, "ai");
+}
+{ // invented stall or option: refused, the deterministic plan is used and flagged as fallback
+  resetDecisions();
+  const rule = planResident(lin, racks, 0, 6);
+  const o = await rdecide(planReply("mira", "nowhere"));
+  assert.deepEqual(o.plan, rule); assert.equal(o.decision?.source, "fallback");
+  assert.ok(o.decision?.choices?.every((c) => c.source === "fallback" && c.note));
+}
+{ // a meal the purse cannot pay: refused, never overspent
+  resetDecisions();
+  const o = await rdecide(planReply("hold", "tomas"), { coin: 1 });
+  assert.equal(o.plan.eat, null, "1 c cannot buy a 9 c lassi");
+  assert.equal(o.decision?.choices?.find((c) => c.question === "meal_from")?.source, "fallback");
+}
+{ // quantity is the real holding, capped by the bid: never invented
+  resetDecisions();
+  const o = await rdecide(planReply("pema", "skip"), { holding: 3 });
+  assert.equal(o.plan.sell?.qty, 3);
+  resetDecisions();
+  const o2 = await rdecide(planReply("pema", "skip"), { holding: 50 });
+  assert.equal(o2.plan.sell?.qty, 10, "capped by the bid's size");
+}
+{ // low confidence, refusal, timeout, 5xx: all land on exactly the deterministic plan
+  const rule = planResident(lin, racks, 0, 6);
+  const refuse: FetchLike = async () => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => ({ answers: { sell_to: { type: "refusal" }, meal_from: null } }) });
+  const timeout: FetchLike = async () => { const e = new Error("t"); e.name = "TimeoutError"; throw e; };
+  for (const f of [planReply("arin", "arin", 0.2), refuse, timeout, reply(choice("raise"), null, 503)]) {
+    resetDecisions();
+    const o = await rdecide(f);
+    assert.deepEqual(o.plan, rule); assert.equal(o.decision?.source, "fallback");
+  }
+}
+{ // concurrent ticks for one resident: one model call
+  resetDecisions(); calls = 0;
+  const slow: FetchLike = async (...a) => { await new Promise((r) => setTimeout(r, 30)); return planReply("pema", "arin")(...a); };
+  const run = () => decideResident({ store, cfg: allCfg, res: lin, offers: racks, coin: 0, holding: 6, day: DAY, fetchImpl: counting(slow), sleep: async () => { await new Promise((r) => setTimeout(r, 20)); } });
+  const [a, b] = await Promise.all([run(), run()]);
+  assert.equal(calls, 1); assert.ok([a, b].some((x) => x.skip) && [a, b].some((x) => !x.skip));
+}
+{ // Dev (lemons); Redis down; agent off; nothing posted
+  resetDecisions(); calls = 0;
+  const dev = RESIDENTS[1];
+  const lemons: ResOffer[] = [{ merchant: "mira", account_id: "mira.x.testnet", token_id: "lemon", side: "bid", qty: "8", price: "2" }];
+  const o = await rdecide(planReply("mira", "skip"), { res: dev, offers: lemons, holding: 4 });
+  assert.equal(o.plan.sell?.merchant, "mira"); assert.equal(o.plan.sell?.qty, 4);
+  store.down = true; calls = 0;
+  const d = await rdecide(planReply("mira", "skip"), { res: dev, offers: lemons, holding: 4 });
+  assert.equal(calls, 0); assert.equal(d.decision, null); assert.deepEqual(d.plan, planResident(dev, lemons, 0, 4));
+  store.down = false; calls = 0;
+  const off = await decideResident({ store, cfg: agentConfig({ NEAR_AI_KEY: "k" }), res: dev, offers: lemons, coin: 0, holding: 4, day: DAY, fetchImpl: counting(planReply("mira", "skip")) });
+  assert.equal(calls, 0); assert.equal(off.decision, null);
+  const none = await rdecide(planReply("mira", "skip"), { res: dev, offers: [], holding: 4 });
+  assert.equal(calls, 0, "nothing posted: nothing to decide"); assert.equal(none.decision, null);
 }
 
 console.log("agent decision checks passed");

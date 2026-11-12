@@ -79,7 +79,7 @@ export const pickOrchard = (account: string): Promise<Record<string, unknown>> =
 /** A merchant explains its price and day (relayer route `talk`): `ai` only when NEAR AI phrased it. */
 /** A merchant's latest bid decision from the server (NEAR AI when it answered, else the rule price). Read-only. */
 export interface AgentDecision {
-  readonly merchant: string; readonly day: number; readonly source: "ai" | "fallback"; readonly model: string | null;
+  readonly merchant: string; readonly lever: string; readonly kind: "price" | "plan"; readonly day: number; readonly source: "ai" | "fallback"; readonly model: string | null;
   readonly action: string; readonly basePrice: number; readonly price: number; readonly confidence: number | null;
   readonly receipt: { readonly id: string | null; readonly status: string; readonly note: string };
   readonly justification: readonly string[]; readonly line: string; readonly fallbackReason: string | null;

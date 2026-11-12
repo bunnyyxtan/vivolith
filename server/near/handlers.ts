@@ -14,7 +14,7 @@ import { MERCHANTS, keyPairFromSeed, merchantKey, residentKey, type MerchantId }
 import { RESIDENTS, planResident, type Offer } from "../../src/economy/residents.ts";
 import { synthesize } from "./voice.ts";
 import { answer, factsFor } from "./talk.ts";
-import { agentConfig, attachTx, claimBidSend, decideBid, recentDecisions, releaseBidSend, type Decision, type DecisionStore } from "./agent.ts";
+import { LEVERS, agentConfig, attachTx, claimBidSend, decideBid, decideResident, recentDecisions, releaseBidSend, type AgentConfig, type Decision, type DecisionStore } from "./agent.ts";
 import { ORCHARD_PICK, bidFor, planMerchantTrades, quote } from "../../src/economy/pricing.ts";
 import { closingNeed, shopperWant } from "../../src/economy/sim.ts";
 import { initialEconomy, type EconomyState } from "../../src/economy/state.ts";
@@ -731,7 +731,7 @@ async function claimOnce(cfg: Config, key: string, ttlSec: number): Promise<bool
 }
 
 /** Residents' day (see src/economy/residents.ts). Returns what they ate per `merchant:good`, so tourists buy less. */
-async function residentTurn(cfg: Config, provider: JsonRpcProvider, relayer: Account, secret: string, day: number, log: string[], txs: string[]): Promise<Record<string, number>> {
+async function residentTurn(cfg: Config, provider: JsonRpcProvider, relayer: Account, secret: string, day: number, log: string[], txs: string[], agentCfg: AgentConfig, agentStore: DecisionStore): Promise<Record<string, number>> {
   const ate: Record<string, number> = {};
   for (const r of RESIDENTS) {
     const accountId = `${r.id}.${cfg.relayerId}`;
@@ -746,20 +746,29 @@ async function residentTurn(cfg: Config, provider: JsonRpcProvider, relayer: Acc
     const work = await call(relayer, "operator_mint", { account_id: accountId, token_id: r.good, amount: String(r.perDay), reason: r.reason });
     if (!work.ok) { log.push(`${r.id} work FAILED: ${work.error}`); continue; }
     const held = Object.fromEntries((await view<[string, string][]>(provider, cfg.contractId, "get_balances", { account_id: accountId })).map(([t, v]) => [t, Number(v)]));
-    const plan = planResident(r, await view<Offer[]>(provider, cfg.contractId, "get_offers", {}), held.coin ?? 0, held[r.good] ?? 0);
+    const book = await view<Offer[]>(provider, cfg.contractId, "get_offers", {});
+    // NEAR AI picks where this resident sells and eats (agent.ts), only among orders that exist; else exactly the rule's plan
+    const dec = await decideResident({ store: agentStore, cfg: agentCfg, res: r, offers: book, coin: held.coin ?? 0, holding: held[r.good] ?? 0, day, fetchImpl: fetch as never });
+    if (dec.skip) { log.push(`resident ${r.id} decision is held by another tick`); continue; }
+    const plan = dec.plan;
+    if (dec.decision) log.push(`resident ${r.id} ${dec.decision.source === "ai" ? "NEAR AI" : "rule"} plan: ${dec.decision.action}${dec.decision.fallbackReason ? ` (${dec.decision.fallbackReason})` : ""}`);
+    let carried: string | null = null; // the transaction that carried the decision out
     if (plan.sell) {
       const s = await call(me, "sell", { buyer: plan.sell.buyer, token_id: r.good, qty: String(plan.sell.qty), min_price: String(plan.sell.price) });
       log.push(`resident ${r.id} sold ${plan.sell.qty} ${r.good} to ${plan.sell.merchant} at ${plan.sell.price} c${s.ok ? "" : ` FAILED: ${s.error}`}`);
       if (!s.ok) continue;
+      carried = s.txHash;
     }
     if (plan.eat) {
       const b = await call(me, "buy", { seller: plan.eat.seller, token_id: r.food, qty: "1", max_price: String(plan.eat.price) });
       if (b.ok) {
+        carried ??= b.txHash;
         const e = await call(relayer, "operator_burn", { account_id: accountId, token_id: r.food, amount: "1", reason: "eaten" });
         ate[`${plan.eat.merchant}:${r.food}`] = (ate[`${plan.eat.merchant}:${r.food}`] ?? 0) + 1;
         log.push(`resident ${r.id} bought 1 ${r.food} from ${plan.eat.merchant} at ${plan.eat.price} c and ate it${e.ok ? "" : ` (eat FAILED: ${e.error})`}`);
       } else log.push(`resident ${r.id} buy ${r.food} FAILED: ${b.error}`);
     } else if (plan.hungry !== null) log.push(`resident ${r.id} could not afford ${r.food} at ${plan.hungry} c`);
+    if (dec.decision && carried) await attachTx(agentStore, r.id, day, carried).catch(() => undefined);
   }
   return ate;
 }
@@ -823,29 +832,37 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
       if (cur && Number(cur.qty) === qty && Number(cur.price) === price) return;
       calls.push(actions.functionCall(side === "ask" ? "list" : "bid", { token_id: token, qty: String(qty), price: String(price) }, TICK_GAS, 0n));
     };
+    // One NEAR AI decision per merchant per market day on its one price lever (agent.ts); off, or any failure, leaves the
+    // rule price. The lever's order is the only one the model can change: its price, inside a band the economy sets.
+    const lever = LEVERS[id];
+    let agent: Decision | null = null, skipLever = false, leverPrice: number | null = null;
+    if (lever && agentCfg.enabled.has(id)) {
+      const out = await decideBid({ store: agentStore, cfg: agentCfg, st, id, offers: [...posted.values()], day, fetchImpl: fetch as never });
+      agent = out.decision;
+      skipLever = out.skipBid; // another tick holds this day's decision and posts its order
+      if (agent) leverPrice = out.price;
+      if (agent) log.push(`${id} ${agent.source === "ai" ? "NEAR AI" : "rule"} decision: ${agent.action} ${lever.good} ${lever.side} ${agent.basePrice} -> ${agent.price} c${agent.fallbackReason ? ` (${agent.fallbackReason})` : ""}`);
+    }
+    const isLever = (side: "ask" | "bid", good: string): boolean => lever !== undefined && lever.side === side && lever.good === good;
     // a closed stall sells nothing until it reopens (the contract refuses those sales anyway)
-    for (const good of m.sells) want("ask", good, m.status === "open" ? m.stock[good] : 0, quote(st, id, good, false).price);
+    for (const good of m.sells) {
+      if (skipLever && isLever("ask", good)) continue; // a concurrent tick owns this merchant's order today
+      want("ask", good, m.status === "open" ? m.stock[good] : 0, isLever("ask", good) && leverPrice !== null ? leverPrice : quote(st, id, good, false).price);
+    }
     // Shares need no orders: their terms are fixed in the contract, which issues and buys back on demand.
-    let agent: Decision | null = null, skipAgentBid = false;
     for (const good of ["mango", "lemon"] as const) {
       const b = bidFor(st, id, good);
-      let price = b?.price ?? 1;
-      if (good === "mango" && b) { // NEAR AI decides Pema's mango bid (agent.ts); off, or any failure, leaves the rule price
-        const out = await decideBid({ store: agentStore, cfg: agentCfg, st, id, offers: [...posted.values()], day, fetchImpl: fetch as never });
-        agent = out.decision;
-        price = out.price;
-        skipAgentBid = out.skipBid; // another tick holds this day's decision and posts its bid
-        if (agent) log.push(`${id} ${agent.source === "ai" ? "NEAR AI" : "rule"} decision: ${agent.action} mango bid ${agent.basePrice} -> ${agent.price} c${agent.fallbackReason ? ` (${agent.fallbackReason})` : ""}`);
-      }
-      if (good === "mango" && skipAgentBid) continue; // a concurrent tick owns this merchant's mango bid today
+      const price = isLever("bid", good) && leverPrice !== null ? leverPrice : b?.price ?? 1;
+      if (skipLever && isLever("bid", good)) continue;
       want("bid", good, b ? Math.min(b.qty, Math.floor(m.cash / Math.max(1, price))) : 0, price);
     }
     // Function-call keys allow one action per transaction: one tx per order, in sequence for this merchant.
     const hashes: string[] = [];
     for (const call of calls) {
       // the agent-priced mango bid is sent by exactly one tick per market day (Redis claim); a failure releases it for a retry
-      const agentBid = agent !== null && call.functionCall?.methodName === "bid" && (JSON.parse(new TextDecoder().decode(call.functionCall.args)) as { token_id: string }).token_id === "mango";
-      if (agentBid && !(await claimBidSend(agentStore, id, day).catch(() => true))) { hashes.push(""); log.push(`${id} mango bid already sent for market day ${day}`); continue; }
+      const isAgentCall = (c: typeof call): boolean => agent !== null && lever !== undefined && c.functionCall?.methodName === (lever.side === "ask" ? "list" : "bid") && (JSON.parse(new TextDecoder().decode(c.functionCall.args)) as { token_id: string }).token_id === lever.good;
+      const agentBid = isAgentCall(call);
+      if (agentBid && !(await claimBidSend(agentStore, id, day).catch(() => true))) { hashes.push(""); log.push(`${id} ${lever!.good} ${lever!.side} already sent for market day ${day}`); continue; }
       const r = outcome(await signerOf(id).signAndSendTransaction({ receiverId: cfg.contractId, actions: [call], throwOnFailure: false }));
       if (agentBid && !r.ok) await releaseBidSend(agentStore, id, day).catch(() => undefined);
       hashes.push(r.txHash);
@@ -854,7 +871,7 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
       log.push(`${id} ${fc.methodName === "list" ? "asks" : "bids"} ${a.qty === "0" ? "withdrawn for" : `${a.qty} x ${a.price} c${a.per ? ` per ${a.per}` : ""} for`} ${a.token_id}${r.ok ? "" : ` FAILED: ${r.error}`}`);
     }
     if (agent) { // keep the hash of the transaction that carried the decision (none when the bid was already posted)
-      const at = calls.findIndex((c) => c.functionCall?.methodName === "bid" && (JSON.parse(new TextDecoder().decode(c.functionCall.args)) as { token_id: string }).token_id === "mango");
+      const at = calls.findIndex((c) => lever !== undefined && c.functionCall?.methodName === (lever.side === "ask" ? "list" : "bid") && (JSON.parse(new TextDecoder().decode(c.functionCall.args)) as { token_id: string }).token_id === lever.good);
       if (at >= 0 && hashes[at]) await attachTx(agentStore, id, day, hashes[at]).catch(() => undefined); // a repeat tick posts nothing: the first hash stays
     }
     return hashes;
@@ -874,7 +891,7 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
 
   // 2b. Residents (WP6): once a market day each, a day's piece work is sold into the best bid and one meal is bought
   // from what they hold; the meal is eaten (burned). Same keys and contract calls WP0 proved on testnet.
-  const ate = await residentTurn(cfg, provider, relayer, secret, day, log, txs);
+  const ate = await residentTurn(cfg, provider, relayer, secret, day, log, txs, agentCfg, agentStore);
 
   // 3. Operator: tourists (street shoppers), the harbor contract, the tea kitchen.
   const op: ReturnType<typeof actions.functionCall>[] = [];
@@ -1006,8 +1023,8 @@ export async function handle(route: string, req: Request, env: RelayEnv): Promis
     if (route === "tick") return await tick(cfg, env);
     if (route === "decisions" && req.method === "GET") { // read-only: the merchant's recent NEAR AI / rule decisions
       const who = new URL(req.url).searchParams.get("merchant") ?? "";
-      if (!(MERCHANTS as readonly string[]).includes(who)) return json(200, { decisions: [] });
-      return json(200, { decisions: await recentDecisions(decisionStore(cfg), who as MerchantId, Math.floor(Date.now() / MARKET_DAY_MS)).catch(() => []) });
+      if (!([...MERCHANTS, ...RESIDENTS.map((r) => r.id)] as string[]).includes(who)) return json(200, { decisions: [] });
+      return json(200, { decisions: await recentDecisions(decisionStore(cfg), who, Math.floor(Date.now() / MARKET_DAY_MS)).catch(() => []) });
     }
     if (route === "pick") return await pick(cfg, req);
     if (route === "talk") return await talk(cfg, req, env);
