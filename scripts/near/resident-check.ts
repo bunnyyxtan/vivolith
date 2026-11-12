@@ -13,7 +13,8 @@ import { residentKey as residentKeyOf } from "../../server/near/keys.ts";
 
 const RUN = process.argv.includes("--run");
 const TICKS = process.argv.includes("--ticks");
-const RESIDENT = "picker";
+const RESIDENT = process.argv.find((a) => a.startsWith("--resident="))?.slice(11) ?? "picker"; // picker (Lin) or porter (Dev)
+const REGISTER_ONLY = process.argv.includes("--register-only"); // with --run: create + register the account and stop (no mint, no trades)
 const RESIDENT_METHODS = ["buy", "sell"];
 const RESIDENT_FUNDING = "0.1"; // NEAR for the resident's own gas
 const PICKED = 6; // mangoes a day's picking yields
@@ -125,6 +126,7 @@ if (RUN) {
     assert.ok(r.ok, `register failed: ${r.error}`);
     hashes.register = r.txHash;
   }
+  if (REGISTER_ONLY) { console.log("registered:", JSON.stringify(hashes), "(--register-only: stopped before any trade)"); process.exit(0); }
 
   // 2. Orders must be posted; one market turn posts them if the book is empty.
   let book = await offers();
