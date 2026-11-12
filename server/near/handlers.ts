@@ -11,7 +11,7 @@ import path from "node:path";
 import { deserialize } from "borsh";
 import { Account, JsonRpcProvider, KeyPairSigner, PublicKey, SCHEMA, actions, nearToYocto, teraToGas, type KeyPairString } from "near-api-js";
 import { MERCHANTS, keyPairFromSeed, merchantKey, residentKey, type MerchantId } from "./keys.ts";
-import { RESIDENTS, planResident, type Offer } from "../../src/economy/residents.ts";
+import { RESIDENTS, executableOffers, planResident, type Offer } from "../../src/economy/residents.ts";
 import { synthesize } from "./voice.ts";
 import { answer, factsFor } from "./talk.ts";
 import { LEVERS, agentConfig, applyLivePrices, attachTx, claimBidSend, decideBid, decideResident, livePrices, priceMoved, recentDecisions, releaseBidSend, type AgentConfig, type Decision, type DecisionStore } from "./agent.ts";
@@ -755,7 +755,7 @@ async function claimOnce(cfg: Config, key: string, ttlSec: number): Promise<bool
 }
 
 /** Residents' day (see src/economy/residents.ts). Returns what they ate per `merchant:good`, so tourists buy less. */
-export async function residentTurn(cfg: Config, provider: JsonRpcProvider, relayer: Account, secret: string, day: number, log: string[], txs: string[], agentCfg: AgentConfig, agentStore: DecisionStore): Promise<Record<string, number>> {
+export async function residentTurn(cfg: Config, provider: JsonRpcProvider, relayer: Account, secret: string, day: number, log: string[], txs: string[], agentCfg: AgentConfig, agentStore: DecisionStore, mint = true): Promise<Record<string, number>> {
   const ate: Record<string, number> = {};
   for (const r of RESIDENTS) {
     const accountId = `${r.id}.${cfg.relayerId}`;
@@ -767,10 +767,13 @@ export async function residentTurn(cfg: Config, provider: JsonRpcProvider, relay
       txs.push(res.txHash);
       return res;
     };
-    const work = await call(relayer, "operator_mint", { account_id: accountId, token_id: r.good, amount: String(r.perDay), reason: r.reason });
-    if (!work.ok) { log.push(`${r.id} work FAILED: ${work.error}`); continue; }
+    if (mint) { // the day's piece work (a live test that proves the loop from existing stock passes mint = false)
+      const work = await call(relayer, "operator_mint", { account_id: accountId, token_id: r.good, amount: String(r.perDay), reason: r.reason });
+      if (!work.ok) { log.push(`${r.id} work FAILED: ${work.error}`); continue; }
+    }
     const held = Object.fromEntries((await view<[string, string][]>(provider, cfg.contractId, "get_balances", { account_id: accountId })).map(([t, v]) => [t, Number(v)]));
-    const book = await view<Offer[]>(provider, cfg.contractId, "get_offers", {});
+    const stalls = (await chainEconomy(provider, cfg)).merchants;
+    const book = executableOffers(await view<Offer[]>(provider, cfg.contractId, "get_offers", {}), stalls); // closed stalls and unfillable orders are never offered
     // NEAR AI picks where this resident sells and eats (agent.ts), only among orders that exist; else exactly the rule's plan
     const dec = await decideResident({ store: agentStore, cfg: agentCfg, res: r, offers: book, coin: held.coin ?? 0, holding: held[r.good] ?? 0, day, fetchImpl: fetch as never });
     if (dec.skip) { log.push(`resident ${r.id} decision is held by another tick`); continue; }

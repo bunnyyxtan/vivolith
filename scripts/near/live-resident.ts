@@ -1,14 +1,14 @@
 // One autonomous resident journey on testnet: Lin (picker) works, ONE Jev decision picks her buyer and her meal from the
 // real posted orders, then she trades with her own key. It runs the relayer's own residentTurn, never the full market tick.
 //   node scripts/near/live-resident.ts          dry run: reads chain only, prints the rule plan and the exact transactions
-//   node scripts/near/live-resident.ts --yes    runs it: at most 1 NEAR AI request and 4 testnet transactions, no retries
-// Transactions: (1) relayer mints Lin's day of mangoes, (2) Lin sells to the chosen bid, (3) Lin buys a lassi, (4) relayer
-// burns the lassi (eaten). Nothing secret is printed.
+//   node scripts/near/live-resident.ts --yes    runs it: at most 1 NEAR AI request and 4 testnet transactions, no retries, no retries
+// Transactions (no mint, her held mangoes are used): (1) only if Arin's shelf has no lassi: his tea kitchen burns 1 mango and
+// mints 4 lassi, (2) Lin sells to the chosen open stall's bid, (3) Lin buys a lassi, (4) the relayer burns it (eaten). Nothing secret is printed.
 import fs from "node:fs";
-import { Account, JsonRpcProvider } from "near-api-js";
-import { MARKET_DAY_MS, decisionStore, readConfig, residentTurn, type RelayEnv } from "../../server/near/handlers.ts";
+import { Account, JsonRpcProvider, actions, teraToGas } from "near-api-js";
+import { MARKET_DAY_MS, chainEconomy, decisionStore, outcome, readConfig, residentTurn, type RelayEnv } from "../../server/near/handlers.ts";
 import { agentConfig } from "../../server/near/agent.ts";
-import { RESIDENTS, planResident, type Offer } from "../../src/economy/residents.ts";
+import { RESIDENTS, executableOffers, planResident, type Offer } from "../../src/economy/residents.ts";
 
 const send = process.argv.includes("--yes");
 const env: RelayEnv = Object.fromEntries(
@@ -26,11 +26,16 @@ const held = async (id: string): Promise<Record<string, number>> => Object.fromE
 const fail = (m: string): never => { console.error("STOP:", m); process.exit(1); };
 
 const day = Math.floor(Date.now() / MARKET_DAY_MS);
-const book = await view<Offer[]>("get_offers");
+const stalls = (await chainEconomy(provider, cfg)).merchants;
+// Arin's posted lassi ask is only real if the shelf holds lassi. When it is empty, his tea kitchen runs first (the same
+// burn-mangoes / mint-lassi step the market tick performs, one transaction), so the meal leg has stock to buy.
+const kitchen = stalls.arin.stock.lassi < 1 && stalls.arin.stock.mango >= 1;
+if (kitchen) stalls.arin = { ...stalls.arin, stock: { ...stalls.arin.stock, lassi: 4 } };
+const book = executableOffers(await view<Offer[]>("get_offers"), stalls); // what residentTurn will show Jev
 const before = await held(accountId);
 if (!(await view<boolean>("is_registered", { account_id: accountId }))) fail(`${accountId} is not registered`);
 if (!agentCfg.key) fail("NEAR_AI_KEY is not set");
-const plan = planResident(lin, book, before.coin ?? 0, (before.mango ?? 0) + lin.perDay);
+const plan = planResident(lin, book, before.coin ?? 0, before.mango ?? 0);
 console.log(`Lin now: ${JSON.stringify(before)}; rule plan today: sell ${plan.sell ? `${plan.sell.qty} to ${plan.sell.merchant} at ${plan.sell.price} c` : "nothing"}, meal ${plan.eat ? `from ${plan.eat.merchant} at ${plan.eat.price} c` : plan.hungry !== null ? `unaffordable (${plan.hungry} c)` : "none posted"}`);
 if (!plan.sell && !plan.eat) fail("no posted bid for mangoes and no lassi ask: Lin has nothing to respond to (nothing sent)");
 if (!send) { console.log("DRY RUN: nothing sent. Re-run with --yes (1 NEAR AI request, up to 4 transactions)."); process.exit(0); }
@@ -44,7 +49,16 @@ globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
 }) as typeof fetch;
 const log: string[] = [], txs: string[] = [];
 const relayer = new Account(cfg.relayerId, provider, cfg.relayerKey!);
-const ate = await residentTurn(cfg, provider, relayer, env.NEAR_MERCHANT_SECRET!.trim(), day, log, txs, agentCfg, decisionStore(cfg));
+if (kitchen) {
+  const k = outcome(await relayer.signAndSendTransaction({ receiverId: cfg.contractId, actions: [
+    actions.functionCall("operator_burn", { account_id: `arin.${cfg.relayerId}`, token_id: "mango", amount: "1", reason: "tea kitchen" }, teraToGas("30"), 0n),
+    actions.functionCall("operator_mint", { account_id: `arin.${cfg.relayerId}`, token_id: "lassi", amount: "4", reason: "tea kitchen" }, teraToGas("30"), 0n),
+  ], throwOnFailure: false }));
+  if (!k.ok) fail(`tea kitchen failed: ${k.error} (no NEAR AI call made)`);
+  txs.push(k.txHash); log.push("arin's tea kitchen ran: 1 mango -> 4 lassi");
+  await new Promise((r) => setTimeout(r, 7000));
+}
+const ate = await residentTurn(cfg, provider, relayer, env.NEAR_MERCHANT_SECRET!.trim(), day, log, txs, agentCfg, decisionStore(cfg), false); // no mint: her 51 mangoes prove the earn-and-spend loop
 console.log("\n--- result ---");
 for (const l of log) console.log(" ", l);
 for (const h of txs) console.log("  ", link(h));

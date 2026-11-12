@@ -11483,6 +11483,21 @@ function planResident(r, offers, coin, holding) {
 		hungry: price
 	};
 }
+/** Only orders a resident could actually fill right now: the stall is open, a bid's till covers at least one unit, an ask has
+*  stock. Quantities are cut to what the till or the shelf holds. Closed stalls and stale orders never reach the planner or the model. */
+function executableOffers(offers, stalls) {
+	const out = [];
+	for (const o of offers) {
+		const m = stalls[o.merchant], price = Number(o.price), qty = Number(o.qty);
+		if (!m || m.status !== "open" || !(price > 0) || !(qty > 0)) continue;
+		const fill = o.side === "bid" ? Math.min(qty, Math.floor(m.cash / price)) : o.side === "ask" ? Math.min(qty, Math.floor(m.stock[o.token_id] ?? 0)) : 0;
+		if (fill >= 1) out.push({
+			...o,
+			qty: String(fill)
+		});
+	}
+	return out;
+}
 // src/economy/state.ts
 const MERCHANT_IDS = [
 	"pema",
@@ -14650,7 +14665,7 @@ async function claimOnce(cfg, key, ttlSec) {
 	return true;
 }
 /** Residents' day (see src/economy/residents.ts). Returns what they ate per `merchant:good`, so tourists buy less. */
-async function residentTurn(cfg, provider, relayer, secret, day, log, txs, agentCfg, agentStore) {
+async function residentTurn(cfg, provider, relayer, secret, day, log, txs, agentCfg, agentStore, mint = true) {
 	const ate = {};
 	for (const r of RESIDENTS) {
 		const accountId = `${r.id}.${cfg.relayerId}`;
@@ -14666,22 +14681,25 @@ async function residentTurn(cfg, provider, relayer, secret, day, log, txs, agent
 			txs.push(res.txHash);
 			return res;
 		};
-		const work = await call(relayer, "operator_mint", {
-			account_id: accountId,
-			token_id: r.good,
-			amount: String(r.perDay),
-			reason: r.reason
-		});
-		if (!work.ok) {
-			log.push(`${r.id} work FAILED: ${work.error}`);
-			continue;
+		if (mint) {
+			const work = await call(relayer, "operator_mint", {
+				account_id: accountId,
+				token_id: r.good,
+				amount: String(r.perDay),
+				reason: r.reason
+			});
+			if (!work.ok) {
+				log.push(`${r.id} work FAILED: ${work.error}`);
+				continue;
+			}
 		}
 		const held = Object.fromEntries((await view(provider, cfg.contractId, "get_balances", { account_id: accountId })).map(([t, v]) => [t, Number(v)]));
+		const stalls = (await chainEconomy(provider, cfg)).merchants;
 		const dec = await decideResident({
 			store: agentStore,
 			cfg: agentCfg,
 			res: r,
-			offers: await view(provider, cfg.contractId, "get_offers", {}),
+			offers: executableOffers(await view(provider, cfg.contractId, "get_offers", {}), stalls),
 			coin: held.coin ?? 0,
 			holding: held[r.good] ?? 0,
 			day,
