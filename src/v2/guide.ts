@@ -7,7 +7,7 @@ import { MERCHANT_IDS } from "../economy/state";
 import { chainLive, reopenGap, SHARE_PACK } from "../economy/sim";
 import { bidFor, profitRun } from "../economy/pricing";
 import { el, type Hud } from "./hud";
-import { night, stakeLine, type Clock } from "./story";
+import { night, type Clock, type Night } from "./story";
 
 export interface Step {
   readonly id: string;
@@ -120,7 +120,14 @@ function opportunity(s: EconomyState): Objective | null {
     detail: `${NAMES[run.buy]} sells mangoes at ${run.ask} c and ${NAMES[run.sell]} pays ${run.bid} c: about ${gain} c per mango. Buy what you can carry (you have ${s.player.coins} c), then walk them over.` };
 }
 
-export interface Objective { title: string; detail: string; target: Target | null; label: string; stake?: string }
+export interface Objective {
+  title: string; detail: string; target: Target | null; label: string;
+  /** Live economic context (Pema's till against her rent, from story.ts): shown as its own panel, never as mission copy. */
+  stake?: Night;
+  /** Step i of n, for the first-day progress bar. */
+  progress?: readonly [number, number];
+}
+const live = (n: Night): Night | undefined => (n.phase === "waiting" || n.phase === "charging" ? n : undefined);
 
 export interface Guide {
   /** Re-check completion; returns the reward line of a step that just completed (or null). */
@@ -144,14 +151,41 @@ function nightObjective(s: EconomyState, c: Clock): Objective | null {
   }
   const short = n.rent - n.till;
   return {
-    title: short > 0 ? `Keep Pema open: ${short} c short of rent` : "Keep Pema open through rent", target: "pema", label: "The night Pema almost closed", stake: stakeLine(n),
+    title: short > 0 ? `Keep Pema open: ${short} c short of rent` : "Keep Pema open through rent", target: "pema", label: "The night Pema almost closed", stake: live(n),
     detail: short > 0
       ? "Coins reach her till when her mangoes sell: stock on her shelves for street shoppers (the Orchard gives free mangoes each morning), customers buying from her, partners buying share packs. Nothing is decided until the rent is charged."
       : "Her till covers the rent today, if nothing drains it first. Nothing is decided until the rent is charged.",
   };
 }
 
+/** The mission card: section and step, title, one line of copy, then (when there is one) the live rent panel. */
+const TONE: Record<string, string> = { Urgent: "urgent", Opportunity: "chance" };
+function renderCardInto(card: HTMLElement, c: Objective): void {
+  card.innerHTML = "";
+  card.className = `hud hud-obj tone-${TONE[c.label] ?? "main"}`;
+  const head = el("div", "oh");
+  head.append(el("span", "sec", c.label));
+  if (c.progress) head.append(el("span", "step", `${c.progress[0]} / ${c.progress[1]}`));
+  card.append(head);
+  if (c.progress) { const bar = el("div", "prog"), fill = el("i"); fill.style.width = `${(c.progress[0] / c.progress[1]) * 100}%`; bar.append(fill); card.append(bar); }
+  card.append(el("div", "title", c.title), el("p", "desc", c.detail));
+  const n = c.stake;
+  if (!n) return;
+  const short = n.rent - n.till;
+  const panel = el("div", `stake${short > 0 ? " short" : ""}`);
+  const top = el("div", "sh");
+  top.append(el("span", "k", "Live · Pema's rent"), el("span", "when", `${n.connected ? "NEAR charges it" : "Charged"} ${n.when}`));
+  const meter = el("div", "meter"), fill = el("i");
+  fill.style.width = `${Math.max(2, Math.min(100, (n.till / Math.max(1, n.rent)) * 100))}%`;
+  meter.append(fill);
+  const nums = el("div", "nums");
+  nums.append(el("b", "", `${n.till} c`), el("span", "", ` in her till · rent ${n.rent} c`), el("em", "", short > 0 ? `${short} c short` : "covered"));
+  panel.append(top, meter, nums);
+  card.append(panel);
+}
+
 export function createGuide(hud: Hud, clock: () => Clock): Guide {
+  const renderCard = (c: Objective): void => renderCardInto(hud.obj, c);
   const v = new THREE.Vector3();
   let lastKey = "", lastMark = "";
   const current: Guide["current"] = (s) => {
@@ -159,7 +193,7 @@ export function createGuide(hud: Hud, clock: () => Clock): Guide {
     if (i < STEPS.length) {
       const st = STEPS[i];
       const target = typeof st.target === "function" ? st.target(s) : st.target;
-      return { title: titleOf(st, s), detail: st.detail(s), target, label: `First day · ${i + 1} of ${STEPS.length}`, stake: stakeLine(night(s, clock())) || undefined };
+      return { title: titleOf(st, s), detail: st.detail(s), target, label: "First day", progress: [i + 1, STEPS.length], stake: live(night(s, clock())) };
     }
     const story = nightObjective(s, clock());
     if (story && (story.stake === undefined || s.merchants.pema.status === "open")) return story;
@@ -192,15 +226,8 @@ export function createGuide(hud: Hud, clock: () => Clock): Guide {
     draw(s, camera, targetPos, player) {
       const c = current(s);
       if (!c) { hud.obj.style.display = "none"; hud.mark.style.display = "none"; return; }
-      const key = `${c.label}|${c.title}|${c.detail}|${c.stake ?? ""}`;
-      if (key !== lastKey) {
-        lastKey = key;
-        hud.obj.innerHTML = "";
-        const lab = el("div", "lab");
-        lab.append(document.createTextNode("Objective"), el("i", "", c.label));
-        hud.obj.append(lab, el("b", "", c.title), el("p", "", c.detail));
-        if (c.stake) hud.obj.append(el("p", "stake", c.stake));
-      }
+      const key = `${c.label}|${c.title}|${c.detail}|${c.progress?.join("/") ?? ""}|${c.stake ? `${c.stake.till}/${c.stake.rent}/${c.stake.when}` : ""}`;
+      if (key !== lastKey) { lastKey = key; renderCard(c); }
       hud.obj.style.display = "block";
       const p = c.target ? targetPos(c.target) : null;
       if (!p) { hud.mark.style.display = "none"; return; }

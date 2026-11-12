@@ -91,8 +91,77 @@ const CRATE_UNITS = 4; // one crate on the pile per 4 units of stock
 const LANTERN_GLOW = 2.6; // full-night strength: above the bloom threshold, so open stalls glow after dark
 const MAX_CRATES = 9;
 
+const SHUTTER_TOP = 1.6, SHUTTER_BOTTOM = 0.55, SLAT_M = 0.1, SHUTTER_STRUGGLING = 0.45;
+/** Counter width each stall's shutter spans (the tea house counter is wider than the fruit stalls'). */
+const SHUTTER_W: Record<string, number> = { arin: 4.2 };
+const SHUTTER_W_DEFAULT = 3.0;
+const NAVY = 0x2c3446;
+
+/** A stylised roller shutter in the stall's local frame (x along the counter, +z toward customers). set(level): 0 rolled
+ *  up into the housing, 1 down to the counter base with the "Closed" card. */
+function makeShutter(width: number, glow: THREE.Material): { group: THREE.Group; set(level: number): void } {
+  const group = new THREE.Group();
+  const navy = new THREE.MeshToonMaterial({ color: NAVY });
+  const housing = new THREE.Mesh(new THREE.BoxGeometry(width + 0.14, 0.2, 0.22), navy);
+  housing.position.y = SHUTTER_TOP + 0.1;
+  const trim = new THREE.Mesh(new THREE.BoxGeometry(width + 0.14, 0.035, 0.012), new THREE.MeshBasicMaterial({ color: 0x00c98a }));
+  trim.position.set(0, SHUTTER_TOP + 0.04, 0.116);
+  // the stall's light: a warm strip under the housing, over the counter (lit at dusk while trading, dark when shut)
+  const strip = new THREE.Mesh(new THREE.BoxGeometry(width - 0.1, 0.03, 0.06), glow);
+  strip.position.set(0, SHUTTER_TOP - 0.01, 0.06);
+  group.add(housing, trim, strip);
+  for (const x of [-1, 1]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.06, SHUTTER_TOP - SHUTTER_BOTTOM + 0.04, 0.08), navy);
+    rail.position.set(x * (width / 2 + 0.03), (SHUTTER_TOP + SHUTTER_BOTTOM) / 2, 0);
+    group.add(rail);
+  }
+  // slats: a lit top edge, the face, a dark groove: one canvas, repeated so each slat stays SLAT_M tall at any height
+  const c = document.createElement("canvas");
+  c.width = 4; c.height = 64;
+  const x = c.getContext("2d")!;
+  const grad = x.createLinearGradient(0, 0, 0, 64);
+  grad.addColorStop(0, "#b9c2cc"); grad.addColorStop(0.2, "#98a2ae"); grad.addColorStop(0.85, "#7b8593"); grad.addColorStop(1, "#56606e");
+  x.fillStyle = grad; x.fillRect(0, 0, 4, 64);
+  x.fillStyle = "#3f4855"; x.fillRect(0, 58, 4, 6);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  const curtainGeo = new THREE.BoxGeometry(width, 1, 0.025);
+  curtainGeo.translate(0, -0.5, 0); // hangs from its top edge
+  const curtain = new THREE.Mesh(curtainGeo, new THREE.MeshToonMaterial({ color: 0xffffff, map: tex }));
+  curtain.position.y = SHUTTER_TOP;
+  const bar = new THREE.Mesh(new THREE.BoxGeometry(width + 0.02, 0.06, 0.05), navy);
+  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.035, 0.04), new THREE.MeshToonMaterial({ color: 0xc9a227 }));
+  // "Closed" card fixed to the curtain, painted once
+  const cc = document.createElement("canvas");
+  cc.width = 320; cc.height = 140;
+  const cx = cc.getContext("2d")!;
+  cx.fillStyle = "#1d2433"; cx.fillRect(0, 0, 320, 140);
+  cx.fillStyle = "#fffaf1"; cx.fillRect(8, 8, 304, 124);
+  cx.fillStyle = "#e2604a"; cx.fillRect(8, 8, 304, 14);
+  cx.fillStyle = "#1d2433"; cx.font = "700 62px Inter Tight, Inter, system-ui, sans-serif"; cx.textAlign = "center"; cx.textBaseline = "middle";
+  cx.fillText("Closed", 160, 80);
+  const ctex = new THREE.CanvasTexture(cc);
+  ctex.colorSpace = THREE.SRGBColorSpace;
+  const card = new THREE.Mesh(new THREE.PlaneGeometry(0.64, 0.28), new THREE.MeshBasicMaterial({ map: ctex, toneMapped: false }));
+  card.position.set(0, 1.12, 0.03);
+  group.add(curtain, bar, handle, card);
+  return {
+    group,
+    set(level) {
+      const h = Math.max(0.001, (SHUTTER_TOP - SHUTTER_BOTTOM) * level);
+      curtain.visible = bar.visible = handle.visible = level > 0;
+      curtain.scale.y = h;
+      tex.repeat.set(1, Math.max(1, Math.round(h / SLAT_M)));
+      bar.position.y = SHUTTER_TOP - h;
+      handle.position.set(0, SHUTTER_TOP - h, 0.045);
+      card.visible = level >= 1;
+    },
+  };
+}
+
 /** Crate pile, closed shutter and upgrade dressing beside a stall; meshes are created once and toggled. */
-function makeStallDressing(scene: THREE.Scene, post: Post, y: number): (s: StallState) => void {
+function makeStallDressing(scene: THREE.Scene, post: Post, y: number, id: string): (s: StallState) => void {
   const side = Math.sign(post.stall.x - post.npc.x) || 1; // +1: customers stand on +X of the counter
   const front = (post.npc.x + post.stall.x) / 2; // the canopy's customer-facing edge
   const face = side > 0 ? Math.PI / 2 : -Math.PI / 2;
@@ -123,20 +192,8 @@ function makeStallDressing(scene: THREE.Scene, post: Post, y: number): (s: Stall
     g.add(c);
     return c;
   });
-  // roller shutter: grey with slat lines (a small canvas, repeated), so a half-lowered one still reads as a shutter
-  const sc = document.createElement("canvas");
-  sc.width = 8; sc.height = 32;
-  const sx = sc.getContext("2d")!;
-  sx.fillStyle = "#8b94a0"; sx.fillRect(0, 0, 8, 32);
-  sx.fillStyle = "#5b6470"; sx.fillRect(0, 26, 8, 6);
-  const slats = new THREE.CanvasTexture(sc);
-  slats.colorSpace = THREE.SRGBColorSpace;
-  slats.wrapS = slats.wrapT = THREE.RepeatWrapping;
-  slats.repeat.set(1, 9);
-  const shutter = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 1.0), new THREE.MeshToonMaterial({ color: 0xffffff, map: slats, side: THREE.DoubleSide }));
-  shutter.position.set(front + side * 0.15, y + 1.05, post.npc.z);
-  shutter.rotation.y = face;
-  scene.add(shutter);
+  // Roller shutter, built like a real one: a housing box under the canopy edge, two guide rails, a slatted curtain that
+  // rolls down from the housing to the counter base, a bottom bar with a pull handle, and a hanging card once it is shut.
   // Upgrade: a NEAR-green valance along the canopy front and a string of warm bulbs under it.
   const up = new THREE.Group();
   up.position.set(front + side * 0.45, y, post.npc.z);
@@ -151,12 +208,13 @@ function makeStallDressing(scene: THREE.Scene, post: Post, y: number): (s: Stall
     up.add(b);
   }
   scene.add(up);
-  // Lantern under the canopy: lit at dusk while the stall trades, dark once the shutters come down.
+  // Light under the shutter housing: lit at dusk while the stall trades, dark once the shutters come down.
   const lampMat = new THREE.MeshStandardMaterial({ color: "#3a2a18", emissive: "#ffc46b", emissiveIntensity: LANTERN_GLOW, roughness: 0.6 });
   trackGlow(lampMat);
-  const lamp = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.14, 0.3, 10), lampMat);
-  lamp.position.set(front + side * 0.35, y + 2.05, post.npc.z);
-  scene.add(lamp);
+  const shutter = makeShutter(SHUTTER_W[id] ?? SHUTTER_W_DEFAULT, lampMat);
+  shutter.group.position.set(front + side * 0.15, y, post.npc.z);
+  shutter.group.rotation.y = face;
+  scene.add(shutter.group);
   // Recovering: a hand-painted "Open again" banner hung under the canopy for the day after a reopening.
   const bc = document.createElement("canvas");
   bc.width = 512; bc.height = 96;
@@ -174,7 +232,7 @@ function makeStallDressing(scene: THREE.Scene, post: Post, y: number): (s: Stall
   scene.add(banner);
   applyToon(g, 0.008, undefined, true);
   let mood: StallState["mood"] = null, open = true, t = 0;
-  window.setInterval(() => { // a struggling stall's lantern gutters: cheap, and only this one material
+  window.setInterval(() => { // a struggling stall's light gutters: cheap, and only this one material
     if (!open || mood !== "struggling") return;
     t += 1;
     setGlowBase(lampMat, LANTERN_GLOW * (t % 7 === 0 || t % 11 === 0 ? 0.25 : 0.7));
@@ -183,10 +241,8 @@ function makeStallDressing(scene: THREE.Scene, post: Post, y: number): (s: Stall
     const n = Math.min(MAX_CRATES, Math.ceil(s.stock / CRATE_UNITS));
     crates.forEach((c, i) => { c.visible = i < n; });
     mood = s.open ? s.mood ?? null : null; open = s.open;
-    // closed: the shutter is all the way down; struggling: half down over the counter, the stall trading behind it
-    shutter.visible = !s.open || mood === "struggling";
-    shutter.scale.y = s.open ? 0.5 : 1; // struggling: the top half of the opening, the bottom still trading
-    shutter.position.y = y + (s.open ? 1.3 : 1.05);
+    // closed: rolled all the way down; struggling: half down, the stall trading under it; open: rolled up in its housing
+    shutter.set(!s.open ? 1 : mood === "struggling" ? SHUTTER_STRUGGLING : 0);
     banner.visible = mood === "recovering";
     up.visible = s.upgraded;
     setGlowBase(lampMat, s.open ? LANTERN_GLOW : 0);
@@ -318,7 +374,7 @@ export async function createMarket(scene: THREE.Scene, colliders: Box[]): Promis
       board.mesh.userData.npc = id;
       scene.add(board.mesh);
     }
-    if (id !== "engineer" && id !== "harbor") dressing.set(id, makeStallDressing(scene, post, y));
+    if (id !== "engineer" && id !== "harbor") dressing.set(id, makeStallDressing(scene, post, y, id));
     return { id, root, character, post, board, head: new THREE.Vector3(), talking: false, serving: false, attend: null };
   }));
 
