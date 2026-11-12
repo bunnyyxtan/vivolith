@@ -266,7 +266,7 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
       if (s.slots[e.slot] === e) s.slots[e.slot] = null;
       if (s.kind === "stallq" && s.mer && !s.next) { s.mer.serving = false; s.mer.attend = null; }
     }
-    e.spot = null; e.pose.sit = 0; e.pose.phone = 0;
+    e.spot = null; e.pose.phone = 0; // pose.sit decays in the main loop: zeroing it popped the stand-up 0.37 m
   };
   /** Next errand: stand at the merchant's customer point facing them (a private spot nobody else can claim). */
   const startErrand = (e: Ent): boolean => {
@@ -548,7 +548,10 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
         if (e.state === "walk" || e.state === "stag" || (e.state === "act" && e.spd > 0.05)) {
           if (e.state !== "act") { body.x = e.x; body.z = e.z; body.y = e.y; if (e.state === "stag") pushOut(colliders, body); e.x = body.x; e.z = body.z; }
         }
-        if (e.state !== "act") e.c.lift = 0; // a seat drop must never outlive the seat (walkers sank 0.37 m)
+        if (e.state !== "act") { // the seat drop eases out after standing (a pop was 0.37 m) and never outlives the seat
+          e.pose.sit = e.pose.sit < 0.01 ? 0 : e.pose.sit * Math.exp(-10 * dt);
+          e.c.lift = e.pose.sit * 0.37;
+        }
         e.c.setSpeed(e.spd, WALK, WALK * 2);
         // off screen: the mixer catches up twice a second instead of every frame (nobody sees the pose)
         e.lag += dt;

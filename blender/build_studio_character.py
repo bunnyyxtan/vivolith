@@ -59,6 +59,28 @@ def trim(act, f0, f1):
         fc.update()
 
 
+def detrend_root(act):
+    """Some Studio exports (Joon, Hadi) were taken without "Animation stay in Place": the hips travel ~1.4 m per walk
+    cycle. Subtract the straight-line trend of the one travelling hips axis, keeping bob and sway. Returns metres removed."""
+    hips = [fc for fc in fcurves(act) if fc.data_path.endswith('Hips"].location')]
+    if len(hips) < 3:
+        return 0.0
+    rng = {fc.array_index: max(k.co[1] for k in fc.keyframe_points) - min(k.co[1] for k in fc.keyframe_points) for fc in hips}
+    axis = max(rng, key=rng.get)
+    others = sorted(v for k, v in rng.items() if k != axis)
+    if rng[axis] < 0.3 or rng[axis] < 3 * others[-1]:
+        return 0.0
+    fc = next(f for f in hips if f.array_index == axis)
+    pts = sorted(fc.keyframe_points, key=lambda k: k.co[0])
+    (x0, y0), (x1, y1) = pts[0].co[:2], pts[-1].co[:2]
+    for p in pts:
+        d = y0 + (y1 - y0) * (p.co[0] - x0) / max(1e-6, x1 - x0) - y0
+        for co in (p.co, p.handle_left, p.handle_right):
+            co[1] -= (y0 + (y1 - y0) * (co[0] - x0) / max(1e-6, x1 - x0)) - y0
+    fc.update()
+    return abs(y1 - y0)
+
+
 def cap_textures():
     for img in bpy.data.images:
         w, h = img.size
@@ -101,6 +123,9 @@ def build(name):
         act = acts[src]
         act.name = clip
         act.use_fake_user = True
+        moved = detrend_root(act)
+        if moved:
+            print('DETREND', name, clip, round(moved, 2))
         if clip in trims:
             trim(act, *trims[clip])
         track = ad.nla_tracks.new()
