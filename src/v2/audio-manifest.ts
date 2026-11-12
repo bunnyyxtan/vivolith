@@ -53,6 +53,11 @@ export const FOLK_VOICES = [
   { voiceId: "pqHfZKP75CvOlQylNhV4", tag: "[grumbling]", bump: ["Careful!", "Hey!"] },          // Bill: older man
   { voiceId: "XrExE9yKIg1WjnnlVkGX", tag: "[surprised]", bump: ["Excuse you!", "Oh my!"] },     // Matilda: woman
 ] as const;
+/** Non-trading cast with a fixed post (Bram at the harbor, Ines in NEAR Labs): their recorded bump reactions, in the same
+ *  voices SPEAKERS gives them. Files: /audio/voice/<id>/bump_<k>.mp3. */
+export const CAST_BUMP = { harbor: ["Watch it, pal!", "Mind the crates!"], engineer: ["Oh! Careful!", "Excuse me!"] } as const;
+export type CastBumpId = keyof typeof CAST_BUMP;
+export const castBumpUrl = (id: CastBumpId, k: number): string => `/audio/voice/${id}/bump_${k}.mp3`;
 export const folkVoiceUrl = (voice: number, k: number): string => `/audio/voice/folk${voice}/bump_${k}.mp3`;
 
 /** Every voiced character, by speaker id: merchants, townsfolk voices (folk0..3) and the non-trading cast. The server
@@ -71,6 +76,8 @@ export function recordedUrl(speaker: string, text: string): string | null {
     const line = (Object.keys(v.lines) as LineId[]).find((k) => v.lines[k] === text);
     return line ? voiceUrl(speaker as MerchantId, line) : null;
   }
+  const cb = CAST_BUMP[speaker as CastBumpId] as readonly string[] | undefined;
+  if (cb) { const k = cb.indexOf(text); return k >= 0 ? castBumpUrl(speaker as CastBumpId, k) : null; }
   const m = /^folk(\d)$/.exec(speaker);
   const f = m ? FOLK_VOICES[Number(m[1])] : undefined;
   const k = f ? (f.bump as readonly string[]).indexOf(text) : -1;

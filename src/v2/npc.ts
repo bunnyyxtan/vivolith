@@ -9,8 +9,10 @@ import { standHeight, type FloorHeight } from "./floor";
 import type { AnimatedCharacter } from "../character";
 import { NPC_STEP, createNav, type Nav } from "./nav";
 import { createBubbles, installPose, type PoseState } from "./npcfx";
+import { separate, steer } from "./avoid";
+import { claimSlot, freeSlot, seatHeight, sitLift } from "./seats";
 import { audio } from "./audio";
-import { FOLK_VOICES, VOICES, folkVoiceUrl, voiceUrl } from "./audio-manifest";
+import { CAST_BUMP, FOLK_VOICES, VOICES, castBumpUrl, folkVoiceUrl, voiceUrl, type CastBumpId } from "./audio-manifest";
 import type { MerchantId } from "../economy/state";
 
 type Kind = "bench" | "shopdoor" | "stallq" | "chat" | "wait" | "crate" | "cafe" | "photo" | "jog";
@@ -76,6 +78,10 @@ interface Ent extends Pedestrian {
   errands: { mer: string; line: string }[]; errand: string | null;
   /** Townsfolk: index into FOLK_VOICES. startled: seconds left on the startled clip before it is released. */
   voice: number; startled: number;
+  /** Walking and pushable (separation yields to everyone else: standing, seated, queuing and merchants never move for it). */
+  mobile: boolean;
+  /** Rig-aware seating: Hips and lowest sole above the root in the Sit pose (measured once), and the drop for the current seat. */
+  sitHips: number; sitFeet: number; sitCal: boolean; sitDrop: number;
 }
 
 const WALK = 1.3, PLAYER_R = 0.32, HEAD = 1.85;
@@ -182,7 +188,7 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
     r: 0.33, fixed, cd: 0, svx: 0, svz: 0, stag: 0, head: new THREE.Vector3(),
     state: "idle", spot: null, slot: 0, path: [], pi: 0, speed: rnd(1.0, 1.5), spd: 0, t: 0, phase: 0, last: null, carrying: false,
     stuckT: 0, sx: 0, sz: 0, carry: null, mer: null, hx: root.position.x, hz: root.position.z, hy: root.position.y, by: root.position.y, jogLeft: 0, baseSpeed: 1.2,
-    onScreen: true, lag: 0, near: true, inks: [], bodies: [], errands: [], errand: null, voice: 0, startled: 0,
+    onScreen: true, lag: 0, near: true, inks: [], bodies: [], errands: [], errand: null, voice: 0, startled: 0, mobile: false, sitHips: 0.9, sitFeet: 0.37, sitCal: false, sitDrop: 0.37,
   });
   const merEnts = mers.map((m) => { const e = mkEnt(m.character, m.root, true); e.mer = m; return e; });
   const folk = folkChars.map((f, i) => {
@@ -211,6 +217,30 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
     e.yaw = rnd(-3, 3);
   };
   folk.forEach(spawn);
+
+  // ---- rig-aware sitting: measure each body's Sit pose once, then drop it onto the actual seat
+  const tmpV = new THREE.Vector3();
+  const calibrate = (e: Ent): void => {
+    if (e.sitCal) return;
+    e.sitCal = true;
+    if (!e.c.has("Sit")) return;
+    e.c.lift = 0;
+    e.c.setAction("Sit");
+    for (let k = 0; k < 24; k++) e.c.update(0.05);
+    e.root.updateMatrixWorld(true);
+    const ry = e.root.getWorldPosition(tmpV).y;
+    const hips = e.c.bone("Hips");
+    if (hips) e.sitHips = hips.getWorldPosition(tmpV).y - ry;
+    let low = Infinity;
+    for (const n of ["LeftToeBase", "RightToeBase"]) {
+      const b = e.c.bone(n);
+      if (b) low = Math.min(low, b.getWorldPosition(tmpV).y - ry - 0.03); // ball of the foot to the sole
+    }
+    if (low < Infinity) e.sitFeet = low;
+    e.c.setAction(null);
+    for (let k = 0; k < 8; k++) e.c.update(0.05);
+  };
+  folk.forEach(calibrate);
 
   // ---- decisions
   const dist = (e: Ent, s: Spot): number => Math.hypot(e.x - s.x, e.z - s.z);
@@ -263,9 +293,10 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
     const s = e.spot;
     if (s) {
       s.users = Math.max(0, s.users - 1);
-      if (s.slots[e.slot] === e) s.slots[e.slot] = null;
+      freeSlot(s.slots, e);
       if (s.kind === "stallq" && s.mer && !s.next) { s.mer.serving = false; s.mer.attend = null; }
     }
+    if (e.startled <= 0) e.c.setAction(null); // stand up out of the Sit or Talking clip before walking off
     e.spot = null; e.pose.phone = 0; // pose.sit decays in the main loop: zeroing it popped the stand-up 0.37 m
   };
   /** Next errand: stand at the merchant's customer point facing them (a private spot nobody else can claim). */
@@ -295,8 +326,11 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
       if (r > 0 || w[i] === 0) continue;
       const s = claim(e, opts[i], spire);
       if (!s) break;
+      const shared = s.kind === "chat" || s.kind === "bench";
+      const slot = shared ? claimSlot(s.slots, e) : 0; // a seat is reserved before anyone walks to it: never two on one
+      if (slot < 0) continue;
       s.users++;
-      e.spot = s; e.slot = s.kind === "chat" || s.kind === "bench" ? (s.slots[0] ? 1 : 0) : 0; s.slots[e.slot] = e; e.last = opts[i]; e.phase = 0;
+      e.spot = s; e.slot = slot; s.slots[slot] = e; e.last = opts[i]; e.phase = 0;
       if (goTo(e, s, e.slot)) return;
       release(e);
     }
@@ -307,7 +341,10 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
     if (!s) { e.state = "idle"; return; }
     e.state = "act"; e.phase = 0; e.spd = 0;
     switch (s.kind) {
-      case "bench": case "cafe": e.t = rnd(20, 40); break;
+      case "bench": case "cafe":
+        e.t = rnd(20, 40);
+        e.sitDrop = sitLift(e.sitHips, e.sitFeet, seatHeight(colliders, e.x, e.z, e.by)); // this body on this seat
+        break;
       case "shopdoor": e.t = 1.6; break;
       case "wait": e.t = rnd(12, 25); break;
       case "photo": e.t = rnd(5, 9); break;
@@ -335,7 +372,8 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
     let talk = false, seatTarget = 0, carryTarget = e.carrying ? 1 : 0;
     switch (s.kind) {
       case "bench": case "cafe": {
-        seatTarget = 1; faceTo(e, s.yaw, dt);
+        faceTo(e, s.yaw, dt, 10);
+        seatTarget = Math.abs(wrap(s.yaw - e.yaw)) < 0.35 ? 1 : 0; // turn to the seat first, then sit down
         const p = s.kind === "bench" ? s.slots[1 - e.slot] : null;
         if (p && p.state === "act" && p.spot === s) { // friends on a bench take turns talking
           if (e.slot === 0) { s.turn -= dt; if (s.turn < 0) { s.turn = rnd(3, 6); e.phase ^= 1; p.phase = e.phase ^ 1; } }
@@ -389,9 +427,9 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
       } else if (e.phase === 2 && e.t <= 0) { e.hidden = false; e.root.visible = true; e.x = s.x; e.z = s.z; e.yaw = s.yaw + Math.PI; e.phase = 3; e.t = 0; }
     }
     e.pose.sit += (seatTarget - e.pose.sit) * (1 - Math.exp(-6 * dt));
-    e.c.lift = e.pose.sit * 0.37;
+    e.c.lift = e.pose.sit * e.sitDrop;
     e.pose.carry += (carryTarget - e.pose.carry) * (1 - Math.exp(-6 * dt));
-    e.c.setAction(talk ? "Talking" : null);
+    e.c.setAction(seatTarget > 0 && e.c.has("Sit") ? "Sit" : talk ? "Talking" : null); // the real Tripo clip; the drop only trims it to the seat
     const done = s.kind === "crate" ? e.phase === 1 && e.t <= -0.6 : e.t <= 0 && (s.kind !== "shopdoor" || e.phase === 3);
     if (done) { release(e); decide(e); }
   };
@@ -405,9 +443,11 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
       if (e.pi >= e.path.length) { arrive(e); return; }
       return;
     }
-    const want = Math.atan2(dx, dz), diff = wrap(want - e.yaw);
+    const wantRaw = Math.atan2(dx, dz);
+    const st = d > 1.2 ? steer(e, wantRaw, all) : { yaw: wantRaw, slow: 1 }; // go around people ahead (not on the last metre)
+    const want = st.yaw, diff = wrap(want - e.yaw);
     e.yaw += diff * (1 - Math.exp(-9 * dt));
-    const target = Math.abs(diff) > 1.2 ? 0.2 : Math.min(e.speed * (e.carrying ? 0.8 : 1), d * 3 + 0.3);
+    const target = Math.abs(diff) > 1.2 ? 0.2 : Math.min(e.speed * (e.carrying ? 0.8 : 1) * st.slow, d * 3 + 0.3);
     e.spd += (target - e.spd) * (1 - Math.exp(-6 * dt));
     e.x += Math.sin(e.yaw) * e.spd * dt; e.z += Math.cos(e.yaw) * e.spd * dt;
     if (!last) { // the final leg may end inside a seat or doorway collider
@@ -467,17 +507,22 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
   const bump = (e: Ent, nx: number, nz: number, speed: number): void => {
     e.cd = 3;
     const k = e.fixed ? 1.2 : 2.4;
-    e.svx = nx * k; e.svz = nz * k; e.stag = 0.6;
+    e.svx = nx * k; e.svz = nz * k; e.stag = e.fixed ? 0.6 : 0.9;
     if (!e.fixed && e.state !== "act") e.state = "stag";
     // what they say is what you hear: a merchant's own bump line, or one of the townsperson's voice's lines
     const mid = e.fixed ? e.mer?.id : undefined;
     const merchant = mid && mid in VOICES ? (mid as MerchantId) : null;
+    const cast = mid && mid in CAST_BUMP ? (mid as CastBumpId) : null; // Bram, Ines: recorded in their own voices
     let text: string, url: string | null;
     if (merchant) { text = VOICES[merchant].lines.bump; url = voiceUrl(merchant, "bump"); }
+    else if (cast) { const n = Math.floor(Math.random() * CAST_BUMP[cast].length); text = CAST_BUMP[cast][n]; url = castBumpUrl(cast, n); }
     else if (!e.fixed) { const v = FOLK_VOICES[e.voice], n = Math.floor(Math.random() * v.bump.length); text = v.bump[n]; url = folkVoiceUrl(e.voice, n); }
     else { text = BUMP_LINES[Math.floor(Math.random() * BUMP_LINES.length)]; url = null; }
-    bubbles.say(e.head, text, 1.6);
-    if (url && voiceCd <= 0) { voiceCd = 0.8; void audio.at(url, e.x, e.y + 1.6, e.z); }
+    // The subtitle appears only when the voice does: one voiced reaction at a time, so a second bump inside the gap
+    // still flinches but stays silent and unlabelled (a bubble without sound was the reported defect).
+    if (url) {
+      if (voiceCd <= 0) { voiceCd = 0.8; bubbles.say(e.head, text, 1.6); void audio.at(url, e.x, e.y + 1.6, e.z); }
+    } else bubbles.say(e.head, text, 1.6);
     // a real flinch where the model has one (Tripo "Startled"); seated folk keep their seat
     const seated = e.state === "act" && (e.spot?.kind === "bench" || e.spot?.kind === "cafe");
     if (!seated && e.c.has("Startled") && speed > 1.6) { e.c.setAction("Startled", true); e.startled = 1.1; }
@@ -493,7 +538,7 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
     const vy = e.fixed ? e.y : seated ? floor(e.x, e.z, e.y) : standHeight(floor, e.x, e.z, e.y, e.c.footprints());
     e.root.position.set(e.x, vy, e.z);
     e.root.rotation.y = e.yaw;
-    e.c.root.position.z = seated && e.state === "act" ? -0.1 : 0; // hips slightly back on the seat
+    e.c.root.position.z = seated && e.state === "act" && !e.c.has("Sit") ? -0.1 : 0; // procedural sit only: hips slightly back; the Sit clip carries its own
     e.pose.yaw = e.yaw;
     e.head.set(e.x, vy + HEAD - e.c.lift, e.z);
   };
@@ -538,6 +583,7 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
           e.x += e.svx * dt; e.z += e.svz * dt;
           e.svx *= Math.exp(-4 * dt); e.svz *= Math.exp(-4 * dt);
           e.spd = 0;
+          if (pb) faceTo(e, Math.atan2(pb.x - e.x, pb.z - e.z), dt, 10); // turn to see who it was
           if (e.state === "stag" && e.stag <= 0) { if (e.spot && goTo(e, e.spot, e.slot)) { /* resumes */ } else decide(e); }
         } else if (e.state === "idle") {
           e.t -= dt; e.spd *= Math.exp(-8 * dt);
@@ -549,8 +595,8 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
           if (e.state !== "act") { body.x = e.x; body.z = e.z; body.y = e.y; if (e.state === "stag") pushOut(colliders, body); e.x = body.x; e.z = body.z; }
         }
         if (e.state !== "act") { // the seat drop eases out after standing (a pop was 0.37 m) and never outlives the seat
-          e.pose.sit = e.pose.sit < 0.01 ? 0 : e.pose.sit * Math.exp(-10 * dt);
-          e.c.lift = e.pose.sit * 0.37;
+          e.pose.sit = e.pose.sit < 0.01 ? 0 : e.pose.sit * Math.exp(-7 * dt);
+          e.c.lift = e.pose.sit * e.sitDrop;
         }
         e.c.setSpeed(e.spd, WALK, WALK * 2);
         // off screen: the mixer catches up twice a second instead of every frame (nobody sees the pose)
@@ -558,18 +604,15 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
         if (e.onScreen || e.lag > 0.5) { e.c.update(e.lag); e.lag = 0; }
         place(e);
       }
-      // separation between walking folk
-      for (let i = 0; i < folk.length; i++) {
-        const a = folk[i];
-        if (a.hidden || a.state === "act") continue;
-        for (let j = i + 1; j < folk.length; j++) {
-          const b = folk[j];
-          if (b.hidden || b.state === "act") continue;
-          const dx = b.x - a.x, dz = b.z - a.z, d2 = dx * dx + dz * dz, R = a.r + b.r;
-          if (d2 >= R * R || d2 < 1e-8) continue;
-          const d = Math.sqrt(d2), p = (R - d) * 0.5;
-          a.x -= (dx / d) * p; a.z -= (dz / d) * p; b.x += (dx / d) * p; b.z += (dz / d) * p;
-        }
+      // people never overlap: separation over everyone (merchants, queues and sitters hold their ground), then walls
+      for (const e of all) e.mobile = !e.fixed && !e.hidden && e.state !== "act";
+      for (let i = 0; i < all.length; i++) {
+        for (let j = i + 1; j < all.length; j++) separate(all[i], all[j]);
+      }
+      for (const e of folk) {
+        if (!e.mobile || (e.state === "walk" && e.pi + 2 >= e.path.length)) continue; // the last leg may end inside a seat or doorway collider
+        body.x = e.x; body.z = e.z; body.y = e.y; pushOut(colliders, body); // a shove must not put anyone inside a wall
+        e.x = body.x; e.z = body.z;
       }
       // player contact
       if (pb) {
@@ -585,9 +628,7 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
           e.x += nx * pen * share; e.z += nz * pen * share;
           pb.x -= nx * pen * (1 - share); pb.z -= nz * pen * (1 - share);
           if (e.cd <= 0 && sp > 1.0) bump(e, nx, nz, sp);
-          if (e.cd > 0 && e.cd < 2.9) e.yaw += wrap(Math.atan2(-nx, -nz) - e.yaw) * 0.1; // turn toward Kavi
         }
-        // folk turn to look at Kavi after a bump
       }
       // crates set down at the market sell over a couple of minutes, so porters keep coming from the depot and orchard
       for (const s of spots) {

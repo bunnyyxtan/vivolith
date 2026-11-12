@@ -70,7 +70,7 @@ export function installPose(c: AnimatedCharacter): PoseState {
   const s: PoseState = { sit: 0, carry: 0, lean: 0, yaw: 0, phone: 0 };
   const b = (n: string): THREE.Object3D | undefined => c.bone(n);
   c.post = () => {
-    if (s.sit > 0.01) {
+    if (s.sit > 0.01 && !c.has("Sit")) { // rigs with a real Sit clip (every Tripo character) sit by playing it
       for (const side of ["Left", "Right"]) {
         rot(b(`${side}UpLeg`), s.yaw, -1.45 * s.sit);
         rot(b(`${side}Leg`), s.yaw, 1.5 * s.sit);
