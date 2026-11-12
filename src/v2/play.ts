@@ -137,7 +137,7 @@ const PEMA_INTRO: Conversation = {
   nodes: {
     hello: {
       speaker: "Auntie Pema",
-      text: () => "Oh, a new face! I'm Pema. Don't look at my shelves, dear: three mangoes left, and rent is due tonight.",
+      text: (s) => { const n = s.merchants.pema.stock.mango; return `Oh, a new face! I'm Pema. ${n <= 5 ? `Don't look at my shelves, dear: ${n === 1 ? "one mango" : `${n} mangoes`} left` : "Full shelves, dear, but shelves don't pay rent"}, and rent is coming.`; },
       next: "why",
     },
     why: {
@@ -594,7 +594,7 @@ export async function createPlay(game: Game): Promise<Play> {
     if (rows.length) d.append(document.createTextNode(` Elsewhere: ${rows.map((r) => `${first(r.x)} ${r.p} c${r.note}`).join(" · ")}.`));
     const pema = state.merchants.pema;
     if (id !== "pema" && tab === "sell" && pema.status === "open" && pema.cash < pema.rent && state.flags["night.start"] && !state.flags["night.outcome"]) d.append(el("div", "", `Pema is ${pema.rent - Math.floor(pema.cash)} c short of rent and her shelves hold ${pema.stock.mango}.`));
-    if (id === "pema" && tab === "sell" && pema.cash < pema.rent) d.append(el("div", "", `Her till: ${Math.floor(pema.cash)} c of the ${pema.rent} c rent. She sells mangoes at ${priceOf(state, "pema").price} c, so whatever she pays above that leaves her till for good.`));
+    if (id === "pema" && tab === "sell" && pema.status === "open" && pema.cash < pema.rent) d.append(el("div", "", `Her till: ${Math.floor(pema.cash)} c of the ${pema.rent} c rent. She sells mangoes at ${priceOf(state, "pema").price} c, so whatever she pays above that leaves her till for good.`));
     return d;
   };
   /** After a confirmed deal: how it moved this stall's price, and why (stock is the main lever, see pricing.ts). */
@@ -666,12 +666,15 @@ export async function createPlay(game: Game): Promise<Play> {
       hud.panel.append(q);
     }
     const acts = el("div", "tp-acts");
+    // at a lower price the stall's till can take more than at its bid: the friend's offer has its own quantity
+    const fp = tab === "sell" && mode.done <= 0 ? friendPrice(id) : null;
+    const fq = fp === null ? 0 : Math.min(MAX_QTY, state.player.inventory.mango, Math.floor(m.cash / fp), Math.max(mode.qty, 3));
+    const friend = (): void => { if (fp !== null && fq > 0) acts.append(button(`Friend's price: ${goodName("mango", fq)} at ${fp} c (${fp * fq} c)`, "full", () => simpleDeal(fp, fq), String(acts.querySelectorAll("button").length + 1), `${Math.max(0, unit - fp) * fq} c more stays in ${first(id)}'s till than at ${unit} c`)); };
     if (mode.done > 0) { /* the result line is showing */ }
-    else if (max <= 0) acts.append(el("div", "tp-text full", tab === "buy" ? (m.stock[good] <= 0 ? "Sold out for now." : `You need ${unit} c for one. You have ${state.player.coins} c.`) : (state.player.inventory.mango <= 0 ? "You have no mangoes to sell. Buy some first." : `${PERSONALITY[id].name.split(" ").pop()} has ${Math.floor(m.cash)} c, not enough for one at ${unit} c. The Market Guild lends low tills coins within a minute or two: come back soon, or sell to another stall.`)));
+    else if (max <= 0) { acts.append(el("div", "tp-text full", tab === "buy" ? (m.stock[good] <= 0 ? "Sold out for now." : `You need ${unit} c for one. You have ${state.player.coins} c.`) : (state.player.inventory.mango <= 0 ? "You have no mangoes to sell. Buy some first." : `${PERSONALITY[id].name.split(" ").pop()} has ${Math.floor(m.cash)} c, not enough for one at ${unit} c. The Market Guild lends low tills coins within a minute or two: come back soon, or sell to another stall.`))); friend(); }
     else {
       acts.append(button(`${tab === "buy" ? "Buy" : "Sell"} ${goodName(good, mode.qty)} for ${total} c`, "primary", () => simpleDeal(), "1"));
-      const fp = tab === "sell" ? friendPrice(id) : null;
-      if (fp !== null) acts.append(button(`Friend's price: ${fp} c each (${fp * mode.qty} c)`, "full", () => simpleDeal(fp), "2", `${(unit - fp) * mode.qty} c more stays in ${first(id)}'s till`));
+      friend();
       if (unlocked(state, "haggle") && m.status === "open" && modeFor(state, id) === tab && good === "mango") {
         const shut = isLocked(state, id) && !(stepIndex(state) === HAGGLE_STEP && id === tutorSeller(state));
         const hb = button("Haggle", "full", () => startHaggle(), String(acts.querySelectorAll("button").length + 1), shut ? "not again today: you pushed too hard" : "try for a better price");
@@ -860,12 +863,12 @@ export async function createPlay(game: Game): Promise<Play> {
     renderTrade();
   };
 
-  const simpleDeal = (friend?: number): void => {
+  const simpleDeal = (friend?: number, friendQty?: number): void => {
     if (mode.kind !== "trade" || mode.done > 0) return;
     const { id, tab } = mode;
     const unit = friend ?? (tab === "buy" ? buyUnit(id) : sellPrice(id));
-    if (!unit || maxQty(id, tab) < 1) return;
-    const qty = Math.min(mode.qty, maxQty(id, tab));
+    if (!unit || (friendQty ?? maxQty(id, tab)) < 1) return;
+    const qty = friendQty ?? Math.min(mode.qty, maxQty(id, tab));
     settleDeal({ merchant: id, good: goodFor(id, tab), mode: tab === "buy" ? "buy" : "sell", qty, unit, open: unit, limit: unit, patience: 100, used: {}, history: [], moves: 0, over: "deal" });
   };
 

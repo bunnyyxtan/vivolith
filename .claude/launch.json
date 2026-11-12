@@ -12,6 +12,12 @@
       "runtimeExecutable": "powershell",
       "runtimeArgs": ["-NoProfile", "-Command", "$env:NEAR_ACCOUNT_ID=' '; $env:NEAR_RELAYER_KEY=' '; $env:ELEVENLABS_API_KEY='off'; $env:NEAR_AI_KEY='off'; npm.cmd run dev -- --port 5174 --strictPort"],
       "port": 5174
+    },
+    {
+      "name": "near-world-live-noai",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": ["-NoProfile", "-Command", "$env:ELEVENLABS_API_KEY=' '; $env:NEAR_AI_KEY=' '; $env:NEAR_AGENT_MERCHANTS=' '; npm.cmd run dev -- --port 5176 --strictPort"],
+      "port": 5176
     }
   ]
 }

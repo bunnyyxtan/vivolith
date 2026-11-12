@@ -24,6 +24,22 @@ paid call was possible). Anything that needs the live chain is marked READY FOR 
 | Haggle: merchant reaction over their head per tactic | VERIFIED offline | Browser: Buy double landed, 18 c for 6 (opened 24 c) |
 | Frame time at the orchard crate | MEASURED | 3.0 ms median (`frameTime(60)`, 964x906 pane, RTX 3050) |
 
+### Phase 1 live pass on testnet (2026-11-12, approved by the owner)
+
+Dev relayer with real testnet keys, NEAR AI and ElevenLabs keys blanked (`near-world-live-noai`), one fresh guest
+`g3bb4d6aaa31fd20f.bunnyy-nearworld.testnet` (40 c starter purse). Market turns were the game's own 60 s client ticks.
+
+| Step | Result | Transaction |
+|---|---|---|
+| Pema's arc starts in chain mode: till 7 c, rent 40 c, due market day 2990842, HUD "in about 1 min", then "at the next market turn" once the day began (no verdict before the charge) | PASS | |
+| Orchard pick, F pressed twice: one request, bag 0 to 3, game purse = `mt_balance_of` (40 c, 3 mangoes) | PASS | `4F8tm4nAFwsJE1BKCrRukgPaemLBKmzQ1o4cUb3UT97w` |
+| Buy 3 from Tomas at 2 c | PASS | `3gppDMocjCS5VpnaF7zGXVHRZBm6vVU451HXy9f6Lc2J` |
+| Market turn charged rent: `get_stalls` pema `last_rent` 2990842, closed; story resolved "closed" with toast | PASS | relayer tick |
+| Sell 1 mango to closed Pema: reopened (`get_stalls` open, need 0), recovery beat | PASS | `AtZxxrM6BLRCVvV1wBJ4jVGHkGeUaTBq7TNPfgXWKcE2` · `phase1-live-pema-reopened.jpg` (bubble re-shown for the capture) |
+| Friend's price: 2 mangoes at 2 c while her bid was 5 c and her till 5 c; relayer accepted; game = chain (player 44 c, 3 mangoes; Pema 1 c) | PASS | `12QdWWcKKY2xti1WuUn27Ch9xuUaM5EFYPenknBfVDn5` |
+| Live defects found and fixed: friend's price was capped by the quantity the full bid allowed (and hidden when that was 0); Pema's greeting said "three mangoes left" with 12 on the shelf; her till note showed while closed | FIXED | |
+| Orchard claim release on a failed mint, invest dividends paid on chain, haggle deal on chain | NOT RUN LIVE | relayer change needs a deploy; not exercised in this pass |
+
 ## Market v3: fresh economy and verification (2026-11-09)
 
 The testnet ledger was reset in place (`scripts/near/reset-state.ts`). Before the reset it held 212 state keys: 46 balances
