@@ -8,6 +8,22 @@ The game was renamed from NEAR World to **VIVOLITH** on 2026-11-06 (identifiers 
 Status keys: NOT STARTED · IN PROGRESS · VERIFIED (evidence given) · BLOCKED (reason given) · ROADMAP.
 Deadline: 2026-11-14 23:59 UTC. Feature freeze target: 2026-11-13 12:00 UTC (rest = QA, recording, submission).
 
+## Phase 1: core gameplay (2026-11-12)
+
+Tested offline only (`near-world-offline` launch config: relayer, voice and AI keys blanked, so no testnet transaction or
+paid call was possible). Anything that needs the live chain is marked READY FOR LIVE VERIFICATION.
+
+| Item | Status | Evidence |
+|---|---|---|
+| "The night Pema almost closed" (`src/v2/story.ts`): starts when Pema tells her story, ends only on the rent result (contract `last_rent` and open/closed; offline, the 21:00 market rent), HUD stake line with her real till, rent and when it is charged, epilogue from confirmed trades, recovery beat, town gossip | VERIFIED offline; READY FOR LIVE VERIFICATION on chain | `node src/v2/story.check.ts` (time alone never decides); browser: friend's price, then rent at 21:00 resolved "kept", bubble `phase1-pema-rent-kept-bubble.jpg`; a later closure in the week shown in the epilogue and handed to "Help Pema reopen" |
+| Offer comparison in the trade panel, Pema's till economics, friend's price (worse for the player, so the relayer accepts it as a rule price), first sale is a choice (Pema or a better bid) | VERIFIED offline | `phase1-pema-sell-choice.jpg`: Pema 6 c vs Arin 6 c vs Mira 4 c, friend's price 2 c keeps 12 c in her till |
+| Price-move feedback after a confirmed deal | VERIFIED offline | `phase1-trade-price-move.jpg` |
+| Orchard crate of today's share, fruit arcs to Kavi after a confirmed pick, in-flight/picked states, reach anywhere in the grounds, orchard offered as a daily opportunity | VERIFIED offline | `phase1-orchard-crate-ready.jpg`, `phase1-orchard-pick-flight.jpg`; second press: "already picked" |
+| Relayer gives the day's pick back when the mint definitely failed (bundle rebuilt) | READY FOR LIVE VERIFICATION | Code + bundle only; not deployed |
+| Invest tab: dividends actually paid (NEAR receipts per stall, local ledger offline), risk and buy-back stated | VERIFIED offline | Browser: "Paid to you 0 c" after the first pack, week report then showed 3 c dividends |
+| Haggle: merchant reaction over their head per tactic | VERIFIED offline | Browser: Buy double landed, 18 c for 6 (opened 24 c) |
+| Frame time at the orchard crate | MEASURED | 3.0 ms median (`frameTime(60)`, 964x906 pane, RTX 3050) |
+
 ## Market v3: fresh economy and verification (2026-11-09)
 
 The testnet ledger was reset in place (`scripts/near/reset-state.ts`). Before the reset it held 212 state keys: 46 balances

@@ -138,7 +138,8 @@ function nightObjective(s: EconomyState, c: Clock): Objective | null {
   if (n.phase === "kept" || n.phase === "closed") {
     if (f(s, "night.heard")) return null;
     return { title: n.phase === "kept" ? "Pema made rent. Go and see her" : "Pema's stall closed. Go and see her", target: "pema", label: "The night Pema almost closed",
-      detail: n.phase === "kept" ? (n.connected ? "Her rent was charged on NEAR and her till covered it." : "Her till covered the rent.") : (n.connected ? "NEAR charged her rent and her till came up short." : "Her till came up short at 21:00.") };
+      detail: (n.phase === "kept" ? (n.connected ? "Her rent was charged on NEAR and her till covered it." : "Her till covered the rent.") : (n.connected ? "NEAR charged her rent and her till came up short." : "Her till came up short at 21:00."))
+        + (n.phase === "kept" && s.merchants.pema.status !== "open" ? " A later rent has closed her since." : "") };
   }
   const short = n.rent - n.till;
   return {
