@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { initialEconomy } from "./state.ts";
 import { accrueSale, advance, challengeStandingContract, invest, payReleaseFee, pemaBuysFromTomas, recordRestock, reopenGap, sellShares, shareSupply, teahouseForwardBuy, tryReopen } from "./sim.ts";
-import { bidFor, quote } from "./pricing.ts";
+import { bidFor, profitRun, quote } from "./pricing.ts";
 import { RESIDENTS, planResident, type Offer } from "./residents.ts";
 
 // 0. A closed stall still bids for stock, and reopens the moment deliveries cover the gap (not before).
@@ -143,3 +143,18 @@ console.log("economy checks passed", {
   rival: res.message,
   week: a.history.map((d) => `${d.day}:${d.pemaMango}/${d.tomasMango}/${d.lassi}${d.pemaOpen ? "" : "X"}`).join(" "),
 });
+
+// Profit run (the guide's standing objective): read-only, only open stalls, always a real margin, never buy and sell at one stall.
+{
+  const s = initialEconomy();
+  Object.assign(s.merchants.tomas, { status: "open", stock: { mango: 40, lemon: 0, lassi: 0 } });
+  Object.assign(s.merchants.pema, { status: "open", stock: { mango: 0, lemon: 0, lassi: 0 } });
+  const before = JSON.stringify(s);
+  const run = profitRun(s);
+  assert.equal(JSON.stringify(s), before, "profitRun must not change the economy");
+  if (run) { assert.notEqual(run.buy, run.sell); assert.ok(run.bid - run.ask >= 1, "a profit run has a margin"); assert.equal(s.merchants[run.buy].status, "open"); }
+  Object.assign(s.merchants.tomas, { status: "closed" });
+  Object.assign(s.merchants.mira, { status: "closed" });
+  assert.equal(profitRun(s)?.buy === "tomas" || profitRun(s)?.buy === "mira", false, "closed stalls never sell");
+  console.log("profit run:", run ? `${run.buy} ${run.ask} c -> ${run.sell} ${run.bid} c` : "none right now");
+}

@@ -5,6 +5,7 @@ import * as THREE from "three";
 import type { EconomyState, MerchantId } from "../economy/state";
 import { MERCHANT_IDS } from "../economy/state";
 import { chainLive, reopenGap, SHARE_PACK } from "../economy/sim";
+import { bidFor, profitRun } from "../economy/pricing";
 import { el, type Hud } from "./hud";
 
 export interface Step {
@@ -100,6 +101,20 @@ export const unlocked = (s: EconomyState, what: "haggle" | "invest" | "week" | "
   return what === "haggle" ? i >= 4 : what === "invest" ? i >= 5 : i >= 6;
 };
 
+/** The standing objective once every goal is done: carry mangoes from the cheap stall to the stall that pays most. */
+function opportunity(s: EconomyState): Objective | null {
+  const run = profitRun(s);
+  if (!run) return null;
+  const held = s.player.inventory.mango, gain = run.bid - run.ask;
+  if (held > 0) {
+    const sell = (() => { let best: { id: MerchantId; bid: number } | null = null; for (const id of MERCHANT_IDS) { const b = s.merchants[id].status === "open" ? bidFor(s, id, "mango") : null; if (b && (!best || b.price > best.bid)) best = { id, bid: b.price }; } return best; })();
+    if (sell) return { title: `Sell your ${held} ${held === 1 ? "mango" : "mangoes"} to ${NAMES[sell.id]}`, target: sell.id, label: "Opportunity",
+      detail: `${NAMES[sell.id]} pays ${sell.bid} c each right now. Press E at the stall and sell: that is ${held * sell.bid} c.` };
+  }
+  return { title: `Profit run: ${NAMES[run.buy]} to ${NAMES[run.sell]}`, target: run.buy, label: "Opportunity",
+    detail: `${NAMES[run.buy]} sells mangoes at ${run.ask} c and ${NAMES[run.sell]} pays ${run.bid} c: about ${gain} c per mango. Buy what you can carry (you have ${s.player.coins} c), then walk them over.` };
+}
+
 export interface Objective { title: string; detail: string; target: Target | null; label: string }
 
 export interface Guide {
@@ -133,7 +148,7 @@ export function createGuide(hud: Hud): Guide {
       };
     }
     const g = GOALS.find((x) => !x.done(s));
-    return g ? { title: g.title, detail: g.detail, target: g.target ?? null, label: "Goal" } : null;
+    return g ? { title: g.title, detail: g.detail, target: g.target ?? null, label: "Goal" } : opportunity(s);
   };
   return {
     current,

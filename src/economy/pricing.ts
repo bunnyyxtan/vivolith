@@ -221,3 +221,17 @@ export function stallPull(state: EconomyState, id: MerchantId): number {
  *  The relayer enforces the once-a-day cap per account; the morning window is the game clock's. */
 export const ORCHARD_PICK = 3;
 export const ORCHARD_HOURS: readonly [number, number] = [6, 11];
+
+/** The best mango trade on the street right now, read from live prices (no state is changed): the open stall that sells
+ *  cheapest to the player, and the open stall that bids highest for a mango. Null when there is no margin of 1 c or more. */
+export function profitRun(s: EconomyState): { buy: MerchantId; sell: MerchantId; ask: number; bid: number } | null {
+  let buy: { id: MerchantId; ask: number } | null = null, sell: { id: MerchantId; bid: number } | null = null;
+  for (const id of MERCHANT_IDS) {
+    const m = s.merchants[id];
+    if (m.status !== "open") continue;
+    if (m.sells.includes("mango") && m.stock.mango > 0) { const ask = quote(s, id, "mango").price; if (!buy || ask < buy.ask) buy = { id, ask }; }
+    const b = bidFor(s, id, "mango");
+    if (b && (!sell || b.price > sell.bid)) sell = { id, bid: b.price };
+  }
+  return buy && sell && buy.id !== sell.id && sell.bid - buy.ask >= 1 ? { buy: buy.id, sell: sell.id, ask: buy.ask, bid: sell.bid } : null;
+}
