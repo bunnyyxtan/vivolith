@@ -755,7 +755,7 @@ async function claimOnce(cfg: Config, key: string, ttlSec: number): Promise<bool
 }
 
 /** Residents' day (see src/economy/residents.ts). Returns what they ate per `merchant:good`, so tourists buy less. */
-async function residentTurn(cfg: Config, provider: JsonRpcProvider, relayer: Account, secret: string, day: number, log: string[], txs: string[], agentCfg: AgentConfig, agentStore: DecisionStore): Promise<Record<string, number>> {
+export async function residentTurn(cfg: Config, provider: JsonRpcProvider, relayer: Account, secret: string, day: number, log: string[], txs: string[], agentCfg: AgentConfig, agentStore: DecisionStore): Promise<Record<string, number>> {
   const ate: Record<string, number> = {};
   for (const r of RESIDENTS) {
     const accountId = `${r.id}.${cfg.relayerId}`;

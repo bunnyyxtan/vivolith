@@ -1545,10 +1545,14 @@ export async function createPlay(game: Game): Promise<Play> {
       const from = residentSeen[r.id];
       residentSeen[r.id] = Math.max(from ?? 0, ...rc.map((x) => x.block_height));
       if (from === undefined || ff) return;
-      for (const x of rc.filter((y) => y.block_height > from).sort((a, b) => a.block_height - b.block_height)) {
+      const fresh = rc.filter((y) => y.block_height > from).sort((a, b) => a.block_height - b.block_height);
+      // the resident's NEAR AI plan for today (a confirmed one only): said at the stall with the trade it chose
+      const plan = fresh.length ? await agentDecision(r.id) : null;
+      const tag = plan && plan.source === "ai" && plan.txHash && plan.day === Math.floor(Date.now() / 600000) ? " NEAR AI chose this." : "";
+      for (const x of fresh) {
         const mer = x.counterparty.split(".")[0], qty = Number(x.qty), price = Number(x.price);
-        if (x.kind === "sold") market.life.errand(who, mer, `${r.name}: ${qty} ${x.token_id === "mango" ? "mangoes" : `${x.token_id}s`} for ${nameOf(x.counterparty)}. +${qty * price} c`);
-        else if (x.kind === "bought") market.life.errand(who, mer, `${r.name}: one ${x.token_id}, ${price} c. Lunch!`);
+        if (x.kind === "sold") market.life.errand(who, mer, `${r.name}: ${qty} ${x.token_id === "mango" ? "mangoes" : `${x.token_id}s`} for ${nameOf(x.counterparty)}. +${qty * price} c${tag}`);
+        else if (x.kind === "bought") market.life.errand(who, mer, `${r.name}: one ${x.token_id}, ${price} c. Lunch!${tag}`);
       }
     }));
   };
