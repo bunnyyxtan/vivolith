@@ -27,12 +27,8 @@ const FALLBACK_POSTS: Record<NpcId, Post> = {
   harbor: { npc: v(5.4, -33), stall: v(3.4, -33) },
   engineer: { npc: v(-26.2, -61.3), stall: v(-26.2, -58.2) },
 };
-const MODEL_FALLBACK: Record<NpcId, string> = {
-  pema: "/models/pema.glb", tomas: "/models/npc_tomas.glb", mira: "/models/pema.glb", arin: "/models/npc_teahouse.glb",
-  harbor: "/models/vendor_lewis.glb", engineer: "/models/npc_engineer.glb",
-};
-/** Anime cast file per role (public/models/v2/cast/<name>.glb). Harbor Dispatch has no cast model yet. */
-const CAST: Partial<Record<NpcId, string>> = { pema: "merchant_fruit", tomas: "tomas", mira: "mira", arin: "arin", harbor: "bram", engineer: "ines" }; // all Tripo models
+/** Anime cast file per role (public/models/v2/cast/<name>.glb). */
+const CAST: Record<NpcId, string> = { pema: "merchant_fruit", tomas: "tomas", mira: "mira", arin: "arin", harbor: "bram", engineer: "ines" }; // all Tripo models
 /** Town posts by role; Harbor Dispatch takes the v3 stall at the gate end of the square. */
 const TOWN_POST: Record<NpcId, string> = { pema: "pema", tomas: "tomas", mira: "v2", arin: "teahouse", harbor: "v3", engineer: "engineer" };
 const CAST_HEIGHT = 1.7;
@@ -232,31 +228,16 @@ function postsFrom(town: THREE.Object3D | null): Record<NpcId, Post> {
   return out;
 }
 
-/** Cast GLB with the old Mixamo clips borrowed when the cast export's own clips are static
- *  (current cast files bake every clip as 2 identical keys = bind pose). Falls back to the old model. */
-async function loadNpcModel(id: NpcId): Promise<AnimatedCharacter> {
-  const cast = CAST[id];
-  if (cast) {
-    const url = `/models/v2/cast/${cast}.glb`;
-    try {
-      const idle = (await loadGLB(url)).animations.find((c) => /idle/i.test(c.name));
-      const moves = idle?.tracks.some((t) => /quaternion/.test(t.name) && t.times.length > 2);
-      // ponytail: loads the cast GLB twice (check + character); fold into loadCharacter if load time matters.
-      return await loadCharacter(url, HEIGHT[id], moves ? undefined : MODEL_FALLBACK[id]);
-    } catch { /* cast file missing: old model below */ }
-  }
-  return loadCharacter(MODEL_FALLBACK[id], HEIGHT[id]);
+/** Every cast GLB is a Tripo Studio character with its own clips (blender/build_studio_character.py). */
+function loadNpcModel(id: NpcId): Promise<AnimatedCharacter> {
+  return loadCharacter(`/models/v2/cast/${CAST[id]}.glb`, HEIGHT[id]);
 }
 
-/** Townsfolk models (cast folk1..6; Idle/Walk/Run/Talking borrowed from old Mixamo characters, the cast clips are static). */
-const FOLK_CLIPS = ["/models/ped_abe.glb", "/models/npc_teahouse.glb", "/models/player.glb"];
-/** Townsfolk rebuilt in Tripo Studio (blender/build_studio_character.py) carry their own clips: no borrowing. */
-const TRIPO_FOLK = new Set([1]);
 async function loadFolk(scene: THREE.Scene): Promise<FolkChar[]> {
   const out = await Promise.all(Array.from({ length: FOLK }, async (_, i): Promise<FolkChar | null> => {
     try {
       const n = (i % 6) + 1;
-      const c = await loadCharacter(`/models/v2/cast/folk${n}.glb`, CAST_HEIGHT * (0.94 + 0.06 * (i % 3)), TRIPO_FOLK.has(n) ? undefined : FOLK_CLIPS);
+      const c = await loadCharacter(`/models/v2/cast/folk${n}.glb`, CAST_HEIGHT * (0.94 + 0.06 * (i % 3)));
       applyToon(c.root, 0.011);
       c.autoGround = true;
       const root = new THREE.Group();

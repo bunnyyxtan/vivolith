@@ -11,8 +11,7 @@ the files below. They are included only so the game builds and runs; do not extr
 | Files | Source | Terms |
 |---|---|---|
 | `public/models/player.glb`, `pema.glb`, `npc_*.glb`, `ped_*.glb`, `vendor_*.glb` | Mixamo characters and animations (Adobe), converted to GLB | Royalty-free for use in games; Adobe does not allow redistributing characters or animations as stand-alone files |
-| `public/models/v2/cast/{folk1-6,ines,marta,pema,tomas}.glb` | Our own meshes on the Mixamo Remy skeleton with Mixamo clips | As above for the skeleton and clips |
-| `public/models/v2/kavi.glb`, `v2/cast/merchant_fruit.glb`, `v2/props/*.glb` | Generated with Tripo, then processed by our scripts | Tripo's terms for the plan used at generation time |
+| `public/models/v2/kavi.glb`, `v2/cast/*.glb` (all characters), `v2/props/*.glb` | Generated with Tripo, then processed by our scripts | Tripo's terms for the plan used at generation time |
 | `public/audio/**` | Generated with ElevenLabs on a paid (Starter) plan | ElevenLabs terms; paid plans allow commercial use |
 | `public/brand/*` (except `vivolith-mark.svg`), `assets-src/brand/**`, the marks modelled into `spire.glb` and `v2/landmarks/*.glb` | NEAR, NEAR AI and NEAR Intents marks | Trademarks of their owners |
 | `public/draco/*` | Draco decoder from three.js | Apache-2.0 |
@@ -140,8 +139,8 @@ Raw outputs stay in `assets-src/tripo/out/` and `library/` (git-ignored); prompt
 | `public/models/v2/cast/merchant_fruit.glb` | Pema's model |
 | `public/models/v2/props/*.glb` | EV sedan, EV pickup, fruit stall, corner shop, kiosk, vending machine, food and coffee trucks |
 
-The other anime cast files in `public/models/v2/cast/` are built parametrically by `blender/build_cast_v2.py` on the
-Mixamo rig.
+Every other cast file in `public/models/v2/cast/` (Tomas, Mira, Arin, Ines, Bram, folk1-6) is a Tripo Studio character
+built by `blender/build_studio_character.py` with Tripo's own preset clips.
 
 ## Audio (ElevenLabs, AI-generated)
 

@@ -28,6 +28,11 @@ CAST = {
               {"idle": "Idle", "walk": "Walk", "complain_01": "Talking", "greet_01": "Wave", "agree": "Agree",
                "scared_01": "Startled", "look_around": "Look"}, {})
        for name in ("tomas", "mira", "arin", "ines", "bram")},
+    # townsfolk (market.ts cycles folk1..6 over the 24 walkers): idle, walk, run, sit, talk, startled, look, wave
+    **{name: (f"public/models/v2/cast/folk{n}.glb",
+              {"idle": "Idle", "walk": "Walk", "run": "Run", "sit": "Sit", "complain_01": "Talking",
+               "scared_01": "Startled", "look_around": "Look", "greet_01": "Wave"}, {})
+       for n, name in ((2, "joon"), (3, "hadi"), (4, "lena"), (5, "suki"), (6, "rafa"))},
     "noor": ("public/models/v2/cast/folk1.glb",
              {"idle": "Idle", "walk": "Walk", "run": "Run", "sit": "Sit", "scared_01": "Startled", "look_around": "Look",
               "greet_01": "Wave"}, {}),
