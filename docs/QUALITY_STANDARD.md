@@ -1,5 +1,7 @@
 # VIVOLITH: Quality Standard (permanent, adopted 2026-11-06)
 
+> Retired: the realistic prototype (`legacy.html`, Mixamo characters) was removed; V2 is the only game. Entries below that mention Mixamo, `src/crowd.ts`, `src/cast.ts` or `legacy.html` describe that prototype and are kept as history.
+
 VIVOLITH is a long-term game; the hackathon build is its first milestone. Every asset, space and system we ship,
 existing or new, is held to the craft of a premium production. This file is the bar. `docs/PROGRESS.md` tracks
 where we are against it. Nothing is "done" because it exports or compiles: it is done when it passes the review

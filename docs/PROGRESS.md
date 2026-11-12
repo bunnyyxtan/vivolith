@@ -1,5 +1,7 @@
 # VIVOLITH: Progress Tracker
 
+> Retired: the realistic prototype (`legacy.html`, Mixamo characters) was removed; V2 is the only game. Entries below that mention Mixamo, `src/crowd.ts`, `src/cast.ts` or `legacy.html` describe that prototype and are kept as history.
+
 The game was renamed from NEAR World to **VIVOLITH** on 2026-11-06 (identifiers such as the testnet account
 `bunnyy-nearworld.testnet` and the save key `nearworld.save.v1` keep their old names for compatibility).
 

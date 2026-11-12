@@ -148,7 +148,6 @@ flowchart LR
 | `public/` | Runtime assets: GLB models, audio, brand marks, HDRI, Draco decoder |
 | `assets-src/` | Source brand files and generated textures that the Blender scripts read |
 | `docs/` | Design, economy math, progress log; `docs/evidence/` holds the screenshots behind quality claims |
-| `legacy.html`, `src/*.ts` | The first, realistic-style prototype, kept at `/legacy.html`; the game reuses some of its models |
 
 ## Run it
 
@@ -200,18 +199,16 @@ browser and on testnet. Most of the code was written by AI coding agents working
   Blender scripts in this repo.
 - **Audio:** all 50 files in `public/audio` (merchant voices, effects, ambience, music) were generated with ElevenLabs
   (`eleven_v4`, `eleven_text_to_sound_v3`, `music_v2_5`) by `scripts/audio/generate.ts`.
-- **Not AI-generated:** the Poly Haven and Mixamo assets below, the official NEAR brand marks, and the Three.js Draco
+- **Not AI-generated:** the Poly Haven assets below, the official NEAR brand marks, and the Three.js Draco
   decoder.
 
 ## Credits and licenses
 
 - Code and the assets built by our Blender scripts: MIT ([LICENSE](LICENSE)). The MIT licence does **not** cover
-  third-party or AI-generated assets (Mixamo-derived characters and animations, Tripo models, ElevenLabs audio, NEAR
+  third-party or AI-generated assets (Tripo models, ElevenLabs audio, NEAR
   marks); they keep their own terms and are here only so the game runs. See
   [docs/ASSETS.md](docs/ASSETS.md#licence-scope) for the file-by-file list.
 - [Poly Haven](https://polyhaven.com) models, textures and the HDRI (CC0), by the authors named in `docs/ASSETS.md`.
-- Character rigs and animations from [Mixamo](https://www.mixamo.com) (Adobe), converted to GLB; the raw FBX files are
-  not redistributed.
 - 3D generation by [Tripo](https://www.tripo3d.ai); voices, effects and music by [ElevenLabs](https://elevenlabs.io).
 - NEAR, NEAR AI and NEAR Intents marks belong to their owners and are used following the NEAR brand guidelines. The
   in-game buildings are fictional, not official NEAR offices.

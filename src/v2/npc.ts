@@ -548,7 +548,7 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
         if (e.state === "walk" || e.state === "stag" || (e.state === "act" && e.spd > 0.05)) {
           if (e.state !== "act") { body.x = e.x; body.z = e.z; body.y = e.y; if (e.state === "stag") pushOut(colliders, body); e.x = body.x; e.z = body.z; }
         }
-        if (e.state === "idle") e.c.lift = 0;
+        if (e.state !== "act") e.c.lift = 0; // a seat drop must never outlive the seat (walkers sank 0.37 m)
         e.c.setSpeed(e.spd, WALK, WALK * 2);
         // off screen: the mixer catches up twice a second instead of every frame (nobody sees the pose)
         e.lag += dt;

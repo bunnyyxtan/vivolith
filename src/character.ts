@@ -1,4 +1,4 @@
-// Skinned, animated humanoids (Mixamo characters converted to GLB by blender/convert_mixamo.py).
+// Skinned, animated humanoids (Tripo Studio characters built by blender/build_studio_character.py).
 import * as THREE from "three";
 import { loadGLB } from "./assets";
 
@@ -39,131 +39,9 @@ function findClip(clips: THREE.AnimationClip[], pattern: RegExp): THREE.Animatio
   return clips.find((c) => pattern.test(c.name));
 }
 
-const suffix = (name: string): string => name.replace(/^mixamorig\d*:?/, "");
-const RETARGET_FPS = 30;
-const LIMB = /^(Left|Right)(Shoulder|Arm|ForeArm|Hand|UpLeg|Leg|Foot)/;
-/** Retargeted clips by "model|source|clip": instances of one model share bone names, so the 24 townsfolk bake 6 sets. */
-const retargeted = new Map<string, THREE.AnimationClip>();
-/** Outward swing (radians, about the body's forward axis) added to retargeted limbs: the Mixamo walk and run set
- *  each foot on the centre line, which on Kavi's wider hips crossed the steps like a catwalk. */
-const LIMB_SPREAD: Record<string, number> = { UpLeg: 0.05 };
-
-/** World-space correction for a bone inside a spread limb: each spread ancestor (or itself) swings it away from the body. */
-function limbSpread(b: THREE.Object3D): THREE.Quaternion {
-  const q = new THREE.Quaternion();
-  for (let o: THREE.Object3D | null = b; o; o = o.parent) {
-    const m = /^(Left|Right)(\w+)$/.exec(suffix(o.name));
-    const angle = m ? LIMB_SPREAD[m[2]] : undefined;
-    if (m && angle) q.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), (m[1] === "Left" ? 1 : -1) * angle));
-  }
-  return q;
-}
-
-/**
- * Bakes `clip` (animating `src`) onto the bones of `dst`, whose rest orientations differ (a Tripo rig renamed to
- * Mixamo names: bone rolls differ by up to 180 degrees, so copying local rotations lays the body on its back).
- * Each target bone takes the source bone's world rotation away from its rest, applied after first turning the
- * target's rest bone direction onto the source's. Rotations only; the feet are grounded at runtime.
- */
-function retargetClip(clip: THREE.AnimationClip, src: THREE.Object3D, dst: THREE.Object3D): THREE.AnimationClip {
-  const srcBones = new Map<string, THREE.Object3D>();
-  src.traverse((o) => { if ((o as THREE.Bone).isBone) srcBones.set(suffix(o.name), o); });
-  const dstBones: THREE.Object3D[] = [];
-  dst.traverse((o) => { if ((o as THREE.Bone).isBone) dstBones.push(o); }); // parents before children
-  // from matrixWorld (updated before every read): getWorldQuaternion re-walks the parent chain per bone per frame
-  const _p = new THREE.Vector3(), _s = new THREE.Vector3();
-  const worldQ = (o: THREE.Object3D): THREE.Quaternion => { const q = new THREE.Quaternion(); o.matrixWorld.decompose(_p, q, _s); return q; };
-  const worldP = (o: THREE.Object3D): THREE.Vector3 => o.getWorldPosition(new THREE.Vector3());
-  src.updateMatrixWorld(true);
-  dst.updateMatrixWorld(true);
-  // per target bone: its source, rest world rotations, and the rest-direction alignment. A bone aims at its only
-  // child (a hand at its middle finger); others (hips, chest, finger tips) keep their parent's alignment, so an
-  // A-pose hand follows its T-pose-aligned forearm instead of bending ~65 degrees at the wrist.
-  const aligned = new Map<THREE.Object3D, THREE.Quaternion>();
-  const rig = dstBones.map((b) => {
-    const s = srcBones.get(suffix(b.name));
-    const kids = b.children.filter((c) => (c as THREE.Bone).isBone);
-    const aim = kids.length === 1 ? kids[0] : kids.find((c) => /HandMiddle1$/.test(c.name));
-    const sc = aim ? srcBones.get(suffix(aim.name)) : undefined;
-    // Only limbs align (A-pose vs T-pose). The spine, neck and head keep the target's own posture: forcing a
-    // forward-carried neck vertical tipped every townsperson's face up ~13 degrees.
-    const align = s && aim && sc && LIMB.test(suffix(b.name))
-      ?new THREE.Quaternion().setFromUnitVectors(worldP(aim).sub(worldP(b)).normalize(), worldP(sc).sub(worldP(s)).normalize())
-      : (aligned.get(b.parent!) ?? new THREE.Quaternion()).clone();
-    aligned.set(b, align);
-    return { b, s, fix: limbSpread(b), srcRestInv: s ? worldQ(s).invert() : null, dstRest: align.clone().multiply(worldQ(b)), restLocal: b.quaternion.clone() };
-  });
-  const parentRest = new Map<THREE.Object3D, THREE.Quaternion>();
-  for (const { b } of rig) if (b.parent && !(b.parent as THREE.Bone).isBone) parentRest.set(b.parent, worldQ(b.parent));
-
-  const mixer = new THREE.AnimationMixer(src);
-  const action = mixer.clipAction(clip).play();
-  const n = Math.max(2, Math.ceil(clip.duration * RETARGET_FPS) + 1);
-  const times = new Float32Array(n);
-  const values = rig.map(() => new Float32Array(n * 4));
-  const world = new Map<THREE.Object3D, THREE.Quaternion>();
-  const local = new THREE.Quaternion();
-  const prev = rig.map(() => new THREE.Quaternion());
-  for (let i = 0; i < n; i++) {
-    const t = (clip.duration * i) / (n - 1);
-    times[i] = t;
-    mixer.setTime(t);
-    src.updateMatrixWorld(true);
-    world.clear();
-    rig.forEach((r, k) => {
-      const parentW = world.get(r.b.parent!) ?? parentRest.get(r.b.parent!) ?? new THREE.Quaternion();
-      const w = r.s ? worldQ(r.s).multiply(r.srcRestInv!).multiply(r.dstRest).premultiply(r.fix) : parentW.clone().multiply(r.restLocal);
-      world.set(r.b, w);
-      local.copy(parentW).invert().multiply(w);
-      if (i > 0 && local.dot(prev[k]) < 0) local.set(-local.x, -local.y, -local.z, -local.w); // no flips between keys
-      prev[k].copy(local);
-      local.toArray(values[k], i * 4);
-    });
-  }
-  action.stop();
-  mixer.uncacheRoot(src);
-  const tracks = rig.flatMap((r, k) => (r.s ? [new THREE.QuaternionKeyframeTrack(`${r.b.name}.quaternion`, times, values[k])] : []));
-  return new THREE.AnimationClip(clip.name, clip.duration, tracks);
-}
-
 /** Loads a character GLB and scales it so its standing height equals `height` metres. */
-/** `clipSource`: Mixamo-rig GLBs whose clips (rotation tracks only) replace this model's own, for exports whose
- *  baked clips are static or poor. "url#Walk,Run" takes only those clips from that file; the first source wins.
- *  Picked clips from another file are retargeted onto this rig (retargetClip); the rest are copied by bone name. */
-export async function loadCharacter(url: string, height: number, clipSource?: string | string[]): Promise<AnimatedCharacter> {
+export async function loadCharacter(url: string, height: number): Promise<AnimatedCharacter> {
   const gltf = await loadGLB(url);
-  if (clipSource) {
-    // copy by bone suffix: rigs differ only in the "mixamorig<N>" prefix
-    const bySuffix = new Map<string, string>();
-    gltf.scene.traverse((o) => bySuffix.set(o.name.replace(/^mixamorig\d*/, ""), o.name));
-    const seen = new Set<string>();
-    const merged: THREE.AnimationClip[] = [];
-    for (const src of Array.isArray(clipSource) ? clipSource : [clipSource]) {
-      const [srcUrl, only] = src.split("#");
-      const pick = only ? new Set(only.split(",")) : null;
-      const srcGltf = srcUrl === url ? gltf : await loadGLB(srcUrl);
-      for (const c of srcGltf.animations) {
-        if (seen.has(c.name) || (pick && !pick.has(c.name))) continue; // first source wins per clip name
-        seen.add(c.name);
-        if (srcGltf !== gltf) { // rest poses differ between rigs (3-23 degrees per bone): copied local rotations lean the body back
-          const k = `${url}|${srcUrl}|${c.name}`;
-          let clip = retargeted.get(k);
-          if (!clip) { clip = retargetClip(c, srcGltf.scene, gltf.scene); retargeted.set(k, clip); }
-          merged.push(clip);
-          continue;
-        }
-        merged.push(new THREE.AnimationClip(c.name, c.duration,
-          c.tracks.flatMap((t) => {
-            const target = t.name.endsWith(".quaternion") ? bySuffix.get(t.name.split(".")[0].replace(/^mixamorig\d*/, "")) : undefined;
-            if (!target) return [];
-            const tr = t.clone();
-            tr.name = `${target}.quaternion`;
-            return [tr];
-          })));
-      }
-    }
-    gltf.animations = merged;
-  }
   const model = gltf.scene;
   model.traverse((o) => {
     if (o instanceof THREE.Mesh) {

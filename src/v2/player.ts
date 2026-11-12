@@ -35,12 +35,8 @@ export interface Player {
 }
 
 async function loadKavi(): Promise<AnimatedCharacter> {
-  try {
-    // Kavi from Tripo Studio (blender/build_studio_character.py): his own mesh, rig and every clip, no Mixamo data.
-    return await loadCharacter("/models/v2/kavi.glb", HEIGHT);
-  } catch {
-    return loadCharacter("/models/player.glb", HEIGHT); // placeholder until kavi.glb exists
-  }
+  // Kavi from Tripo Studio (blender/build_studio_character.py): his own mesh, rig and every clip.
+  return loadCharacter("/models/v2/kavi.glb", HEIGHT);
 }
 
 export async function createPlayer(): Promise<Player> {

@@ -5,12 +5,14 @@ Assets we created ourselves (Blender scripts in `blender/`, code-built geometry 
 
 ## Licence scope
 
+Mixamo files were removed from the tree; see [HISTORY_CLEANUP.md](HISTORY_CLEANUP.md) for what remains in Git history.
+
+
 The MIT licence in `LICENSE` covers the code and the assets our Blender scripts build from scratch. It does not cover
 the files below. They are included only so the game builds and runs; do not extract or reuse them outside VIVOLITH.
 
 | Files | Source | Terms |
 |---|---|---|
-| `public/models/player.glb`, `pema.glb`, `npc_*.glb`, `ped_*.glb`, `vendor_*.glb` | Mixamo characters and animations (Adobe), converted to GLB | Royalty-free for use in games; Adobe does not allow redistributing characters or animations as stand-alone files |
 | `public/models/v2/kavi.glb`, `v2/cast/*.glb` (all characters), `v2/props/*.glb` | Generated with Tripo, then processed by our scripts | Tripo's terms for the plan used at generation time |
 | `public/audio/**` | Generated with ElevenLabs on a paid (Starter) plan | ElevenLabs terms; paid plans allow commercial use |
 | `public/brand/*` (except `vivolith-mark.svg`), `assets-src/brand/**`, the marks modelled into `spire.glb` and `v2/landmarks/*.glb` | NEAR, NEAR AI and NEAR Intents marks | Trademarks of their owners |
@@ -95,37 +97,6 @@ Lantern 01, Modular Wooden Pier.
 Built in Blender by us (MIT with the code): market stalls, awnings, benches, fountain, Ledger Tower
 belfry/roof/lantern, string lights, shop signs.
 
-## Characters (Mixamo, Adobe)
-
-Source: https://www.mixamo.com (Adobe account, signed in by the team). Mixamo characters and animations are royalty-free
-for use in games under Adobe's terms; the raw FBX files stay in `Mixamo/` (gitignored) and are not redistributed.
-
-**Pipeline (reproducible):** in the signed-in Mixamo tab, the export API (`/api/v1/products/<motion>?character_id=`, then
-`POST /api/v1/animations/export`, then poll `/characters/<id>/monitor`) is driven with `product_name = nw__<id>__<clip>` so
-each download lands as `Mixamo/nw__<id>__skin_Idle.fbx` (character + idle) and `nw__<id>__<Clip>.fbx` (no skin, same rig;
-walks exported "in place"). The browser pane saves downloads to the last used folder. Then
-`blender/convert_mixamo.py` `convert_cast()` builds one GLB per character (CAST table there): root motion stripped,
-textures capped (named 1k, crowd 512, only that character's images), NLA tracks -> clips. Runtime registry: `src/cast.ts`.
-
-| Game file | Mixamo character | Role in game | Clips (Mixamo motion) | Size | Faces | In-game check |
-|---|---|---|---|---|---|---|
-| `player.glb` | Remy | Player | Idle (weight-shift), Walk, Run | 6.1 MB | - | Verified earlier |
-| `pema.glb` | Peasant Girl | Auntie Pema | Idle, Talking | 1.13 MB | - | Verified earlier |
-| `npc_engineer.glb` | Elizabeth | Ines Varga, NEAR Labs | Idle (Breathing Idle), Talking (General Conversation), Explain (Asking A Question With Two Hands), Walk (Female Walk) | 4.45 MB | 25.0k faces | Idle + Talking + turn-to-player verified 2026-11-06 |
-| `npc_tomas.glb` | Joe | Tomas Vell | Idle (Weight Shift Idle), Talking (Standing Arguing) | 5.10 MB | - | Idle + dialogue verified |
-| `npc_teahouse.glb` | Martha | Marta Okoye | Idle (Standing Idle), Talking (General Conversation) | 4.30 MB | - | Idle + dialogue verified |
-| `ped_sophie.glb` | Sophie | Resident | Idle (Looking Around), Walk (Female Walk) | 2.70 MB | - | Walking verified |
-| `ped_shannon.glb` | Shannon | Student | Idle (Texting While Standing), Walk (Female Walking And Texting) | 3.13 MB | - | Walking verified |
-| `ped_megan.glb` | Megan | Office worker | Idle (Standing Idle), Walk (Female Walk) | 2.92 MB | - | Walking verified |
-| `ped_bryce.glb` | Bryce | Tourist | Idle (Looking Around), Walk (Male Standard Walk) | 2.78 MB | - | Walking verified |
-| `ped_josh.glb` | Josh | Courier | Idle (Standing Idle), Walk (Male Hurried Walk) | 2.74 MB | - | Walking verified |
-| `ped_pete.glb` | Pete | Harbor worker | Idle (Weight Shift), Walk (Male Standard Walk) | 3.26 MB | - | Walking verified |
-| `ped_porter.glb` | Peasant Man | Market porter | Idle (Standing Idle), Walk (Male Walking With Shopping Bag) | 0.49 MB | - | Walking verified |
-| `ped_abe.glb` | Abe | Resident | Idle (Weight Shift), Walk (Male Standard Walk) | 1.84 MB | - | Walking verified |
-
-Not yet checked per character: foot sliding at every walk speed (stride is scaled by speed/clip speed), clothing
-intersections during Talking. Unused: `Stop Walking.fbx` (Remy).
-
 ## Generated with Tripo (AI 3D)
 
 Generated on tripo3d.ai with the team's paid API credits, then made game-ready by `blender/build_kavi_tripo.py`,
@@ -135,7 +106,7 @@ Raw outputs stay in `assets-src/tripo/out/` and `library/` (git-ignored); prompt
 
 | Game file | What |
 |---|---|
-| `public/models/v2/kavi.glb` | Kavi, the player (multiview model, Mixamo-spec auto-rig, preset idle/walk/run/jump/turn) |
+| `public/models/v2/kavi.glb` | Kavi, the player (Tripo Studio model, humanoid auto-rig, preset clips) |
 | `public/models/v2/cast/merchant_fruit.glb` | Pema's model |
 | `public/models/v2/props/*.glb` | EV sedan, EV pickup, fruit stall, corner shop, kiosk, vending machine, food and coffee trucks |
 

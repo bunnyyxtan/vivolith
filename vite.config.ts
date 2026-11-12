@@ -1,4 +1,3 @@
-import { resolve } from "node:path";
 import { defineConfig, loadEnv } from "vite";
 import { nearRelay } from "./server/near-relay";
 import { evidenceWriter } from "./server/evidence";
@@ -10,9 +9,4 @@ export default defineConfig(({ mode }) => ({
     // which commit a live page was built from (scripts/deploy.mjs passes it: Vercel builds without .git)
     { name: "commit-stamp", transformIndexHtml: () => [{ tag: "meta", attrs: { name: "vivolith-commit", content: process.env.VIVOLITH_COMMIT ?? "dev" }, injectTo: "head" }] },
   ],
-  build: {
-    rollupOptions: {
-      input: { main: resolve(__dirname, "index.html"), legacy: resolve(__dirname, "legacy.html") },
-    },
-  },
 }));

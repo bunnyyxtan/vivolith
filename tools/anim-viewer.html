@@ -1,7 +1,7 @@
 <!doctype html>
 <!-- Dev-only animation viewer: npm run dev, then open http://localhost:5173/tools/anim-viewer.html
      Two characters side by side, any clip, slow motion, a frame scrubber, foot trails.
-     Not part of the production build (vite.config.ts builds index.html and legacy.html only). -->
+     Not part of the production build (vite.config.ts builds index.html only). -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -36,7 +36,6 @@ import { loadGLB } from "/src/assets.ts";
 const MODELS = {
   "Pema (Tripo rig v1.0)": "/models/v2/cast/merchant_fruit.glb",
   "Kavi (Tripo clips)": "/models/v2/kavi.glb",
-  "Remy (Mixamo player.glb)": "/models/player.glb",
 };
 const HEIGHT = 1.7;
 
