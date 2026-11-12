@@ -1,6 +1,7 @@
 // Run: node src/economy/haggle.check.ts   (haggling is deterministic and personality matters)
 import assert from "node:assert/strict";
 import { initialEconomy } from "./state.ts";
+import { agentPrice, agentPriceKey, bidFor, quote } from "./pricing.ts";
 import { applyTactic, closeDeal, dealTotal, dealUnit, openHaggle, type HaggleSession } from "./haggle.ts";
 
 const open = (s: ReturnType<typeof initialEconomy>, id: "pema" | "tomas" | "arin"): HaggleSession => {
@@ -48,4 +49,37 @@ const frac = (mode: "buy" | "sell"): HaggleSession => ({ ...d, mode, unit: 3.67,
 assert.equal(dealUnit(frac("buy")), 3);
 assert.equal(dealTotal(frac("buy")), 9);
 assert.equal(dealTotal(frac("sell")), 12);
+
+// A live NEAR AI price reaches the player: the quote, the haggle opening and the settled total all use it, and removing it
+// returns exactly the rule price (the deterministic fallback).
+{
+  const st = initialEconomy();
+  Object.assign(st.merchants.tomas, { status: "open", cash: 100, stock: { mango: 40, lemon: 0, lassi: 0 } });
+  const rule = quote(st, "tomas", "mango").price;
+  const ruleNpc = quote(st, "tomas", "mango", false).price;
+  st.flags[agentPriceKey("tomas", "ask", "mango")] = rule + 2;
+  assert.equal(agentPrice(st, "tomas", "ask", "mango"), rule + 2);
+  assert.equal(quote(st, "tomas", "mango", false).price, rule + 2, "the NPC-facing quote is the posted AI price");
+  const q = quote(st, "tomas", "mango");
+  assert.ok(q.factors[0].label.includes("NEAR AI"), "the explanation says where the price came from");
+  const h = open(st, "tomas");
+  assert.equal(h.open, quote(st, "tomas", "mango").price, "haggling opens at the price the screen shows");
+  const fair = structuredClone(h); fair.over = "deal";
+  const out = closeDeal(structuredClone(st), fair);
+  assert.ok(out.ok, out.ok ? "" : out.message);
+  assert.equal(out.ok && out.total, quote(st, "tomas", "mango").price * fair.qty, "the executed total is the displayed price");
+  delete st.flags[agentPriceKey("tomas", "ask", "mango")];
+  assert.equal(quote(st, "tomas", "mango", false).price, ruleNpc, "no live decision: exactly the rule price");
+  // an agent price cannot make a closed stall sell, or a stall that is not buying buy
+  st.flags[agentPriceKey("tomas", "ask", "mango")] = 99; st.merchants.tomas.status = "closed";
+  assert.equal(quote(st, "tomas", "mango", false).price, ruleNpc, "a closed stall ignores it");
+  const sb = initialEconomy();
+  sb.flags[agentPriceKey("tomas", "bid", "mango")] = 9;
+  assert.equal(bidFor(sb, "tomas", "mango"), null, "Tomas never buys: an agent price cannot invent a bid");
+  const pb = initialEconomy();
+  Object.assign(pb.merchants.pema, { status: "open", stock: { mango: 2, lemon: 0, lassi: 0 } });
+  const ruleBid = bidFor(pb, "pema", "mango")!;
+  pb.flags[agentPriceKey("pema", "bid", "mango")] = ruleBid.price + 1;
+  assert.equal(bidFor(pb, "pema", "mango")!.price, ruleBid.price + 1); assert.equal(bidFor(pb, "pema", "mango")!.qty, ruleBid.qty, "only the price moves");
+}
 console.log("haggle checks passed");

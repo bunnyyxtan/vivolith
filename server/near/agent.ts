@@ -10,7 +10,7 @@
 // options, built from orders that really exist; each option maps to an action the economy already supports and is
 // validated before anything is sent. No key, timeout, refusal, bad option, low confidence or a down store all fall back to
 // the deterministic rule. Receipt verification (needs @nearai/inference-sdk) is not done here: receipts are "unverified".
-import { bidFor, quote } from "../../src/economy/pricing.ts";
+import { agentPrice, agentPriceKey, bidFor, quote } from "../../src/economy/pricing.ts";
 import { planResident, type Offer as ResOffer, type Plan, type Resident } from "../../src/economy/residents.ts";
 import type { EconomyState, Good, MerchantId } from "../../src/economy/state.ts";
 
@@ -328,6 +328,36 @@ export async function attachTx(store: DecisionStore, id: string, day: number, tx
   const next: Decision = { ...d, txHash };
   await store.set(keyOf(id, day), JSON.stringify(next), DECISION_TTL);
   return next;
+}
+
+export interface LivePrice { readonly id: MerchantId; readonly side: "ask" | "bid"; readonly good: Good; readonly price: number }
+
+/** Prices a NEAR AI decision is setting right now: a real (not fallback) decision for this market day whose transaction
+ *  is confirmed AND whose order is still posted on chain at that price. The contract stays authoritative: if the order
+ *  moved or was withdrawn, the decision no longer prices anything and the rule price applies. */
+export async function livePrices(store: DecisionStore, offers: readonly BookOffer[], day: number): Promise<LivePrice[]> {
+  const out: LivePrice[] = [];
+  for (const id of Object.keys(LEVERS)) {
+    const l = LEVERS[id];
+    const d = await decisionFor(store, id, day).catch(() => null);
+    if (!d || d.kind !== "price" || d.source !== "ai" || !d.txHash) continue;
+    if (offers.some((o) => o.merchant === id && o.token_id === l.good && o.side === l.side && Number(o.price) === d.price && Number(o.qty) > 0)) out.push({ id: id as MerchantId, side: l.side, good: l.good, price: d.price });
+  }
+  return out;
+}
+
+/** Writes live prices into an economy state's flags, so pricing.ts quote()/bidFor() use them (server `deal`, client). */
+export function applyLivePrices(st: EconomyState, live: readonly LivePrice[]): void {
+  for (const k of Object.keys(st.flags)) if (k.startsWith("agentPrice.")) delete st.flags[k]; // stale ones never linger
+  for (const p of live) st.flags[agentPriceKey(p.id, p.side, p.good)] = p.price;
+}
+
+/** The current agent price when the buyer's reference (the raw decision price their screen was built on) is not it.
+ *  null = nothing to refuse: no live decision for this lever, or the reference matches. */
+export function priceMoved(st: EconomyState, id: MerchantId, tradeSide: "buy" | "sell", good: Good, ref: number | null): number | null {
+  const live = agentPrice(st, id, tradeSide === "buy" ? "ask" : "bid", good);
+  if (live === null || ref === null) return null; // an older client sends no reference: the existing bounds apply
+  return Math.round(ref) === live ? null : live;
 }
 
 interface Common {

@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { initialEconomy } from "../../src/economy/state.ts";
 import { RESIDENTS, planResident, type Offer as ResOffer } from "../../src/economy/residents.ts";
-import { MIN_CONFIDENCE, LEVERS, agentConfig, decideResident, decisionKey, attachTx, bandFor, claimBidSend, decideBid, decisionFor, parseAnswer, recentDecisions, releaseBidSend, stateFor, type AgentConfig, type BookOffer, type DecisionStore, type FetchLike } from "./agent.ts";
+import { MIN_CONFIDENCE, LEVERS, applyLivePrices, livePrices, priceMoved, agentConfig, decideResident, decisionKey, attachTx, bandFor, claimBidSend, decideBid, decisionFor, parseAnswer, recentDecisions, releaseBidSend, stateFor, type AgentConfig, type BookOffer, type DecisionStore, type FetchLike } from "./agent.ts";
 
 const cfg: AgentConfig = agentConfig({ NEAR_AGENT_MERCHANTS: "pema", NEAR_AI_KEY: "test-key-not-real" });
 const offers: BookOffer[] = [{ merchant: "tomas", token_id: "mango", side: "ask", qty: "20", price: "6" }];
@@ -376,6 +376,41 @@ const rdecide = (f: FetchLike, o: { offers?: ResOffer[]; coin?: number; holding?
   assert.equal(calls, 0); assert.equal(off.decision, null);
   const none = await rdecide(planReply("mira", "skip"), { res: dev, offers: [], holding: 4 });
   assert.equal(calls, 0, "nothing posted: nothing to decide"); assert.equal(none.decision, null);
+}
+
+// ---- player-facing prices: live decisions only --------------------------------------------------------------------------
+{
+  resetDecisions();
+  const st = openAll();
+  const posted = (m: string, side: string, price: number, qty = "5"): BookOffer => ({ merchant: m, token_id: "mango", side, qty, price: String(price) });
+  const put = async (id: "pema" | "tomas", o: { source: "ai" | "fallback"; tx: string | null; price: number; day?: number }) => {
+    const base = await decideBid({ store, cfg: allCfg, st, id, offers: book, day: o.day ?? DAY, fetchImpl: reply(choice(o.source === "ai" ? "hold" : "raise"), "g"), now: () => 1 });
+    const d = base.decision!;
+    await store.set(decisionKey(id, o.day ?? DAY), JSON.stringify({ ...d, source: o.source, price: o.price, txHash: o.tx }), 100);
+  };
+  await put("pema", { source: "ai", tx: "TX1", price: 5 });
+  assert.deepEqual(await livePrices(store, [posted("pema", "bid", 5)], DAY), [{ id: "pema", side: "bid", good: "mango", price: 5 }], "confirmed, posted at that price: live");
+  assert.deepEqual(await livePrices(store, [posted("pema", "bid", 6)], DAY), [], "the order moved: the contract wins, no live price");
+  assert.deepEqual(await livePrices(store, [posted("pema", "bid", 5, "0")], DAY), [], "a withdrawn order is not live");
+  assert.deepEqual(await livePrices(store, [], DAY), [], "not posted");
+  assert.deepEqual(await livePrices(store, [posted("pema", "bid", 5)], DAY + 1), [], "yesterday's decision is not today's price");
+  await put("pema", { source: "ai", tx: null, price: 5 });
+  assert.deepEqual(await livePrices(store, [posted("pema", "bid", 5)], DAY), [], "no confirmed transaction: not live");
+  await put("pema", { source: "fallback", tx: "TX2", price: 5 });
+  assert.deepEqual(await livePrices(store, [posted("pema", "bid", 5)], DAY), [], "a fallback is never presented as an AI price");
+  await put("tomas", { source: "ai", tx: "TX3", price: 6 });
+  const live = await livePrices(store, [posted("tomas", "ask", 6)], DAY);
+  assert.deepEqual(live, [{ id: "tomas", side: "ask", good: "mango", price: 6 }]);
+  // applying: flags set, stale ones removed, then the stale-reference check
+  const eco = openAll(); eco.flags["agentPrice.mira.bid.mango"] = 3;
+  applyLivePrices(eco, live);
+  assert.equal(eco.flags["agentPrice.mira.bid.mango"], undefined); assert.equal(eco.flags["agentPrice.tomas.ask.mango"], 6);
+  assert.equal(priceMoved(eco, "tomas", "buy", "mango", 6), null, "the screen used the live price: accepted");
+  assert.equal(priceMoved(eco, "tomas", "buy", "mango", 5), 6, "a quote built on the older price is refused with the live one");
+  assert.equal(priceMoved(eco, "tomas", "buy", "mango", 0), 6, "a screen with no agent price is refused too");
+  assert.equal(priceMoved(eco, "tomas", "buy", "mango", null), null, "an older client sends no reference: existing bounds apply");
+  assert.equal(priceMoved(eco, "tomas", "sell", "mango", 1), null, "a different side has no live price: untouched");
+  assert.equal(priceMoved(eco, "pema", "sell", "mango", 1), null, "no live decision for this merchant: untouched");
 }
 
 console.log("agent decision checks passed");

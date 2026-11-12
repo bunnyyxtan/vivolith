@@ -84,6 +84,8 @@ export interface AgentDecision {
   readonly receipt: { readonly id: string | null; readonly status: string; readonly note: string };
   readonly justification: readonly string[]; readonly line: string; readonly fallbackReason: string | null;
   readonly txHash: string | null; readonly at: number;
+  /** Setting the price right now: confirmed, this market day, and the order is still posted on chain (server `decisions`). */
+  readonly live?: boolean;
 }
 export async function agentDecision(id: string): Promise<AgentDecision | null> {
   try {
@@ -329,13 +331,14 @@ async function actOnce(method: "buy" | "sell" | "deal", args: Record<string, unk
 }
 
 /** A haggled deal: the merchant signs the agreed price (server), the player settles it in one tx. */
-export async function haggleDeal(merchant: string, side: "buy" | "sell", token: string, qty: number, unit: number): Promise<TxOutcome> {
+/** `ref`: the raw NEAR AI price this screen was built on (0 when none): the relayer refuses a deal whose reference is no longer the live price. */
+export async function haggleDeal(merchant: string, side: "buy" | "sell", token: string, qty: number, unit: number, ref = 0): Promise<TxOutcome> {
   const id = playerId();
   if (!id) return { status: "local", message: "offline: not connected to NEAR" };
   let signed: Record<string, unknown> | null = null;
   for (let attempt = 0; attempt < SEND_TRIES && !signed; attempt++) { // the merchant's signature moves nothing yet
     if (attempt > 0) await sleep(RETRY_MS);
-    const r = await post("deal", { merchant, side, token, qty, unit, player: id }).catch(() => null);
+    const r = await post("deal", { merchant, side, token, qty, unit, ref, player: id }).catch(() => null);
     if (r && (r.status === "signed" || Number(r.httpStatus) < 500)) signed = r;
   }
   if (!signed || signed.status !== "signed") return { status: "failed", message: String(signed?.message ?? "merchant unreachable") };

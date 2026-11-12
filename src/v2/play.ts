@@ -51,6 +51,7 @@ const refusal = (msg = "", side: "buy" | "sell" = "buy"): string =>
     : /not buying/i.test(msg) ? "They're fully stocked and not buying right now."
     : /doesn't sell/i.test(msg) ? "They don't sell that."
     : /won't go below|won't pay more/i.test(msg) ? `They won't take that price (${msg}).`
+    : /price moved/i.test(msg) ? `The price just moved (${msg.replace(/^.*price moved: ?/i, "")}). Look again and re-offer.`
     : /slow down|429/i.test(msg) ? "Too many trades at once. Wait a moment."
     : /expired/i.test(msg) ? "The handshake took too long. Try again."
     : /unreachable|offline|could not sign/i.test(msg) ? "Couldn't reach the market. Check your connection and try again."
@@ -236,7 +237,14 @@ export async function createPlay(game: Game): Promise<Play> {
   // ---------------------------------------------------------------- world readouts ----
   const aiDecisions = new Map<string, AgentDecision>(), aiCheckedAt = new Map<string, number>(); // each merchant's NEAR AI decision, see refreshDecision
   /** The merchant's price from a real NEAR AI decision whose transaction is confirmed, for the lever `side`; else null. */
-  const aiPrice = (id: string, side: "bid" | "ask"): number | null => { const d = aiDecisions.get(id); return d && d.source === "ai" && d.txHash && d.lever.startsWith(`${side}:`) ? d.price : null; };
+  const aiPrice = (id: string, side: "bid" | "ask"): number | null => { const d = aiDecisions.get(id); return d && d.live && d.source === "ai" && d.txHash && d.lever.startsWith(`${side}:`) ? d.price : null; };
+  /** Mirrors the decision into the economy flags pricing.ts reads, so panels, haggling and boards all use the live price
+   *  the relayer will accept; a decision that is no longer live (new day, order moved) is removed and the rule price returns. */
+  const syncAgentPrice = (id: string, d: AgentDecision | null): void => {
+    const [side, good] = (d?.lever ?? "").split(":");
+    for (const k of Object.keys(state.flags)) if (k.startsWith(`agentPrice.${id}.`)) delete state.flags[k];
+    if (d && d.live && d.source === "ai" && d.txHash && (side === "ask" || side === "bid")) state.flags[`agentPrice.${id}.${side}.${good}`] = d.price;
+  };
   const drawBoards = (): void => {
     for (const id of TRADERS) market.setStall(id, { stock: id === "arin" ? state.merchants[id].stock.lassi : state.merchants[id].stock.mango, open: state.merchants[id].status === "open", upgraded: state.player.shares[id] >= UPGRADE_AT, pull: stallPull(state, id) });
     for (const n of market.npcs) {
@@ -358,6 +366,7 @@ export async function createPlay(game: Game): Promise<Play> {
   };
   /** A refusal lands on the merchant's panel if it is still open, else as a toast. null: no final answer came. */
   const refusedAt = (id: MerchantId, side: "buy" | "sell" = "buy") => (message: string | null): void => {
+    if (message && /price moved/.test(message)) { aiCheckedAt.delete(id); void refreshDecision(id); } // the live price changed under this screen: re-read it
     const why = message === null ? "The market didn't confirm in time. Your purse was re-checked." : refusal(message, side);
     if (mode.kind === "trade" && mode.id === id) {
       mode = { ...mode, h: null, say: why, tone: "bad", done: RESULT_HOLD }; renderTrade();
@@ -599,6 +608,7 @@ export async function createPlay(game: Game): Promise<Play> {
     const prev = aiDecisions.get(id);
     if (!d || (prev && prev.at === d.at && prev.txHash === d.txHash)) return;
     aiDecisions.set(id, d);
+    syncAgentPrice(id, d);
     drawBoards();
     if (mode.kind === "trade" && mode.id === id) renderTrade();
     const key = `${id}:${d.day}:${d.txHash}`;
@@ -766,7 +776,7 @@ export async function createPlay(game: Game): Promise<Play> {
     mode = { ...mode, h: null, say: `Shaking on it: ${total} c. Recording the deal…`, tone: "", done: AWAITING };
     renderTrade();
     record("trade", `${h.mode === "buy" ? "Bought" : "Sold"} ${goodName(h.good, h.qty)} ${h.mode === "buy" ? "from" : "to"} ${name} for ${total} c`,
-      haggleDeal(h.merchant, h.mode, h.good, h.qty, unit), () => applyDeal(h, npc), refusedAt(h.merchant, h.mode));
+      haggleDeal(h.merchant, h.mode, h.good, h.qty, unit, aiPrice(h.merchant, h.mode === "buy" ? "ask" : "bid") ?? 0), () => applyDeal(h, npc), refusedAt(h.merchant, h.mode));
   };
   /** NEAR settled the deal: move the goods and coins in the game, then react (story beats, reopened stalls). */
   const applyDeal = (h: HaggleSession, npc: Npc): void => {

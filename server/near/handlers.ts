@@ -14,7 +14,7 @@ import { MERCHANTS, keyPairFromSeed, merchantKey, residentKey, type MerchantId }
 import { RESIDENTS, planResident, type Offer } from "../../src/economy/residents.ts";
 import { synthesize } from "./voice.ts";
 import { answer, factsFor } from "./talk.ts";
-import { LEVERS, agentConfig, attachTx, claimBidSend, decideBid, decideResident, recentDecisions, releaseBidSend, type AgentConfig, type Decision, type DecisionStore } from "./agent.ts";
+import { LEVERS, agentConfig, applyLivePrices, attachTx, claimBidSend, decideBid, decideResident, livePrices, priceMoved, recentDecisions, releaseBidSend, type AgentConfig, type Decision, type DecisionStore } from "./agent.ts";
 import { ORCHARD_PICK, bidFor, planMerchantTrades, quote } from "../../src/economy/pricing.ts";
 import { closingNeed, shopperWant } from "../../src/economy/sim.ts";
 import { initialEconomy, type EconomyState } from "../../src/economy/state.ts";
@@ -362,6 +362,9 @@ async function deal(cfg: Config, req: Request, env: RelayEnv): Promise<Response>
   const player = String(b.player ?? "");
   const qty = Number(b.qty);
   const unit = Number(b.unit);
+  /** The raw NEAR AI price the player's screen was built on (0 = "no agent price"); absent from older clients. */
+  const ref = b.ref === undefined || b.ref === null ? null : Number(b.ref);
+  if (ref !== null && !Number.isFinite(ref)) throw new HttpError(400, "bad price reference");
   if (!(MERCHANTS as readonly string[]).includes(merchant)) throw new HttpError(400, "unknown merchant");
   if (side !== "buy" && side !== "sell") throw new HttpError(400, "side must be buy or sell");
   if (!GOODS.has(token)) throw new HttpError(400, "unknown good");
@@ -379,6 +382,11 @@ async function deal(cfg: Config, req: Request, env: RelayEnv): Promise<Response>
   ]);
   if (!registered) throw new HttpError(403, "player not registered");
   const id = merchant as MerchantId, good = token as "mango" | "lemon" | "lassi", m = st.merchants[id];
+  // A live NEAR AI decision (confirmed, order still posted) sets this stall's price for the player too: same prices as the
+  // game shows, so a quote built on an older price is refused with the current one instead of trading at a price nobody sees.
+  applyLivePrices(st, await livePrices(decisionStore(cfg), offers, Math.floor(Date.now() / MARKET_DAY_MS)).catch(() => []));
+  const moved = priceMoved(st, id, side as "buy" | "sell", good, ref);
+  if (moved !== null) throw new HttpError(409, `price moved: now ${moved} c`);
   const posted = offers.find((o) => o.merchant === merchant && o.token_id === token && o.side === (side === "buy" ? "ask" : "bid"));
   if (side === "buy") {
     if (m.status !== "open") throw new HttpError(409, "stall is closed");
@@ -1024,7 +1032,11 @@ export async function handle(route: string, req: Request, env: RelayEnv): Promis
     if (route === "decisions" && req.method === "GET") { // read-only: the merchant's recent NEAR AI / rule decisions
       const who = new URL(req.url).searchParams.get("merchant") ?? "";
       if (!([...MERCHANTS, ...RESIDENTS.map((r) => r.id)] as string[]).includes(who)) return json(200, { decisions: [] });
-      return json(200, { decisions: await recentDecisions(decisionStore(cfg), who, Math.floor(Date.now() / MARKET_DAY_MS)).catch(() => []) });
+      const store = decisionStore(cfg), day = Math.floor(Date.now() / MARKET_DAY_MS);
+      const ds = await recentDecisions(store, who, day).catch(() => []);
+      // `live`: this decision is setting the price right now (confirmed, this market day, order still posted on chain)
+      const live = await (async () => { try { return await livePrices(store, await view<OfferRow[]>(account(cfg).provider, cfg.contractId, "get_offers", {}), day); } catch { return []; } })();
+      return json(200, { decisions: ds.map((d) => ({ ...d, live: live.some((p) => p.id === d.merchant && d.day === day) })) });
     }
     if (route === "pick") return await pick(cfg, req);
     if (route === "talk") return await talk(cfg, req, env);

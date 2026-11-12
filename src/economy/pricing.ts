@@ -88,10 +88,25 @@ function rivalBest(state: EconomyState, self: MerchantId, good: Good): { id: Mer
   return best;
 }
 
+/** A price set by a live NEAR AI decision: `flags["agentPrice.<merchant>.<ask|bid>.<good>"]`. The relayer and the client
+ *  write it from the same decision, and only while that decision is confirmed and its order is still posted on chain
+ *  (server/near/agent.ts livePrices). Absent, every price is exactly the rule price below. */
+export const agentPriceKey = (id: MerchantId, side: "ask" | "bid", good: Good): string => `agentPrice.${id}.${side}.${good}`;
+export function agentPrice(state: EconomyState, id: MerchantId, side: "ask" | "bid", good: Good): number | null {
+  const v = state.flags[agentPriceKey(id, side, good)];
+  return typeof v === "number" && Number.isFinite(v) && v >= 1 ? Math.round(v) : null;
+}
+
 /** Price per unit `merchant` asks from the player (or from another NPC when forPlayer is false). */
 export function quote(state: EconomyState, merchantId: MerchantId, good: Good, forPlayer = true): Quote {
   const m = state.merchants[merchantId];
   if (merchantId === "arin" && good === "lassi") return lassiPrice(state);
+  const ap = agentPrice(state, merchantId, "ask", good);
+  if (ap !== null && m.status === "open" && m.baseCost[good] > 0) { // the agent's decision replaces the day's rule factors; the player's own standing with the stall still applies
+    const factors: PriceFactor[] = [{ label: `Today's price comes from ${m.name}'s NEAR AI decision`, multiplier: ap / m.baseCost[good] }];
+    if (forPlayer) factors.push(relationship(m, state.player.rep[merchantId]));
+    return { price: Math.max(1, Math.round(factors.reduce((p, f) => p * f.multiplier, m.baseCost[good]))), factors };
+  }
   const factors: PriceFactor[] = [scarcity(m, good), demand(m, good), cashPressure(m), greed(m)];
   if (forPlayer) factors.push(relationship(m, state.player.rep[merchantId]));
   let raw = factors.reduce((p, f) => p * f.multiplier, m.baseCost[good]);
@@ -136,8 +151,15 @@ export interface Bid {
   readonly reason: string;
 }
 
-/** What a merchant will pay other stalls (and the player) per unit of `good`, or null if not buying. */
+/** What a merchant will pay other stalls (and the player) per unit of `good`, or null if not buying. A live NEAR AI
+ *  decision (agentPrice) sets the price of an open stall that the rule says is buying; the rule decides whether it buys. */
 export function bidFor(state: EconomyState, id: MerchantId, good: Good): Bid | null {
+  const b = bidForRule(state, id, good);
+  const ap = agentPrice(state, id, "bid", good);
+  return b && ap !== null && state.merchants[id].status === "open" ? { ...b, price: ap, reason: `${b.reason} (price set by a NEAR AI decision)` } : b;
+}
+
+function bidForRule(state: EconomyState, id: MerchantId, good: Good): Bid | null {
   const m = state.merchants[id];
   if (m.status !== "open" && good === "mango") {
     // Every closed stall buys mangoes until deliveries reopen it (the contract counts them), whatever its style.
