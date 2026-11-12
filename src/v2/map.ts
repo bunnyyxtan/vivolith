@@ -11,7 +11,7 @@ import { SIGN_SPOTS } from "./brand";
 import { createNav } from "./nav";
 import { cityBounds, declutter, edgePoint, fitView, footprints, pick, routeLength, type Footprint, type Label, type Rect, type View } from "./maplayout";
 
-export interface MapPlace { id: string; name: string; x: number; z: number; ax: number; az: number; kind: "merchant" | "landmark" | "place" | "shop"; glyph: string; pri: number; showAt: number }
+export interface MapPlace { id: string; name: string; x: number; z: number; ax: number; az: number; kind: "merchant" | "landmark" | "place" | "shop" | "cluster"; glyph: string; pri: number; showAt: number }
 export interface CityMap { update(dt: number): void; readonly open: boolean }
 interface Deps {
   scene: THREE.Scene; colliders: readonly Box[];
@@ -27,10 +27,13 @@ interface Deps {
 }
 
 // ---- style: one light, hand-inked cartographic palette that matches the daytime city
+// Dusk-navy surround, a light mint "city plate" with sand pavements, slate roads, cream roofs and glass-blue towers.
 const P = {
-  paper: "#f2ebdb", walk: "#e6dcc4", casing: "#b9ad93", road: "#fffcf4", ink: "#1b2336", inkSoft: "rgba(27,35,54,.62)", halo: "rgba(255,251,242,.95)",
-  bldg: "#d3dbea", bldgTall: "#b9c6de", bldgEdge: "#5f6e8c", shade: "rgba(45,55,85,.17)",
-  cyan: "#10b3a8", gold: "#f6b72f", pink: "#ff3d81", orange: "#ff9a3d", frame: "#101a2b",
+  paper: "#f2ebdb", deep: "#22324a", deepLine: "rgba(190,215,235,.07)", plate: "#ebeee6", plateEdge: "#0f1a2d",
+  walk: "#f4e8cc", casing: "#27354f", road: "#66769a", roadMark: "rgba(255,255,255,.55)", ink: "#1b2336", inkSoft: "rgba(27,35,54,.62)", halo: "rgba(255,251,242,.95)",
+  lawn: "#9fd68a", water: "#6fcde8", backBldg: "#d4dde0", backEdge: "#b3bfc8", prop: "rgba(39,53,79,.15)",
+  bldg: "#fbf6ea", bldgTall: "#a6d7e3", bldgEdge: "rgba(39,53,79,.78)", shade: "rgba(39,53,79,.22)",
+  cyan: "#10b3a8", gold: "#f6b72f", pink: "#ff3d81", orange: "#ff8f3d", frame: "#101a2b",
 };
 const DISTRICTS: { name: string; r: Rect; tint: string }[] = [ // x0, z0, x1, z1 (m)
   { name: "Demo Day Lawn", r: { x0: -34.5, z0: -94, x1: 34.5, z1: -75 }, tint: "#8fd18a" },
@@ -44,14 +47,14 @@ const ROAD_W = 7, WALK_W = 11.5, REACHED_M = 4, MM_SPAN = 76, FIT = 0.8; // road
 const FONT = '"Inter Tight",system-ui,sans-serif';
 
 const SHOPS = ["Chain Abstraction Cafe", "Shard Street Goods", "NEAR Innovation District"];
-const LAND_GLYPH: Record<string, string> = { "N Spire": "N", "NEAR AI Lab": "AI", "NEAR Intents Exchange": "X", "Agent Plaza": "A" };
+const LAND_GLYPH: Record<string, string> = { "N Spire": "spire", "NEAR AI Lab": "lab", "NEAR Intents Exchange": "swap", "Agent Plaza": "plaza" }; // icon names, drawn by `icon()`
 const NAMED: [string, string, number][] = [["PLACARD_orchard", "Mango Orchard", 70], ["PLACARD_yard", "Builders' Yard", 70], ["PLACARD_station", "Spire Station", 70], ["PLACARD_depot", "Harbor Depot", 70], ["LANDMARK_ai_lab", "NEAR AI Lab", 90], ["LANDMARK_intents_exchange", "NEAR Intents Exchange", 90]];
 
 export function createCityMap(d: Deps): CityMap {
   const css = document.createElement("style");
   css.textContent = `
   .mm { position:fixed; right:16px; bottom:34px; width:var(--mm); height:var(--mm); --mm:clamp(112px,16vmin,164px); border-radius:18px; overflow:hidden; z-index:6; pointer-events:none; opacity:.96;
-    box-shadow:0 0 0 2px ${P.frame}, 0 0 0 4px rgba(255,255,255,.85), 0 6px 18px rgba(8,14,30,.35); background:${P.paper}; transition:opacity .2s; }
+    box-shadow:0 0 0 2px ${P.frame}, 0 0 0 4px rgba(255,255,255,.85), 0 6px 18px rgba(8,14,30,.35); background:${P.deep}; transition:opacity .2s; }
   .mm.off { opacity:0; }
   .mm canvas { width:100%; height:100%; display:block; }
   .mm-tag { position:fixed; right:16px; bottom:12px; width:var(--mm); --mm:clamp(112px,16vmin,164px); z-index:6; display:flex; justify-content:space-between; gap:8px; font:700 12px ${FONT}; color:#fff; text-shadow:0 1px 3px rgba(8,14,30,.85); pointer-events:none; transition:opacity .2s; }
@@ -59,7 +62,7 @@ export function createCityMap(d: Deps): CityMap {
   body.in-menu .mm, body.in-menu .mm-tag { display:none; }
   .cmap { position:fixed; inset:0; z-index:20; background:rgba(8,14,26,.84); backdrop-filter:blur(3px); opacity:0; pointer-events:none; transition:opacity .22s ease; font-family:${FONT}; }
   .cmap.on { opacity:1; pointer-events:auto; }
-  .cm-panel { position:absolute; inset:14px; border-radius:20px; overflow:hidden; background:${P.paper}; box-shadow:0 0 0 3px ${P.frame}, 0 0 0 5px rgba(255,255,255,.85), 0 18px 60px rgba(0,0,0,.5); }
+  .cm-panel { position:absolute; inset:14px; border-radius:20px; overflow:hidden; background:${P.deep}; box-shadow:0 0 0 3px ${P.frame}, 0 0 0 5px rgba(255,255,255,.85), 0 18px 60px rgba(0,0,0,.5); }
   .cm-panel > canvas { position:absolute; inset:0; width:100%; height:100%; display:block; cursor:grab; touch-action:none; }
   .cm-panel > canvas.drag { cursor:grabbing; } .cm-panel > canvas.over { cursor:pointer; }
   .cm-card { position:absolute; background:rgba(255,252,244,.94); color:${P.ink}; border-radius:14px; box-shadow:0 0 0 2px ${P.ink}, 0 6px 16px rgba(20,28,50,.25); padding:10px 14px; font-size:13px; line-height:1.35; }
@@ -68,8 +71,8 @@ export function createCityMap(d: Deps): CityMap {
   .cm-info b { display:flex; align-items:center; gap:8px; font-size:14px; } .cm-info em { font-style:normal; color:${P.inkSoft}; display:block; }
   .cm-info button { margin-top:8px; font:700 12px ${FONT}; border:2px solid ${P.ink}; background:#fff; color:${P.ink}; border-radius:999px; padding:3px 12px; cursor:pointer; }
   .cm-note { color:#c2185b; font-weight:700; margin-top:6px; } .cm-note:empty { display:none; }
-  .cm-legend { left:16px; bottom:16px; width:196px; font-size:12px; } .cm-legend h4 { margin:0 0 6px; font-size:11px; letter-spacing:.14em; color:${P.inkSoft}; display:flex; justify-content:space-between; gap:14px; }
-  .cm-legend ul { list-style:none; margin:0; padding:0; display:grid; gap:5px; } .cm-legend li { display:flex; align-items:center; gap:9px; } .cm-legend li canvas { width:22px; height:22px; flex:none; }
+  .cm-legend { left:16px; bottom:16px; width:264px; font-size:12px; } .cm-legend h4 { margin:0 0 6px; font-size:11px; letter-spacing:.14em; color:${P.inkSoft}; display:flex; justify-content:space-between; gap:14px; }
+  .cm-legend ul { list-style:none; margin:0; padding:0; display:grid; grid-template-columns:1fr 1fr; gap:5px 10px; } .cm-legend li { display:flex; align-items:center; gap:9px; } .cm-legend li canvas { width:22px; height:22px; flex:none; }
   .cm-legend.min ul { display:none; } .cm-legend h4 button { all:unset; cursor:pointer; color:${P.ink}; font-weight:700; }
   .cm-ctl { right:16px; bottom:16px; display:flex; flex-direction:column; gap:8px; padding:8px; }
   .cm-ctl button { width:38px; height:38px; border-radius:12px; border:2px solid ${P.ink}; background:#fff; color:${P.ink}; cursor:pointer; display:grid; place-items:center; font:700 20px ${FONT}; padding:0; }
@@ -82,7 +85,8 @@ export function createCityMap(d: Deps): CityMap {
   // ---- data from the world
   let spire: THREE.Vector3 | null = null;
   let lanes: number[][][] = [];
-  let roadsPath = new Path2D(), bldgPath = new Path2D(), tallPath = new Path2D(), shadePath = new Path2D();
+  let roadsPath = new Path2D(), bldgPath = new Path2D(), tallPath = new Path2D(), shadePath = new Path2D(), backPath = new Path2D();
+  let paverPath = new Path2D(), propPath = new Path2D(), lawnPath = new Path2D(), waterPath = new Path2D(), groundTris = { lawn: 0, water: 0 };
   let feet: Footprint[] = [];
   let bounds: Rect = { x0: -60, z0: -60, x1: 60, z1: 60 };
   let places: MapPlace[] = [];
@@ -109,6 +113,35 @@ export function createCityMap(d: Deps): CityMap {
   };
 
   const nav = createNav(d.colliders);
+  /** Lawns and water: the town's own ground meshes (flat tops near ground level), kept as triangles for drawing and hit-testing. */
+  let lawn: number[] = [], water: number[] = [];
+  const buildGround = (): void => {
+    lawn = []; water = []; lawnPath = new Path2D(); waterPath = new Path2D(); groundTris = { lawn: 0, water: 0 };
+    d.scene.updateMatrixWorld(true);
+    const va = new THREE.Vector3(), vb = new THREE.Vector3(), vc = new THREE.Vector3();
+    d.scene.traverse((o) => {
+      const m = o as THREE.Mesh; if (!m.isMesh) return;
+      const mn = (Array.isArray(m.material) ? m.material[0] : m.material)?.name ?? "";
+      const kind = /lawn/i.test(mn) ? "lawn" : /water/i.test(mn) ? "water" : null; if (!kind) return;
+      const pos = m.geometry.attributes.position, ix = m.geometry.index, cnt = ix ? ix.count : pos.count, path = kind === "lawn" ? lawnPath : waterPath, store = kind === "lawn" ? lawn : water, top = kind === "lawn" ? 1.2 : 2.6;
+      for (let t = 0; t + 2 < cnt; t += 3) {
+        va.fromBufferAttribute(pos, ix ? ix.getX(t) : t).applyMatrix4(m.matrixWorld); vb.fromBufferAttribute(pos, ix ? ix.getX(t + 1) : t + 1).applyMatrix4(m.matrixWorld); vc.fromBufferAttribute(pos, ix ? ix.getX(t + 2) : t + 2).applyMatrix4(m.matrixWorld);
+        if (Math.max(va.y, vb.y, vc.y) > top || Math.abs(va.y - vb.y) > 0.06 || Math.abs(va.y - vc.y) > 0.06) continue; // flat tops only: no walls or mounds
+        const cr = (vb.x - va.x) * (vc.z - va.z) - (vc.x - va.x) * (vb.z - va.z);
+        if (Math.abs(cr) < 0.01) continue; // slivers
+        const [bx, bz, cx, cz] = cr > 0 ? [vb.x, vb.z, vc.x, vc.z] : [vc.x, vc.z, vb.x, vb.z]; // one winding for all, so top and bottom faces never cancel
+        path.moveTo(va.x, va.z); path.lineTo(bx, bz); path.lineTo(cx, cz); path.closePath(); store.push(va.x, va.z, bx, bz, cx, cz); groundTris[kind]++;
+      }
+    });
+  };
+  const onGround = (x: number, z: number, tris: readonly number[]): boolean => {
+    for (let i = 0; i < tris.length; i += 6) {
+      const [ax, az, bx, bz, cx, cz] = [tris[i], tris[i + 1], tris[i + 2], tris[i + 3], tris[i + 4], tris[i + 5]];
+      const d1 = (x - bx) * (az - bz) - (ax - bx) * (z - bz), d2 = (x - cx) * (bz - cz) - (bx - cx) * (z - cz), d3 = (x - ax) * (cz - az) - (cx - ax) * (z - az);
+      if (!((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0))) return true;
+    }
+    return false;
+  };
   const rebuild = (): void => {
     builtFor = d.colliders.length;
     feet = footprints(d.colliders);
@@ -116,8 +149,27 @@ export function createCityMap(d: Deps): CityMap {
     bounds = cityBounds(lanes, ROAD_W, DISTRICTS.map((x) => x.r), places, feet);
     roadsPath = new Path2D();
     for (const pts of lanes) pts.forEach(([x, z], i) => (i ? roadsPath.lineTo(x, z) : roadsPath.moveTo(x, z)));
-    bldgPath = new Path2D(); tallPath = new Path2D(); shadePath = new Path2D();
+    bldgPath = new Path2D(); tallPath = new Path2D(); shadePath = new Path2D(); backPath = new Path2D();
+    // the ring-road buildings outside the street loop are scenery: they get a quiet, outline-free style so the town reads first
+    let lb: Rect | null = null;
+    for (const l of lanes) for (const [x, z] of l) lb = lb ? { x0: Math.min(lb.x0, x), z0: Math.min(lb.z0, z), x1: Math.max(lb.x1, x), z1: Math.max(lb.z1, z) } : { x0: x, z0: z, x1: x, z1: z };
+    buildGround();
+    feet = feet.filter((f) => { // pool rims, fountains, hedges and planters have colliders too, but they are ground, not buildings
+      const cx = (f.x0 + f.x1) / 2, cz = (f.z0 + f.z1) / 2;
+      return !(onGround(cx, cz, water) || (f.h < 4 && onGround(cx, cz, lawn)));
+    });
+    paverPath = new Path2D();
+    for (let x = Math.ceil(bounds.x0 / 4) * 4; x < bounds.x1; x += 4) for (let z = Math.ceil(bounds.z0 / 4) * 4; z < bounds.z1; z += 4) paverPath.rect(x - 0.18, z - 0.18, 0.36, 0.36);
+    propPath = new Path2D(); // low real objects (stalls, planters, benches, kiosks): they give the open areas their true texture
+    for (const b of d.colliders) {
+      const w = b.maxX - b.minX, dz = b.maxZ - b.minZ, h = b.maxY - b.minY, cx = (b.minX + b.maxX) / 2, cz = (b.minZ + b.maxZ) / 2;
+      if (h < 0.5 || h >= 2.5 || w * dz < 1.2 || w * dz > 70 || w > 14 || dz > 14 || onGround(cx, cz, water)) continue;
+      propPath.rect(b.minX, b.minZ, w, dz);
+    }
     for (const f of feet) {
+      const cx = (f.x0 + f.x1) / 2, cz = (f.z0 + f.z1) / 2;
+      const outside = !!lb && (cx < lb.x0 || cx > lb.x1 || cz < lb.z0 || cz > lb.z1) && !places.some((p) => p.kind !== "shop" && Math.hypot(p.x - cx, p.z - cz) < 14);
+      if (outside) { backPath.rect(f.x0, f.z0, f.x1 - f.x0, f.z1 - f.z0); continue; }
       (f.h > 18 ? tallPath : bldgPath).rect(f.x0, f.z0, f.x1 - f.x0, f.z1 - f.z0);
       shadePath.rect(f.x0 + 0.9, f.z0 + 0.9, f.x1 - f.x0, f.z1 - f.z0);
     }
@@ -128,13 +180,14 @@ export function createCityMap(d: Deps): CityMap {
   /** Everything that can be chosen: the fixed places plus the merchants (the waypoint goes to the customer side of the stall). */
   const allPlaces = (): MapPlace[] => {
     geo();
-    const m: MapPlace[] = d.merchants().map((x, i) => ({ id: `merchant${i}`, name: x.name, x: x.at.x, z: x.at.z, ax: x.stall.x, az: x.stall.z, kind: "merchant" as const, glyph: x.name.replace(/^Auntie\s+/i, "").charAt(0).toUpperCase(), pri: 50, showAt: 2.2 }));
+    const m: MapPlace[] = d.merchants().map((x, i) => ({ id: `merchant${i}`, name: x.name, x: x.at.x, z: x.at.z, ax: x.stall.x, az: x.stall.z, kind: "merchant" as const, glyph: "stall", pri: 50, showAt: 2.2 }));
     return [...places, ...m];
   };
 
   // ---- waypoint, route, the world beam
   type Pin = { x: number; z: number; name: string };
   let waypoint: Pin | null = null;
+  let routeDraw: number[] | null = null;
   let route: number[] | null = null, routeVer = 0, routeAt = -9, routeFrom = { x: 1e9, z: 1e9 }, routeKey = "";
   const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 46, 14, 1, true), new THREE.MeshBasicMaterial({ color: P.pink, transparent: true, opacity: 0.34, depthWrite: false, toneMapped: false }));
   beam.visible = false; d.scene.add(beam);
@@ -145,7 +198,7 @@ export function createCityMap(d: Deps): CityMap {
   };
   const refreshRoute = (t: number): void => {
     const tg = target(), p = d.player();
-    if (!tg) { if (route) { route = null; routeVer++; } return; }
+    if (!tg) { if (route) { route = null; routeDraw = null; routeVer++; } return; }
     const key = `${tg.kind}:${tg.x.toFixed(1)}:${tg.z.toFixed(1)}`;
     const moved = Math.hypot(p.x - routeFrom.x, p.z - routeFrom.z);
     if (key === routeKey && (t - routeAt < 1.2 || moved < 2.5)) return;
@@ -153,6 +206,21 @@ export function createCityMap(d: Deps): CityMap {
     const out: number[] = [];
     const ok = nav.path(p.x, p.z, tg.x, tg.z, out) && out.length >= 2;
     route = ok ? [p.x, p.z, ...out] : null; routeVer++; // only a route the walking grid verified is ever drawn
+    routeDraw = route ? roundCorners(route) : null;
+  };
+  /** Display only: rounds each turn of the verified path with a tiny curve (at most 2 m from the corner, under 1 m off the path);
+   *  distances and the route itself always come from the unrounded grid path. */
+  const roundCorners = (f: readonly number[]): number[] => {
+    const n = f.length / 2; if (n < 3) return [...f];
+    const o: number[] = [f[0], f[1]];
+    for (let i = 1; i < n - 1; i++) {
+      const bx = f[i * 2], bz = f[i * 2 + 1], ax = f[i * 2 - 2] - bx, az = f[i * 2 - 1] - bz, cx = f[i * 2 + 2] - bx, cz = f[i * 2 + 3] - bz;
+      const la = Math.hypot(ax, az), lc = Math.hypot(cx, cz), r = Math.min(2, la / 2.5, lc / 2.5);
+      if (r < 0.3 || Math.abs(ax * cz - az * cx) < 1e-3 * la * lc) { o.push(bx, bz); continue; } // tiny or straight: keep the point
+      const p1x = bx + (ax / la) * r, p1z = bz + (az / la) * r, p2x = bx + (cx / lc) * r, p2z = bz + (cz / lc) * r;
+      for (let s = 0; s <= 4; s++) { const t = s / 4, u = 1 - t; o.push(u * u * p1x + 2 * u * t * bx + t * t * p2x, u * u * p1z + 2 * u * t * bz + t * t * p2z); }
+    }
+    o.push(f[n * 2 - 2], f[n * 2 - 1]); return o;
   };
   const routeMetres = (): number | null => (route ? routeLength(route[0], route[1], route.slice(2)) : null);
   const free = { x: 0, z: 0 };
@@ -196,8 +264,27 @@ export function createCityMap(d: Deps): CityMap {
     g.save(); g.translate(x, y);
     g.fillStyle = "rgba(20,28,50,.25)"; g.beginPath(); g.arc(0.5, 1.8, r, 0, 6.3); g.fill();
     g.fillStyle = fill; g.strokeStyle = P.ink; g.lineWidth = 2; g.beginPath(); g.arc(0, 0, r, 0, 6.3); g.fill(); g.stroke();
-    if (glyph) { g.fillStyle = glyphColor; g.font = `800 ${Math.round(r * (glyph.length > 1 ? 0.92 : 1.18))}px ${FONT}`; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(glyph, 0, 0.5); }
+    if (ICONS.has(glyph)) icon(g, glyph, r);
+    else if (glyph) { g.fillStyle = glyphColor; g.font = `800 ${Math.round(r * (glyph.length > 1 ? 0.92 : 1.18))}px ${FONT}`; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(glyph, 0, 0.5); }
     g.restore();
+  };
+  const ICONS = new Set(["spire", "lab", "swap", "plaza", "stall"]);
+  /** The marker glyphs: small white line icons centred on a disc of radius r (spire = the N, lab = hex node, swap = two arrows,
+   *  plaza = ring, stall = awning over a counter). One stroke weight, one family. */
+  const icon = (g: CanvasRenderingContext2D, name: string, r: number): void => {
+    g.save(); g.strokeStyle = "#fff"; g.fillStyle = "#fff"; g.lineWidth = Math.max(1.5, r * 0.17); g.lineCap = "round"; g.lineJoin = "round"; g.beginPath();
+    if (name === "spire") { g.moveTo(-0.36 * r, 0.5 * r); g.lineTo(-0.36 * r, -0.5 * r); g.lineTo(0.36 * r, 0.5 * r); g.lineTo(0.36 * r, -0.5 * r); g.stroke(); }
+    else if (name === "lab") { for (let i = 0; i < 6; i++) { const a = (i * Math.PI) / 3 - Math.PI / 2; g.lineTo(Math.cos(a) * 0.56 * r, Math.sin(a) * 0.56 * r); } g.closePath(); g.stroke(); g.beginPath(); g.arc(0, 0, 0.14 * r, 0, 6.3); g.fill(); }
+    else if (name === "swap") { g.moveTo(-0.5 * r, -0.22 * r); g.lineTo(0.5 * r, -0.22 * r); g.moveTo(0.22 * r, -0.5 * r); g.lineTo(0.5 * r, -0.22 * r); g.lineTo(0.22 * r, 0.06 * r); g.moveTo(0.5 * r, 0.26 * r); g.lineTo(-0.5 * r, 0.26 * r); g.moveTo(-0.22 * r, -0.02 * r); g.lineTo(-0.5 * r, 0.26 * r); g.lineTo(-0.22 * r, 0.54 * r); g.stroke(); }
+    else if (name === "plaza") { g.arc(0, 0, 0.5 * r, 0, 6.3); g.stroke(); g.beginPath(); g.arc(0, 0, 0.17 * r, 0, 6.3); g.fill(); }
+    else { g.moveTo(-0.55 * r, -0.05 * r); g.lineTo(-0.4 * r, -0.5 * r); g.lineTo(0.4 * r, -0.5 * r); g.lineTo(0.55 * r, -0.05 * r); g.closePath(); g.moveTo(-0.35 * r, -0.05 * r); g.lineTo(-0.35 * r, 0.5 * r); g.moveTo(0.35 * r, -0.05 * r); g.lineTo(0.35 * r, 0.5 * r); g.moveTo(-0.45 * r, 0.5 * r); g.lineTo(0.45 * r, 0.5 * r); g.stroke(); }
+    g.restore();
+  };
+  /** A small pill of text on a coloured chip (destination and "you" tags). */
+  const chip = (g: CanvasRenderingContext2D, t: string, x: number, y: number, fill: string, color: string): number => {
+    const font = `800 11px ${FONT}`, w = measure(g, font, t) + 14;
+    g.save(); g.fillStyle = fill; g.strokeStyle = P.ink; g.lineWidth = 2; g.beginPath(); g.roundRect(x - w / 2, y - 10, w, 20, 10); g.fill(); g.stroke();
+    g.fillStyle = color; g.font = font; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(t, x, y + 0.5); g.restore(); return w;
   };
   const star = (g: CanvasRenderingContext2D, x: number, y: number, r: number, t: number): void => {
     g.save(); g.translate(x, y);
@@ -206,8 +293,9 @@ export function createCityMap(d: Deps): CityMap {
     for (let i = 0; i < 10; i++) { const a = (i * Math.PI) / 5 - Math.PI / 2, rr = i % 2 ? r * 0.5 : r; g.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); }
     g.closePath(); g.fill(); g.stroke(); g.restore();
   };
-  const flag = (g: CanvasRenderingContext2D, x: number, y: number, r: number): void => { // a map pin whose tip is the spot
+  const flag = (g: CanvasRenderingContext2D, x: number, y: number, r: number, t = -1): void => { // a map pin whose tip is the spot
     g.save(); g.translate(x, y);
+    if (t >= 0) { const ph = (t * 0.9) % 1; g.strokeStyle = `rgba(255,61,129,${0.55 * (1 - ph)})`; g.lineWidth = 2.5; g.beginPath(); g.ellipse(0, 0, r * (0.7 + 1.5 * ph), r * (0.28 + 0.6 * ph), 0, 0, 6.3); g.stroke(); }
     g.fillStyle = "rgba(20,28,50,.25)"; g.beginPath(); g.ellipse(0, 0, r * 0.55, r * 0.22, 0, 0, 6.3); g.fill();
     g.fillStyle = P.pink; g.strokeStyle = P.ink; g.lineWidth = 2; g.lineJoin = "round"; g.beginPath();
     g.moveTo(0, 0); g.bezierCurveTo(-r * 1.1, -r * 1.1, -r * 0.95, -r * 2.2, 0, -r * 2.2); g.bezierCurveTo(r * 0.95, -r * 2.2, r * 1.1, -r * 1.1, 0, 0); g.closePath(); g.fill(); g.stroke();
@@ -215,18 +303,20 @@ export function createCityMap(d: Deps): CityMap {
   };
   const playerMark = (g: CanvasRenderingContext2D, x: number, y: number, rot: number, s: number, t: number): void => {
     g.save(); g.translate(x, y);
-    g.fillStyle = "rgba(16,179,168,.16)"; g.beginPath(); g.arc(0, 0, 16 * s * (1 + 0.06 * Math.sin(t * 4)), 0, 6.3); g.fill();
+    const pr = 19 * s * (1 + 0.07 * Math.sin(t * 4));
+    g.fillStyle = "rgba(16,179,168,.22)"; g.beginPath(); g.arc(0, 0, pr, 0, 6.3); g.fill();
+    g.strokeStyle = "rgba(255,255,255,.95)"; g.lineWidth = 2; g.stroke();
     g.rotate(rot);
-    g.fillStyle = "rgba(16,179,168,.22)"; g.beginPath(); g.moveTo(0, 0); g.arc(0, 0, 34 * s, -Math.PI / 2 - 0.55, -Math.PI / 2 + 0.55); g.closePath(); g.fill();
-    g.fillStyle = "#fff"; g.strokeStyle = P.ink; g.lineWidth = 2.4; g.lineJoin = "round";
-    g.beginPath(); g.moveTo(0, -11 * s); g.lineTo(8 * s, 9 * s); g.lineTo(0, 4.5 * s); g.lineTo(-8 * s, 9 * s); g.closePath(); g.fill(); g.stroke();
-    g.fillStyle = P.cyan; g.beginPath(); g.arc(0, 1 * s, 2.4 * s, 0, 6.3); g.fill();
+    g.fillStyle = "rgba(16,179,168,.3)"; g.beginPath(); g.moveTo(0, 0); g.arc(0, 0, 40 * s, -Math.PI / 2 - 0.5, -Math.PI / 2 + 0.5); g.closePath(); g.fill();
+    g.lineJoin = "round"; g.beginPath(); g.moveTo(0, -13 * s); g.lineTo(9.5 * s, 10 * s); g.lineTo(0, 5.5 * s); g.lineTo(-9.5 * s, 10 * s); g.closePath();
+    g.strokeStyle = "#fff"; g.lineWidth = 5; g.stroke(); g.strokeStyle = P.ink; g.lineWidth = 2; g.stroke(); g.fillStyle = P.cyan; g.fill();
     g.restore();
   };
-  const markR = (p: MapPlace, k: number): number => (p.kind === "landmark" ? 11 : p.kind === "merchant" ? 9 : p.kind === "shop" ? 5.5 : 7.5) * k;
+  const markR = (p: MapPlace, k: number): number => (p.kind === "landmark" ? 12 : p.kind === "merchant" ? 8.5 : p.kind === "cluster" ? 11 : p.kind === "shop" ? 5 : 7.5) * k;
   const placeMark = (g: CanvasRenderingContext2D, p: MapPlace, x: number, y: number, k: number): void => {
-    if (p.kind === "landmark") badge(g, x, y, 11 * k, P.cyan, p.glyph);
-    else if (p.kind === "merchant") badge(g, x, y, 9 * k, P.orange, p.glyph);
+    if (p.kind === "landmark") badge(g, x, y, 12 * k, P.cyan, p.glyph);
+    else if (p.kind === "merchant") badge(g, x, y, 8.5 * k, P.orange, p.glyph);
+    else if (p.kind === "cluster") badge(g, x, y, 11 * k, P.orange, p.glyph);
     else if (p.kind === "shop") badge(g, x, y, 5.5 * k, "#fff", "");
     else { badge(g, x, y, 7.5 * k, "#fff", ""); badge(g, x, y, 2.6 * k, P.cyan, ""); }
   };
@@ -234,23 +324,56 @@ export function createCityMap(d: Deps): CityMap {
   /** The static city, in world metres under whatever transform the caller set. `px` is one screen pixel in metres. */
   const drawCity = (g: CanvasRenderingContext2D, px: number, detail: boolean): void => {
     geo();
-    for (const dz of DISTRICTS) {
-      g.globalAlpha = 0.34; g.fillStyle = dz.tint; g.fillRect(dz.r.x0, dz.r.z0, dz.r.x1 - dz.r.x0, dz.r.z1 - dz.r.z0); g.globalAlpha = 1;
-      if (detail) { g.setLineDash([6 * px, 5 * px]); g.lineWidth = 1.6 * px; g.strokeStyle = "rgba(27,35,54,.38)"; g.strokeRect(dz.r.x0, dz.r.z0, dz.r.x1 - dz.r.x0, dz.r.z1 - dz.r.z0); g.setLineDash([]); }
+    // surround: dusk navy with a faint survey grid, then the city plate with a soft drop shadow and an ink edge
+    const pad = 9, bw = bounds.x1 - bounds.x0 + pad * 2, bh = bounds.z1 - bounds.z0 + pad * 2;
+    if (detail) { g.lineWidth = px; g.strokeStyle = P.deepLine; g.beginPath(); for (let x = Math.floor((bounds.x0 - 160) / 20) * 20; x <= bounds.x1 + 160; x += 20) { g.moveTo(x, bounds.z0 - 160); g.lineTo(x, bounds.z1 + 160); } for (let z = Math.floor((bounds.z0 - 160) / 20) * 20; z <= bounds.z1 + 160; z += 20) { g.moveTo(bounds.x0 - 160, z); g.lineTo(bounds.x1 + 160, z); } g.stroke(); }
+    g.beginPath(); g.roundRect(bounds.x0 - pad + 5 * px, bounds.z0 - pad + 7 * px, bw, bh, 12); g.fillStyle = "rgba(4,8,18,.35)"; g.fill();
+    g.beginPath(); g.roundRect(bounds.x0 - pad, bounds.z0 - pad, bw, bh, 12); g.fillStyle = P.plate; g.fill(); g.lineWidth = 2.6 * px; g.strokeStyle = P.plateEdge; g.stroke();
+    if (px < 0.4) { g.fillStyle = "rgba(39,53,79,.11)"; g.fill(paverPath); } // the plaza is paved: a quiet paver grid
+    for (const dz of DISTRICTS) { // the named zones: a tint, fine diagonal paving lines, and a dashed boundary
+      const w = dz.r.x1 - dz.r.x0, h = dz.r.z1 - dz.r.z0;
+      g.globalAlpha = 0.5; g.fillStyle = dz.tint; g.fillRect(dz.r.x0, dz.r.z0, w, h); g.globalAlpha = 1;
+      if (detail) {
+        g.save(); g.beginPath(); g.rect(dz.r.x0, dz.r.z0, w, h); g.clip(); g.strokeStyle = "rgba(39,53,79,.13)"; g.lineWidth = 0.8 * px; g.beginPath();
+        for (let o = -h; o < w; o += 3.2) { g.moveTo(dz.r.x0 + o, dz.r.z1); g.lineTo(dz.r.x0 + o + h, dz.r.z0); }
+        g.stroke(); g.restore();
+        g.setLineDash([7 * px, 5 * px]); g.lineWidth = 1.8 * px; g.strokeStyle = "rgba(39,53,79,.55)"; g.strokeRect(dz.r.x0, dz.r.z0, w, h); g.setLineDash([]);
+      }
     }
     g.lineCap = "round"; g.lineJoin = "round";
-    for (const [w, col] of [[WALK_W, P.walk], [ROAD_W + 1.3, P.casing], [ROAD_W, P.road]] as const) { g.lineWidth = w; g.strokeStyle = col; g.stroke(roadsPath); }
+    g.fillStyle = P.backBldg; g.fill(backPath); // distant scenery: flat tone, no outline until you are close
+    if (px < 1 / 7) { g.lineWidth = 0.8 * px; g.strokeStyle = P.backEdge; g.stroke(backPath); }
+    g.lineWidth = WALK_W; g.strokeStyle = P.walk; g.stroke(roadsPath);
+    for (const [path, fill] of [[lawnPath, P.lawn], [waterPath, P.water]] as const) { g.fillStyle = fill; g.fill(path); }
+    for (const [w, col] of [[ROAD_W + 1.7, P.casing], [ROAD_W, P.road]] as const) { g.lineWidth = w; g.strokeStyle = col; g.stroke(roadsPath); }
+    if (px < 0.4) { g.lineCap = "butt"; g.setLineDash([3.2, 3.2]); g.lineWidth = 0.42; g.strokeStyle = P.roadMark; g.stroke(roadsPath); g.setLineDash([]); g.lineCap = "round"; } // lane centre marks
+    if (px < 0.4) { g.fillStyle = P.prop; g.fill(propPath); }
     g.fillStyle = P.shade; g.fill(shadePath);
     g.fillStyle = P.bldg; g.fill(bldgPath); g.fillStyle = P.bldgTall; g.fill(tallPath);
-    g.lineWidth = 1.25 * px; g.strokeStyle = P.bldgEdge; g.stroke(bldgPath); g.stroke(tallPath);
+    g.lineWidth = 1.2 * px; g.strokeStyle = P.bldgEdge; g.stroke(bldgPath); g.stroke(tallPath);
   };
   const drawRoute = (g: CanvasRenderingContext2D, px: number, kind: "waypoint" | "objective"): void => {
-    if (!route || route.length < 4) return;
-    g.beginPath(); g.moveTo(route[0], route[1]); for (let i = 2; i + 1 < route.length; i += 2) g.lineTo(route[i], route[i + 1]);
+    const r = routeDraw; if (!r || r.length < 4) return;
+    g.beginPath(); g.moveTo(r[0], r[1]); for (let i = 2; i + 1 < r.length; i += 2) g.lineTo(r[i], r[i + 1]);
     g.lineJoin = "round"; g.lineCap = "round"; g.setLineDash([]);
+    g.lineWidth = 10 * px; g.strokeStyle = "rgba(255,255,255,.85)"; g.stroke(); // light halo so it reads on roads and pavements
     g.lineWidth = 7 * px; g.strokeStyle = P.ink; g.stroke();
     g.lineWidth = 4.4 * px; g.strokeStyle = kind === "waypoint" ? P.pink : P.gold; g.stroke();
-    g.lineWidth = 1.6 * px; g.strokeStyle = "rgba(255,255,255,.9)"; g.setLineDash([2 * px, 7 * px]); g.stroke(); g.setLineDash([]);
+    if (px > 0.4) return; // the minimap keeps it to the plain ribbon
+    g.lineWidth = 1.5 * px; g.strokeStyle = "rgba(255,255,255,.95)"; g.setLineDash([2 * px, 8 * px]); g.lineDashOffset = -clock * 16 * px; g.stroke(); g.setLineDash([]); g.lineDashOffset = 0;
+    // chevrons point the way, spaced along the path
+    const step = 38 * px; let carry = step * 0.5;
+    g.strokeStyle = "#fff"; g.lineWidth = 1.8 * px;
+    for (let i = 0; i + 3 < r.length; i += 2) {
+      const dx = r[i + 2] - r[i], dz = r[i + 3] - r[i + 1], len = Math.hypot(dx, dz); if (len < 1e-6) continue;
+      const ux = dx / len, uz = dz / len, a = 3.2 * px;
+      let s = carry;
+      for (; s < len; s += step) {
+        const x = r[i] + ux * s, z = r[i + 1] + uz * s;
+        g.beginPath(); g.moveTo(x - ux * a - uz * a, z - uz * a + ux * a); g.lineTo(x + ux * a, z + uz * a); g.lineTo(x - ux * a + uz * a, z - uz * a - ux * a); g.stroke();
+      }
+      carry = s - len; // distance into the next segment where the next chevron goes
+    }
   };
 
   // ---- minimap
@@ -276,7 +399,7 @@ export function createCityMap(d: Deps): CityMap {
     if (S !== mmSize || dpr !== mmDpr) { mmSize = S; mmDpr = dpr; mmc.width = mmc.height = Math.round(S * dpr); }
     const ms = Math.min(1.1, Math.max(0.72, S / 190)), g = mmc.getContext("2d")!, k = S / MM_SPAN, a = yaw + Math.PI, ca = Math.cos(a), sa = Math.sin(a), half = S / 2;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    g.fillStyle = P.paper; g.fillRect(0, 0, S, S);
+    g.fillStyle = P.deep; g.fillRect(0, 0, S, S);
     g.save(); g.translate(half, half); g.rotate(a); g.scale(k, k); g.translate(-p.x, -p.z);
     drawCity(g, 1 / k, false);
     if (tg) drawRoute(g, 1 / k, tg.kind);
@@ -286,7 +409,8 @@ export function createCityMap(d: Deps): CityMap {
     for (const pl of allPlaces().sort((x, y) => x.pri - y.pri)) { // low priority first: the important ones end up on top
       if (pl.kind === "shop" || (pl.kind === "place" && pl.pri < 70)) continue;
       const q = at(pl.x, pl.z); if (!inside(q, 10)) continue;
-      placeMark(g, pl, q.x, q.y, ms * (pl.kind === "landmark" ? 0.9 : 0.8));
+      if (pl.kind === "merchant") { g.fillStyle = P.orange; g.strokeStyle = P.ink; g.lineWidth = 1.6; g.beginPath(); g.arc(q.x, q.y, 3.8 * ms, 0, 6.3); g.fill(); g.stroke(); continue; } // stalls cluster in the market: small dots, no stacking
+      placeMark(g, pl, q.x, q.y, ms * (pl.kind === "landmark" ? 0.85 : 0.8));
     }
     if (tg) { // far targets pin to the edge with a pointer and the distance; near ones sit on the spot
       const q = at(tg.x, tg.z), dist = Math.round(Math.hypot(tg.x - p.x, tg.z - p.z));
@@ -325,9 +449,12 @@ export function createCityMap(d: Deps): CityMap {
   const legend = q<HTMLElement>(".cm-legend"), clearBtn = q<HTMLButtonElement>(".cm-info button");
   const legendRows: [string, (g: CanvasRenderingContext2D) => void][] = [
     ["You", (g) => playerMark(g, 11, 11, 0, 0.62, 0)], ["Objective", (g) => star(g, 11, 11, 8, 0)], ["Waypoint", (g) => flag(g, 11, 17, 5)],
-    ["Landmark", (g) => badge(g, 11, 11, 8.5, P.cyan, "")], ["Merchant stall", (g) => badge(g, 11, 11, 8, P.orange, "")], ["Place", (g) => { badge(g, 11, 11, 7, "#fff", ""); badge(g, 11, 11, 2.4, P.cyan, ""); }],
-    ["Road", (g) => { g.fillStyle = P.walk; g.fillRect(1, 7, 20, 8); g.fillStyle = P.casing; g.fillRect(1, 8, 20, 6); g.fillStyle = P.road; g.fillRect(1, 9, 20, 4); }],
+    ["Landmark", (g) => badge(g, 11, 11, 9, P.cyan, "spire")], ["Merchant stall", (g) => badge(g, 11, 11, 8.5, P.orange, "stall")], ["Place", (g) => { badge(g, 11, 11, 7, "#fff", ""); badge(g, 11, 11, 2.4, P.cyan, ""); }],
+    ["Road", (g) => { g.fillStyle = P.walk; g.fillRect(1, 5, 20, 12); g.fillStyle = P.casing; g.fillRect(1, 7, 20, 8); g.fillStyle = P.road; g.fillRect(1, 8, 20, 6); }],
     ["Building", (g) => { g.fillStyle = P.bldg; g.fillRect(3, 3, 16, 16); g.strokeStyle = P.bldgEdge; g.lineWidth = 1.5; g.strokeRect(3, 3, 16, 16); }],
+    ["Tower", (g) => { g.fillStyle = P.bldgTall; g.fillRect(3, 3, 16, 16); g.strokeStyle = P.bldgEdge; g.lineWidth = 1.5; g.strokeRect(3, 3, 16, 16); }],
+    ["Lawn", (g) => { g.fillStyle = P.lawn; g.fillRect(3, 4, 16, 14); g.strokeStyle = P.bldgEdge; g.lineWidth = 1; g.strokeRect(3, 4, 16, 14); }],
+    ["Water", (g) => { g.fillStyle = P.water; g.fillRect(3, 6, 16, 10); g.strokeStyle = P.bldgEdge; g.lineWidth = 1; g.strokeRect(3, 6, 16, 10); }],
     ["District", (g) => { g.globalAlpha = 0.5; g.fillStyle = "#8fd18a"; g.fillRect(2, 3, 18, 16); g.globalAlpha = 1; g.setLineDash([3, 3]); g.strokeStyle = P.inkSoft; g.strokeRect(2, 3, 18, 16); }],
   ];
   const ul = q<HTMLElement>(".cm-legend ul");
@@ -358,7 +485,7 @@ export function createCityMap(d: Deps): CityMap {
     if (atFit) { goal = { ...fit }; view = { ...fit }; } else clampGoal();
     // the legend starts folded when it would sit on the city at this size (it stays one click away)
     const left = W / 2 - ((bounds.x1 - bounds.x0) * fit.zoom) / 2, short = H / 2 + ((bounds.z1 - bounds.z0) * fit.zoom) / 2 > H - 330;
-    if (!legendTouched) { const fold = left < 232 && short; legend.classList.toggle("min", fold); legendBtn.textContent = fold ? "show" : "hide"; }
+    if (!legendTouched) { const fold = left < 300 && short; legend.classList.toggle("min", fold); legendBtn.textContent = fold ? "show" : "hide"; }
   };
   const toFit = (): void => { atFit = true; goal = { ...fit }; };
   const toMe = (): void => { const p = d.player(); atFit = false; goal = { cx: p.x, cz: p.z, zoom: fit.zoom * 2.6 }; clampGoal(); };
@@ -374,15 +501,24 @@ export function createCityMap(d: Deps): CityMap {
   const drawFull = (): void => {
     const g = fc.getContext("2d")!, rel = view.zoom / fit.zoom, p = d.player();
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    g.fillStyle = P.paper; g.fillRect(0, 0, W, H);
+    g.fillStyle = P.deep; g.fillRect(0, 0, W, H);
     g.save(); g.translate(W / 2, H / 2); g.scale(view.zoom, view.zoom); g.translate(-view.cx, -view.cz);
     drawCity(g, 1 / view.zoom, true);
     const tg = target(); if (tg) drawRoute(g, 1 / view.zoom, tg.kind);
     g.restore();
     // markers, then labels placed around them without overlap
     const k = rel < 1.6 ? 1 : rel < 3.5 ? 1.12 : 1.25;
-    hits = allPlaces().filter((pl) => pl.kind !== "shop" || rel >= pl.showAt).sort((a, b) => a.pri - b.pri).map((pl) => { const [sx, sy] = scr(pl.x, pl.z); return { ...pl, sx, sy, x: sx, y: sy, r: markR(pl, k) }; });
-    const labFont = (pl: MapPlace): string => `${pl.kind === "landmark" ? 800 : 700} ${pl.kind === "landmark" ? 13 : 12}px ${FONT}`;
+    const all: Hit[] = allPlaces().filter((pl) => pl.kind !== "shop" || rel >= pl.showAt).map((pl) => { const [sx, sy] = scr(pl.x, pl.z); return { ...pl, sx, sy, x: sx, y: sy, r: markR(pl, k) }; });
+    // stalls that would pile up at this zoom collapse into one counted marker; zoom in and they spread to their own spots
+    const rest = all.filter((h) => h.kind !== "merchant" || rel >= 2.6), groups: Hit[][] = [];
+    if (rel < 2.6) for (const s of all) { if (s.kind !== "merchant") continue; const gp = groups.find((q) => q.some((o) => Math.hypot(o.sx - s.sx, o.sy - s.sy) < 46)); if (gp) gp.push(s); else groups.push([s]); }
+    for (const gp of groups) {
+      if (gp.length === 1) { rest.push(gp[0]); continue; }
+      const cx = gp.reduce((a, h) => a + h.sx, 0) / gp.length, cy = gp.reduce((a, h) => a + h.sy, 0) / gp.length;
+      rest.push({ ...gp[0], id: `cluster:${gp[0].id}`, name: `${gp.length} merchant stalls`, kind: "cluster", glyph: String(gp.length), sx: cx, sy: cy, x: cx, y: cy, r: markR({ kind: "cluster" } as MapPlace, k), pri: 55, showAt: 0, ax: gp.reduce((a, h) => a + h.ax, 0) / gp.length, az: gp.reduce((a, h) => a + h.az, 0) / gp.length });
+    }
+    hits = rest.sort((a, b) => a.pri - b.pri);
+    const labFont = (pl: MapPlace): string => pl.kind === "landmark" ? `800 14px ${FONT}` : pl.kind === "shop" ? `600 10.5px ${FONT}` : pl.kind === "merchant" || pl.kind === "cluster" ? `700 11px ${FONT}` : `700 12.5px ${FONT}`;
     const labels: Label[] = [];
     for (const h of hits) {
       if (h.id !== hover?.id && rel < h.showAt) continue;
@@ -400,14 +536,21 @@ export function createCityMap(d: Deps): CityMap {
       dist.set(`d:${dz.name}`, { txt, font });
       labels.push({ id: `d:${dz.name}`, text: txt, x: (x0 + x1) / 2, y: y0 + 14, r: 0, w: tw + 8, h: 16, priority: 1, fixed: true });
     }
-    const placed = declutter(labels, [...hits.map((h) => ({ x: h.sx, y: h.sy, r: h.r })), { x: you[0], y: you[1], r: 16 }], { w: W, h: H });
+    // the destination tag (and the "you" tag) are obstacles too, so no place label lands under them
+    const o = d.objective(), tgt = waypoint ? { at: scr(waypoint.x, waypoint.z), text: waypoint.name, fill: P.pink, color: "#fff" } : o ? { at: scr(o.x, o.z), text: "Objective", fill: P.gold, color: P.ink } : null;
+    const dest = tgt ? { x: tgt.at[0], y: tgt.at[1], text: tgt.text, fill: tgt.fill, color: tgt.color } : null;
+    const extra = [{ x: you[0], y: you[1], r: 22 }, { x: you[0], y: you[1] + 31, r: 15 }, ...(dest ? [-1, 0, 1].map((i) => ({ x: dest.x + i * 36, y: dest.y - 34, r: 16 })).concat([{ x: dest.x, y: dest.y - 12, r: 14 }]) : [])];
+    const placed = declutter(labels, [...hits.map((h) => ({ x: h.sx, y: h.sy, r: h.r })), ...extra], { w: W, h: H });
     for (const pl of placed) { const dl = dist.get(pl.id); if (dl) label(g, dl.txt, pl.x, pl.y, dl.font, "rgba(27,35,54,.5)", 1.5); }
     for (const h of hits) placeMark(g, h, h.sx, h.sy, k);
     for (const pl of placed) { if (dist.has(pl.id)) continue; const h = hits.find((x) => x.id === pl.id)!; label(g, h.name, pl.x, pl.y, labFont(h), h.kind === "merchant" ? "#8a4300" : P.ink); }
     if (hover) { g.strokeStyle = P.ink; g.lineWidth = 3; g.beginPath(); g.arc(hover.sx, hover.sy, hover.r + 4, 0, 6.3); g.stroke(); g.strokeStyle = "#fff"; g.lineWidth = 1.5; g.stroke(); }
-    const o = d.objective(); if (o && !waypoint) { const [sx, sy] = scr(o.x, o.z); star(g, sx, sy, 12, clock); }
-    if (waypoint) { const [sx, sy] = scr(waypoint.x, waypoint.z); flag(g, sx, sy, 10); }
-    playerMark(g, you[0], you[1], Math.PI - p.heading, 1.15, clock);
+    if (dest) {
+      if (waypoint) flag(g, dest.x, dest.y, 11, clock); else star(g, dest.x, dest.y, 13, clock);
+      chip(g, dest.text.length > 26 ? `${dest.text.slice(0, 25)}…` : dest.text, Math.min(W - 70, Math.max(70, dest.x)), Math.max(22, dest.y - (waypoint ? 34 : 28)), dest.fill, dest.color);
+    }
+    playerMark(g, you[0], you[1], Math.PI - p.heading, 1.2, clock);
+    chip(g, "YOU", you[0], you[1] + 31, P.ink, "#fff");
   };
   const readout = (): void => {
     const p = d.player(), noting = performance.now() < noteUntil;
@@ -454,7 +597,7 @@ export function createCityMap(d: Deps): CityMap {
     hover = pick(hits, mx, my, 15); fc.classList.toggle("over", !!hover);
     if (hover) {
       const p = d.player(), m = Math.round(Math.hypot(hover.ax - p.x, hover.az - p.z));
-      tip.innerHTML = `<b>${hover.name}</b><span>${m} m away · click to set waypoint</span>`; tip.style.display = "block";
+      tip.innerHTML = `<b>${hover.name}</b><span>${m} m away · click to ${hover.kind === "cluster" ? "zoom in" : "set waypoint"}</span>`; tip.style.display = "block";
       tip.style.left = `${Math.min(W - 230, mx + 14)}px`; tip.style.top = `${Math.max(8, my - 44)}px`;
     } else tip.style.display = "none";
   });
@@ -462,6 +605,7 @@ export function createCityMap(d: Deps): CityMap {
     fc.classList.remove("drag");
     if (drag && !drag.moved) { // a click: waypoint on the place, or on the street there; clicking the current waypoint clears it
       const [mx, my] = local(e), h = pick(hits, mx, my, 15);
+      if (h?.kind === "cluster") { zoomAt(2.8, h.sx, h.sy); drag = null; return; } // a stall cluster just opens up
       const [wx, wz] = h ? [h.ax, h.az] : wrl(mx, my);
       if (waypoint && Math.hypot(waypoint.x - wx, waypoint.z - wz) < 18 / view.zoom) setWaypoint(null);
       else trySet(wx, wz, h ? h.name : "Waypoint");
