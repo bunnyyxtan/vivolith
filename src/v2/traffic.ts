@@ -25,11 +25,17 @@ interface Car extends Rig {
   mode: number; poly: Poly; seg: number; s: number; dir: number; v: number;
   lane: number; next: number; claim: number; spot: number; wantSpot: number; timer: number; stuck: number;
   x: number; z: number; yaw: number; hx: number; hz: number; spin: number; despawn: boolean;
+  /** Current acceleration (m/s^2), rate-limited by JERK_UP / JERK_DOWN. */
+  acc: number;
 }
 interface RoadsJson { lanes: { id: string; points: number[][]; next?: string[]; speed?: number }[]; parking?: { x: number; z: number; yaw?: number; dx?: number; dz?: number }[] }
 
 const MODELS = ["ev_sedan", "ev_pickup"];
-const POOL = 7, ACCEL = 3, BRAKE = 9, COMFORT = 4, MAX_SPEED = 7;
+const POOL = 9, ACCEL = 3, BRAKE = 9, COMFORT = 4, MAX_SPEED = 7;
+/** Jerk limits (m/s^3): acceleration ramps instead of switching, so starts and stops ease in. Braking onset is quicker. */
+const JERK_UP = 8, JERK_DOWN = 28;
+/** Paint hue turns (degrees) cycled over the cars: the sedan and the pickup each come in several colours. */
+const PAINT_HUES = [0, 75, 140, 200, 265, 320];
 /** Top of the town's asphalt (measured by raycast: 0.024 m everywhere on the lanes); tyres stand on it. */
 const ROAD_Y = 0.024;
 /** Sky reflection and clear coat on car paint: enough for a highlight, not so much that the sky bleaches the colour. */
@@ -37,6 +43,25 @@ const CAR_REFLECT = 0.5, CAR_COAT = 0.35;
 const MAX_STEER = 0.6, PITCH_PER_ACCEL = 0.006, ROLL_PER_LATERAL = 0.004, MAX_TILT = 0.035;
 const PROBES = [1.5, 3, 4.5, 6, 7.5, 9, 10.5, 12, 13.5, 15, 16.5, 18, 19.5];
 const MAX_PARKED = 2, PARK_CHANCE = 0.5, RING_UTURN = 0.4, MIN_SPAWN_GAP = 18, MIN_SPAWN_PLAYER = 30;
+
+/** Gives this car its own copy of the paint material with the baked colour turned by `deg` around the grey axis. */
+function repaint(obj: THREE.Object3D, deg: number): void {
+  if (deg === 0) return;
+  const hue = (deg * Math.PI) / 180;
+  obj.traverse((o) => {
+    if (!(o instanceof THREE.Mesh) || Array.isArray(o.material) || !/_paint$/.test(o.material.name)) return;
+    const m = o.material.clone();
+    m.onBeforeCompile = (sh: THREE.WebGLProgramParametersWithUniforms) => {
+      sh.uniforms.paintHue = { value: hue };
+      sh.fragmentShader = "uniform float paintHue;\n" + sh.fragmentShader.replace("#include <map_fragment>",
+        `#include <map_fragment>
+         { vec3 k = vec3(0.57735); float cs = cos(paintHue), sn = sin(paintHue);
+           diffuseColor.rgb = diffuseColor.rgb * cs + cross(k, diffuseColor.rgb) * sn + k * dot(k, diffuseColor.rgb) * (1.0 - cs); }`);
+    };
+    m.customProgramCacheKey = () => "carpaint-hue";
+    o.material = m;
+  });
+}
 
 const FALLBACK: RoadsJson = (() => {
   const pts: number[][] = [];
@@ -360,8 +385,9 @@ export async function installTraffic(scene: THREE.Scene, colliders: Box[], playe
     const car: Car = {
       obj, ...rigOf(obj), halfL: t.halfL, halfW: t.halfW, fx: 0, fz: 0, rx: 0, rz: 0, steer: 0, pv: 0, pitch: 0, roll: 0,
       mode: HIDDEN, poly: lanes[0].poly, seg: 0, s: 0, dir: 1, v: 0,
-      lane: 0, next: -1, claim: -1, spot: -1, wantSpot: -1, timer: i * 1.5, stuck: 0, x: 0, z: 0, yaw: 0, hx: 0, hz: 1, spin: 0, despawn: false,
+      lane: 0, next: -1, claim: -1, spot: -1, wantSpot: -1, timer: i * 1.5, stuck: 0, x: 0, z: 0, yaw: 0, hx: 0, hz: 1, spin: 0, despawn: false, acc: 0,
     };
+    repaint(obj, PAINT_HUES[i % PAINT_HUES.length] + (Math.floor(i / PAINT_HUES.length) * 30));
     obj.visible = false;
     scene.add(obj);
     cars.push(car);
@@ -450,7 +476,10 @@ export async function installTraffic(scene: THREE.Scene, colliders: Box[], playe
       }
     }
 
-    c.v += Math.max(-BRAKE * dt, Math.min(ACCEL * dt, target - c.v));
+    const want = Math.max(-BRAKE, Math.min(ACCEL, (target - c.v) * 3));
+    const jerk = want > c.acc ? JERK_UP : JERK_DOWN;
+    c.acc += Math.max(-jerk * dt, Math.min(jerk * dt, want - c.acc));
+    c.v = Math.max(0, c.v + c.acc * dt);
     c.stuck = blockedByCar && c.v < 0.2 ? c.stuck + dt : 0;
     if (c.stuck > 25) { hide(c, 4); return; }
     const sPrev = c.s;
