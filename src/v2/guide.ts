@@ -7,6 +7,7 @@ import { MERCHANT_IDS } from "../economy/state";
 import { chainLive, reopenGap, SHARE_PACK } from "../economy/sim";
 import { bidFor, profitRun } from "../economy/pricing";
 import { el, type Hud } from "./hud";
+import { night, stakeLine, type Clock } from "./story";
 
 export interface Step {
   readonly id: string;
@@ -53,9 +54,10 @@ export const STEPS: readonly Step[] = [
     done: (s) => f(s, "boughtTomas"), reward: "The mangoes are in your bag. Press B to look.",
   },
   {
-    id: "deliver", title: "Bring the mangoes to Pema", target: "pema",
-    detail: () => `She pays ${DELIVERY_PRICE} c a mango. Buy where it is cheap, sell where it is needed: that is how you earn here.`,
-    done: (s) => f(s, "deliveredPema"), reward: "Pema's shelves are full again.",
+    id: "deliver", title: "Sell your mangoes: Pema needs them", target: "pema",
+    detail: () => `Pema pays ${DELIVERY_PRICE} c a mango and needs stock to sell before rent. Other stalls post their own bids: the trade panel compares them. Your call.`,
+    done: (s) => f(s, "deliveredPema") || f(s, "soldElsewhere"),
+    reward: "",
   },
   {
     id: "haggle", title: (s) => `Haggle with ${NAMES[tutorSeller(s)]}`, target: tutorSeller,
@@ -103,6 +105,8 @@ export const unlocked = (s: EconomyState, what: "haggle" | "invest" | "week" | "
 
 /** The standing objective once every goal is done: carry mangoes from the cheap stall to the stall that pays most. */
 function opportunity(s: EconomyState): Objective | null {
+  if (s.player.inventory.mango === 0 && s.flags.orchardReady === true) return { title: "The Orchard is picking", target: "orchard", label: "Opportunity",
+    detail: "Today's share of mangoes is waiting in the crate by the Orchard sign, free until 11:00. Sell them to whoever bids best." };
   const run = profitRun(s);
   if (!run) return null;
   const held = s.player.inventory.mango, gain = run.bid - run.ask;
@@ -115,7 +119,7 @@ function opportunity(s: EconomyState): Objective | null {
     detail: `${NAMES[run.buy]} sells mangoes at ${run.ask} c and ${NAMES[run.sell]} pays ${run.bid} c: about ${gain} c per mango. Buy what you can carry (you have ${s.player.coins} c), then walk them over.` };
 }
 
-export interface Objective { title: string; detail: string; target: Target | null; label: string }
+export interface Objective { title: string; detail: string; target: Target | null; label: string; stake?: string }
 
 export interface Guide {
   /** Re-check completion; returns the reward line of a step that just completed (or null). */
@@ -127,7 +131,25 @@ export interface Guide {
 
 const NAMES: Record<MerchantId, string> = { pema: "Pema", tomas: "Tomas", mira: "Mira", arin: "Arin" };
 
-export function createGuide(hud: Hud): Guide {
+/** Pema's night (story.ts) as an objective: its stake while it runs, then "go and hear her" once it has a result. */
+function nightObjective(s: EconomyState, c: Clock): Objective | null {
+  const n = night(s, c);
+  if (n.phase === "off") return null;
+  if (n.phase === "kept" || n.phase === "closed") {
+    if (f(s, "night.heard")) return null;
+    return { title: n.phase === "kept" ? "Pema made rent. Go and see her" : "Pema's stall closed. Go and see her", target: "pema", label: "The night Pema almost closed",
+      detail: n.phase === "kept" ? (n.connected ? "Her rent was charged on NEAR and her till covered it." : "Her till covered the rent.") : (n.connected ? "NEAR charged her rent and her till came up short." : "Her till came up short at 21:00.") };
+  }
+  const short = n.rent - n.till;
+  return {
+    title: short > 0 ? `Keep Pema open: ${short} c short of rent` : "Keep Pema open through rent", target: "pema", label: "The night Pema almost closed", stake: stakeLine(n),
+    detail: short > 0
+      ? "Coins reach her till when her mangoes sell: stock on her shelves for street shoppers (the Orchard gives free mangoes each morning), customers buying from her, partners buying share packs. Nothing is decided until the rent is charged."
+      : "Her till covers the rent today, if nothing drains it first. Nothing is decided until the rent is charged.",
+  };
+}
+
+export function createGuide(hud: Hud, clock: () => Clock): Guide {
   const v = new THREE.Vector3();
   let lastKey = "", lastMark = "";
   const current: Guide["current"] = (s) => {
@@ -135,8 +157,10 @@ export function createGuide(hud: Hud): Guide {
     if (i < STEPS.length) {
       const st = STEPS[i];
       const target = typeof st.target === "function" ? st.target(s) : st.target;
-      return { title: titleOf(st, s), detail: st.detail(s), target, label: `First day · ${i + 1} of ${STEPS.length}` };
+      return { title: titleOf(st, s), detail: st.detail(s), target, label: `First day · ${i + 1} of ${STEPS.length}`, stake: stakeLine(night(s, clock())) || undefined };
     }
+    const story = nightObjective(s, clock());
+    if (story && (story.stake === undefined || s.merchants.pema.status === "open")) return story;
     // A closed stall comes first: it is the city's most urgent problem and the player can fix it.
     const shut = MERCHANT_IDS.find((id) => s.merchants[id].status !== "open");
     if (shut) {
@@ -166,13 +190,14 @@ export function createGuide(hud: Hud): Guide {
     draw(s, camera, targetPos, player) {
       const c = current(s);
       if (!c) { hud.obj.style.display = "none"; hud.mark.style.display = "none"; return; }
-      const key = `${c.label}|${c.title}|${c.detail}`;
+      const key = `${c.label}|${c.title}|${c.detail}|${c.stake ?? ""}`;
       if (key !== lastKey) {
         lastKey = key;
         hud.obj.innerHTML = "";
         const lab = el("div", "lab");
         lab.append(document.createTextNode("Objective"), el("i", "", c.label));
         hud.obj.append(lab, el("b", "", c.title), el("p", "", c.detail));
+        if (c.stake) hud.obj.append(el("p", "stake", c.stake));
       }
       hud.obj.style.display = "block";
       const p = c.target ? targetPos(c.target) : null;

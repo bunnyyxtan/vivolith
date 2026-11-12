@@ -25,6 +25,8 @@ const CSS = /* css */ `
 .hud-obj .lab i { font-style:normal; color:var(--mute); letter-spacing:.04em; text-transform:none; font-weight:600; }
 .hud-obj b { display:block; font-size:17px; font-weight:700; margin-top:4px; line-height:1.25; }
 .hud-obj p { margin:4px 0 0; font-size:14px; line-height:1.4; color:var(--ink2); }
+.hud-obj p.stake { margin-top:8px; padding-top:7px; border-top:1px solid rgba(0,0,0,.08); font-size:12.5px; font-weight:600; color:var(--mintd); font-variant-numeric:tabular-nums; }
+.tp-compare b { font-weight:700; }
 .hud-obj.done { animation:pop .5s ease; }
 @keyframes pop { 30% { transform:scale(1.04); box-shadow:0 0 0 4px var(--mints), var(--shadow); } }
 

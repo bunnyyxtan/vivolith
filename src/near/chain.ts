@@ -117,6 +117,8 @@ export const isOffline = (): boolean => status !== null && !status.configured;
 
 /** The current on-chain market day, numbered exactly as the relayer does (floor(now / marketDayMs)); null offline. */
 export const marketDay = (): number | null => (status?.marketDayMs ? Math.floor(Date.now() / status.marketDayMs) : null);
+/** Length of one on-chain market day in ms; null offline. */
+export const marketDayMs = (): number | null => status?.marketDayMs ?? null;
 
 export const merchantAccount = (id: string): string => `${id}.${status?.relayer ?? ""}`;
 export const playerId = (): string | null => player?.accountId ?? null;

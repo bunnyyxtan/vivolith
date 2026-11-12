@@ -754,6 +754,15 @@ async function claimOnce(cfg: Config, key: string, ttlSec: number): Promise<bool
   return true;
 }
 
+/** Gives back a claimOnce key. Only for an attempt NEAR definitely refused (nothing happened), so a retry is allowed. */
+async function releaseOnce(cfg: Config, key: string): Promise<void> {
+  if (cfg.redisUrl && cfg.redisToken) {
+    await fetch(cfg.redisUrl, { method: "POST", headers: { authorization: `Bearer ${cfg.redisToken}`, "content-type": "application/json" }, body: JSON.stringify(["DEL", `vivolith:once:${key}`]) }).catch(() => null);
+    return;
+  }
+  onceMemory.delete(key);
+}
+
 /** Residents' day (see src/economy/residents.ts). Returns what they ate per `merchant:good`, so tourists buy less. */
 export async function residentTurn(cfg: Config, provider: JsonRpcProvider, relayer: Account, secret: string, day: number, log: string[], txs: string[], agentCfg: AgentConfig, agentStore: DecisionStore, mint = true): Promise<Record<string, number>> {
   const ate: Record<string, number> = {};
@@ -974,8 +983,12 @@ async function pick(cfg: Config, req: Request): Promise<Response> {
   const { provider, relayer } = account(cfg);
   if (!(await view<boolean>(provider, cfg.contractId, "is_registered", { account_id: player }))) throw new HttpError(400, "unregistered account");
   const day = Math.floor(Date.now() / MARKET_DAY_MS);
-  if (!(await claimOnce(cfg, `pick:${player}:${day}`, Math.ceil(MARKET_DAY_MS / 1000) * 2))) return json(200, { status: "picked", message: "already picked this market day" });
+  const key = `pick:${player}:${day}`;
+  if (!(await claimOnce(cfg, key, Math.ceil(MARKET_DAY_MS / 1000) * 2))) return json(200, { status: "picked", message: "already picked this market day" });
   const r = outcome(await relayer.signAndSendTransaction({ receiverId: cfg.contractId, actions: [actions.functionCall("operator_mint", { account_id: player, token_id: "mango", amount: String(ORCHARD_PICK), reason: "orchard picking" }, TICK_GAS, 0n)], throwOnFailure: false }));
+  // A final failure minted nothing: hand the day's pick back. A send that threw (no final answer) keeps the claim, since
+  // the mint may still have landed; the player's bag is re-read either way.
+  if (!r.ok) await releaseOnce(cfg, key);
   return json(r.ok ? 200 : 502, { status: r.ok ? "onchain" : "failed", qty: ORCHARD_PICK, txHash: r.txHash, message: r.error });
 }
 

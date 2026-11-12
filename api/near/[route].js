@@ -14664,6 +14664,21 @@ async function claimOnce(cfg, key, ttlSec) {
 	onceMemory.add(key);
 	return true;
 }
+/** Gives back a claimOnce key. Only for an attempt NEAR definitely refused (nothing happened), so a retry is allowed. */
+async function releaseOnce(cfg, key) {
+	if (cfg.redisUrl && cfg.redisToken) {
+		await fetch(cfg.redisUrl, {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${cfg.redisToken}`,
+				"content-type": "application/json"
+			},
+			body: JSON.stringify(["DEL", `vivolith:once:${key}`])
+		}).catch(() => null);
+		return;
+	}
+	onceMemory.delete(key);
+}
 /** Residents' day (see src/economy/residents.ts). Returns what they ate per `merchant:good`, so tourists buy less. */
 async function residentTurn(cfg, provider, relayer, secret, day, log, txs, agentCfg, agentStore, mint = true) {
 	const ate = {};
@@ -14995,7 +15010,8 @@ async function pick(cfg, req) {
 	if (!await hit(cfg, `pick:${clientIp(req)}`, LIMITS.pick.max, LIMITS.pick.windowSec)) throw new HttpError(429, "slow down");
 	const { provider, relayer } = account(cfg);
 	if (!await view(provider, cfg.contractId, "is_registered", { account_id: player })) throw new HttpError(400, "unregistered account");
-	if (!await claimOnce(cfg, `pick:${player}:${Math.floor(Date.now() / 6e5)}`, Math.ceil(600) * 2)) return json(200, {
+	const key = `pick:${player}:${Math.floor(Date.now() / MARKET_DAY_MS)}`;
+	if (!await claimOnce(cfg, key, Math.ceil(600) * 2)) return json(200, {
 		status: "picked",
 		message: "already picked this market day"
 	});
@@ -15009,6 +15025,7 @@ async function pick(cfg, req) {
 		}, TICK_GAS, 0n)],
 		throwOnFailure: false
 	}));
+	if (!r.ok) await releaseOnce(cfg, key);
 	return json(r.ok ? 200 : 502, {
 		status: r.ok ? "onchain" : "failed",
 		qty: 3,

@@ -8,13 +8,15 @@ import { createHud, el, type Hud } from "./hud";
 import { createGuide, DELIVERY_PRICE, GOALS, inTutorial, investTarget, STEPS, stepIndex, titleOf, tutorSeller, unlocked, type Target } from "./guide";
 import { loadGame, saveGame, clearSave } from "../economy/save";
 import { calibrateSoles } from "./soles";
-import { advance, invest, MAX_PACKS, payReleaseFee, recordRestock, REOPEN_SHARE, reopenGap, sellShares, SHARE_PACK, shareCost, shareRefund, shareSupply, tryReopen, UPGRADE_AT } from "../economy/sim";
-import { bidFor, quote, lassiPrice, stallPull, ORCHARD_PICK, ORCHARD_HOURS, type Quote } from "../economy/pricing";
+import { adjustRep, advance, invest, MAX_PACKS, payReleaseFee, recordRestock, REOPEN_SHARE, reopenGap, sellShares, SHARE_PACK, shareCost, shareRefund, shareSupply, tryReopen, UPGRADE_AT } from "../economy/sim";
+import { bidFor, quote, lassiPrice, stallPull, ORCHARD_PICK, ORCHARD_HOURS, HAGGLE_FLOOR, type Quote } from "../economy/pricing";
 import { clockOf, dayOf, MERCHANT_IDS, MINUTES_PER_DAY, STARTER_COINS, type EconomyState, type Good, type MerchantId, type Receipt } from "../economy/state";
 import { RESIDENTS } from "../economy/residents";
 import { audio } from "./audio";
 import { createCityMap } from "./map";
 import { VOICES, type LineId } from "./audio-manifest";
+import { createOrchardBasket, type OrchardBasket } from "./orchard";
+import { startNight, updateNight, type Clock, type NightOutcome } from "./story";
 
 /** Metres per footstep sound, and how close to the stalls the market music and murmur take over. */
 const ORCHARD_REACH_M = 4;
@@ -26,7 +28,7 @@ import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
 import {
   EXPLORER_ACCOUNT, EXPLORER_TX, agentDecision, finalHeight, type AgentDecision, type ChainReceipt, balances, buyPosted, sellPosted, connectGuest, haggleDeal, marketTick, merchantAccount, playerId, playerLabel, receipts as chainReceipts,
-  settleDay, claimDividends, lastMarketTurn, askMerchant, pickOrchard, marketDay, isOffline, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
+  settleDay, claimDividends, lastMarketTurn, askMerchant, pickOrchard, marketDay, marketDayMs, isOffline, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
 } from "../near/chain";
 
 const GAME_MIN_PER_SEC = 2.4; // 09:00 -> 21:00 in five real minutes
@@ -141,8 +143,14 @@ const PEMA_INTRO: Conversation = {
     why: {
       speaker: "Auntie Pema",
       text: () => "My crates are stuck at the harbor. Tomas, across the square, sits on a whole pile of mangoes, but he won't sell a single one to me.",
+      next: "stakes",
+    },
+    stakes: {
+      speaker: "Auntie Pema",
+      // the stall's real till and rent (read from NEAR when connected): the stake is the player's to see, not a script's
+      text: (s) => { const m = s.merchants.pema; return m.cash >= m.rent ? `My till has ${Math.floor(m.cash)} coins and rent is ${m.rent}. Enough, if I can keep selling. With empty shelves I can't.` : `My till has ${Math.floor(m.cash)} coins and rent is ${m.rent}. If it isn't there when rent is charged, the shutters come down.`; },
       choices: [
-        { label: "I'll buy some from Tomas and bring them to you.", next: "deal", effect: (ctx) => { ctx.econ.flags.talkedPema = true; } },
+        { label: "I'll find you mangoes before rent.", next: "deal", effect: (ctx) => { ctx.econ.flags.talkedPema = true; } },
       ],
     },
     deal: {
@@ -153,11 +161,39 @@ const PEMA_INTRO: Conversation = {
   },
 };
 
+/** The end of "The night Pema almost closed" (story.ts), told from what actually happened: the rent result the chain (or
+ *  the offline market) recorded, her till now, and the trades Kavi really made with her (confirmed ones only). */
+const pemaEpilogue = (s: EconomyState, outcome: NightOutcome, connected: boolean, gap: number): Conversation => {
+  const sold = Number(s.flags["help.pema.sold"] ?? 0), paid = Number(s.flags["help.pema.paid"] ?? 0), discount = Number(s.flags["help.pema.kept"] ?? 0), partner = s.player.shares.pema > 0;
+  const elsewhere = typeof s.flags.firstBuyer === "string" && s.flags.firstBuyer !== "pema" ? String(s.flags.firstBuyer) : null;
+  const helped = sold > 0 || paid > 0 || discount > 0 || partner;
+  const thanks = [sold > 0 ? `your ${sold} ${sold === 1 ? "mango" : "mangoes"} kept my shelves selling` : "", discount > 0 ? `you took ${discount} c less than I offered` : "", paid > 0 ? `${paid} c of yours went into my till` : "", partner ? "and you bought into the stall" : ""].filter(Boolean).join(", ");
+  const kept = `Rent's paid${connected ? ", it's on the market ledger" : ""}. ${Math.floor(s.merchants.pema.cash)} c left in the till.`;
+  const shut = `The shutters are down. ${connected ? "The market charged the rent and" : "At nine,"} my till came up short.${gap > 0 ? ` ${gap} more ${gap === 1 ? "mango" : "mangoes"} on my shelves and I open again. I'll pay for every one.` : ""}`;
+  const why = helped ? `Kavi, ${thanks}.` : elsewhere ? `You sold your mangoes to ${elsewhere[0].toUpperCase()}${elsewhere.slice(1)}. Fair is fair: it was your trade to make.` : "You were busy elsewhere. I noticed.";
+  return {
+    npcId: "pema", name: "Auntie Pema", role: "Fruit seller", accent: "#f39a2c",
+    entry: () => "result",
+    nodes: {
+      result: { speaker: "Auntie Pema", text: () => (outcome === "kept" ? kept : shut), next: "why" },
+      why: {
+        speaker: "Auntie Pema",
+        text: () => (outcome === "kept" ? `${why} ${helped ? "I won't forget it." : "Street trade carried me this time. Next rent comes in two market days."}` : `${why} ${helped ? "It wasn't enough this time, but it was something." : ""}`.trim()),
+        choices: [
+          { label: outcome === "kept" ? "Let's keep it that way." : "I'll help you reopen.", next: null, effect: (ctx) => { ctx.econ.flags["night.heard"] = true; if (helped) adjustRep(ctx.econ, "pema", 4); } },
+        ],
+      },
+    },
+  };
+};
+
 export async function createPlay(game: Game): Promise<Play> {
   const { state, restored } = loadGame();
   const market = await createMarket(game.look.scene, game.colliders);
   const hud = createHud();
-  const guide = createGuide(hud);
+  /** The market clock Pema's night is measured on: NEAR's market days when connected, the game clock offline. */
+  const storyClock = (): Clock => ({ day: playerId() ? marketDay() : null, dayMs: marketDayMs(), now: Date.now() });
+  const guide = createGuide(hud, storyClock);
   market.bind(game.player.body, game.rig.camera);
   game.player.floor = market.floor;
   calibrateSoles(game.look.renderer, market.cast);
@@ -229,6 +265,10 @@ export async function createPlay(game: Game): Promise<Play> {
     if (landed) lines.push("The harbor crates just came in!");
     if ((dayOf(state.minute) - 1) % 2 === 0) lines.push("Rent is due tonight at nine.");
     if (state.player.shares.pema > 0) lines.push("Kavi owns part of Pema's stall now.");
+    const nightOut = state.flags["night.outcome"];
+    if (nightOut === "kept") lines.push(Number(state.flags["help.pema.sold"] ?? 0) > 0 ? "Pema made rent. The new courier brought her mangoes." : "Pema made rent, just about.");
+    if (nightOut === "closed" && state.merchants.pema.status !== "open") lines.push("Pema's shutters are down. She needs mangoes to reopen.");
+    if (state.flags["night.recovered"] === true) lines.push("Pema's stall is open again. Who'd have thought?");
     lines.push(hour % 24 >= 18 ? "Everyone's on the Spire lawn tonight." : hour % 24 < 11 ? "Busy morning at the Harbor Depot." : "Lunch at the food trucks by the Labs?");
     market.life.setGossip(lines);
   };
@@ -465,6 +505,15 @@ export async function createPlay(game: Game): Promise<Play> {
     if (id === "pema" && stepIndex(state) === 3) return DELIVERY_PRICE;
     return bidFor(state, id, "mango")?.price ?? null;
   };
+  /** A struggling stall's friend's price: below its bid and its own shelf price, so the stall earns on every mango it
+   *  resells. Never under the lowest price a merchant may sign (HAGGLE_FLOOR of the posted bid; a price worse for the
+   *  player than the posted one needs no haggle record, see verifyDealUnit). Null when it would not be lower. */
+  const friendPrice = (id: MerchantId): number | null => {
+    const m = state.merchants[id], bid = sellPrice(id), rule = bidFor(state, id, "mango")?.price ?? null;
+    if (bid === null || rule === null || m.status !== "open" || m.cash >= m.rent) return null;
+    const f = Math.max(1, Math.floor(rule * HAGGLE_FLOOR), Math.min(bid - 1, priceOf(state, id).price - 1));
+    return f < bid ? f : null;
+  };
   const tabsFor = (id: MerchantId): Tab[] => {
     const t: Tab[] = [];
     if ((stepIndex(state) !== 3 || id !== "pema") && state.merchants[id].status === "open") t.push("buy");
@@ -519,6 +568,36 @@ export async function createPlay(game: Game): Promise<Play> {
     renderTrade();
   };
 
+  /** The same trade at the other stalls, from their live posted prices and tills: the choice the player is making. */
+  const first = (x: MerchantId): string => PERSONALITY[x].name.replace(/^Auntie /, "").split(" ")[0];
+  const compareLine = (id: MerchantId, tab: Tab, unit: number): HTMLElement | null => {
+    if (tab === "invest") return null;
+    const rows: { x: MerchantId; p: number; note: string }[] = [];
+    for (const x of TRADERS) {
+      if (x === id) continue;
+      const m = state.merchants[x];
+      if (tab === "sell") {
+        const p = sellPrice(x);
+        if (p === null) continue;
+        const can = Math.floor(m.cash / p);
+        rows.push({ x, p, note: can < Math.min(3, state.player.inventory.mango) ? ` (till pays for ${can})` : "" });
+      } else if (x !== "arin" && m.status === "open" && m.stock.mango > 0) rows.push({ x, p: buyUnit(x), note: "" });
+    }
+    const d = el("div", "tp-text tp-compare");
+    const best = rows.slice().sort((a, b) => (tab === "sell" ? b.p - a.p : a.p - b.p))[0];
+    const verdict = !best ? "No other stall is " + (tab === "sell" ? "buying mangoes right now." : "selling mangoes right now.")
+      : (tab === "sell" ? best.p > unit : best.p < unit) ? `${first(best.x)} ${tab === "sell" ? "pays" : "asks"} ${Math.abs(best.p - unit)} c ${tab === "sell" ? "more" : "less"} each.`
+      : best.p === unit ? `${first(best.x)} ${tab === "sell" ? "pays" : "asks"} the same.` : `The best ${tab === "sell" ? "bid" : "price"} in the market is here.`;
+    d.append(el("b", "", verdict));
+    if (rows.length) d.append(document.createTextNode(` Elsewhere: ${rows.map((r) => `${first(r.x)} ${r.p} c${r.note}`).join(" · ")}.`));
+    const pema = state.merchants.pema;
+    if (id !== "pema" && tab === "sell" && pema.status === "open" && pema.cash < pema.rent && state.flags["night.start"] && !state.flags["night.outcome"]) d.append(el("div", "", `Pema is ${pema.rent - Math.floor(pema.cash)} c short of rent and her shelves hold ${pema.stock.mango}.`));
+    if (id === "pema" && tab === "sell" && pema.cash < pema.rent) d.append(el("div", "", `Her till: ${Math.floor(pema.cash)} c of the ${pema.rent} c rent. She sells mangoes at ${priceOf(state, "pema").price} c, so whatever she pays above that leaves her till for good.`));
+    return d;
+  };
+  /** After a confirmed deal: how it moved this stall's price, and why (stock is the main lever, see pricing.ts). */
+  let moved: { id: MerchantId; text: string } | null = null;
+
   const renderTrade = (): void => {
     if (mode.kind !== "trade") return;
     // an offer can vanish while the panel is open (a bid filled, a kitchen restocked): never show a dead tab
@@ -550,6 +629,8 @@ export async function createPlay(game: Game): Promise<Play> {
     price.append(el("b", "", `${unit} c`), el("span", "", tab === "buy" ? "each" : "paid each"));
     item.append(el("i", `ico ${good}`), left, price);
     hud.panel.append(item);
+    if (mode.done > 0 && moved?.id === id) hud.panel.append(el("div", "tp-text tp-note", moved.text));
+    else if (good === "mango") { const c = compareLine(id, tab, unit); if (c) hud.panel.append(c); }
     void refreshDecision(id);
     { const d = aiDecisions.get(id); if (d) hud.panel.append(decisionCard(d)); }
     if (tab === "buy") {
@@ -587,9 +668,11 @@ export async function createPlay(game: Game): Promise<Play> {
     else if (max <= 0) acts.append(el("div", "tp-text full", tab === "buy" ? (m.stock[good] <= 0 ? "Sold out for now." : `You need ${unit} c for one. You have ${state.player.coins} c.`) : (state.player.inventory.mango <= 0 ? "You have no mangoes to sell. Buy some first." : `${PERSONALITY[id].name.split(" ").pop()} has ${Math.floor(m.cash)} c, not enough for one at ${unit} c. The Market Guild lends low tills coins within a minute or two: come back soon, or sell to another stall.`)));
     else {
       acts.append(button(`${tab === "buy" ? "Buy" : "Sell"} ${goodName(good, mode.qty)} for ${total} c`, "primary", () => simpleDeal(), "1"));
+      const fp = tab === "sell" ? friendPrice(id) : null;
+      if (fp !== null) acts.append(button(`Friend's price: ${fp} c each (${fp * mode.qty} c)`, "full", () => simpleDeal(fp), "2", `${(unit - fp) * mode.qty} c more stays in ${first(id)}'s till`));
       if (unlocked(state, "haggle") && m.status === "open" && modeFor(state, id) === tab && good === "mango") {
         const shut = isLocked(state, id) && !(stepIndex(state) === HAGGLE_STEP && id === tutorSeller(state));
-        const hb = button("Haggle", "full", () => startHaggle(), "2", shut ? "not again today: you pushed too hard" : "try for a better price");
+        const hb = button("Haggle", "full", () => startHaggle(), String(acts.querySelectorAll("button").length + 1), shut ? "not again today: you pushed too hard" : "try for a better price");
         hb.disabled = shut;
         acts.append(hb);
       }
@@ -757,10 +840,10 @@ export async function createPlay(game: Game): Promise<Play> {
     renderTrade();
   };
 
-  const simpleDeal = (): void => {
+  const simpleDeal = (friend?: number): void => {
     if (mode.kind !== "trade" || mode.done > 0) return;
     const { id, tab } = mode;
-    const unit = tab === "buy" ? buyUnit(id) : sellPrice(id);
+    const unit = friend ?? (tab === "buy" ? buyUnit(id) : sellPrice(id));
     if (!unit || maxQty(id, tab) < 1) return;
     const qty = Math.min(mode.qty, maxQty(id, tab));
     settleDeal({ merchant: id, good: goodFor(id, tab), mode: tab === "buy" ? "buy" : "sell", qty, unit, open: unit, limit: unit, patience: 100, used: {}, history: [], moves: 0, over: "deal" });
@@ -780,16 +863,40 @@ export async function createPlay(game: Game): Promise<Play> {
   };
   /** NEAR settled the deal: move the goods and coins in the game, then react (story beats, reopened stalls). */
   const applyDeal = (h: HaggleSession, npc: Npc): void => {
+    const askBefore = priceOf(state, h.merchant).price, bidBefore = bidFor(state, h.merchant, "mango")?.price ?? null;
+    const offered = h.mode === "sell" ? sellPrice(h.merchant) : null; // what the stall offered; a friend's price is lower
     const out = closeDeal(state, h); // if the local copy was stale this moves nothing; the chain re-read fixes it
+    {
+      const askAfter = priceOf(state, h.merchant).price, bidAfter = bidFor(state, h.merchant, "mango")?.price ?? null;
+      const who = first(h.merchant), m = state.merchants[h.merchant];
+      const shelf = h.merchant === "arin" ? `${m.stock.mango} mangoes in the kitchen` : `${m.stock.mango} mangoes on the shelf`;
+      moved = h.mode === "sell" && bidBefore !== null && bidAfter !== bidBefore
+        ? { id: h.merchant, text: `${who}'s bid for mangoes: ${bidBefore} c → ${bidAfter === null ? "not buying" : `${bidAfter} c`}. ${shelf} now, so the need is smaller.` }
+        : h.mode === "buy" && askAfter !== askBefore ? { id: h.merchant, text: `${who}'s price: ${askBefore} c → ${askAfter} c. ${shelf} now: scarcer stock costs more.` }
+        : { id: h.merchant, text: `${who}'s till: ${Math.floor(m.cash)} c · ${shelf}.` };
+    }
     const total = out.total;
     if (h.mode === "sell") { const s = screenOf(npc.head); hud.coins(s.x, s.y, Math.max(4, total)); }
     let say = WHO[h.merchant].thanks;
     const i = stepIndex(state);
     if (h.mode === "buy" && h.merchant === tutorSeller(state) && i === 2) { state.flags.boughtTomas = true; state.flags.tutCost = total; say = "There you go. Don't tell Pema where you got them."; }
+    if (h.mode === "sell" && i === 3 && h.merchant !== "pema") { // the first sale is the player's choice: Pema's need or a better bid
+      state.flags.soldElsewhere = true; state.flags.firstBuyer = h.merchant;
+      const cost = Number(state.flags.tutCost ?? total);
+      say = `${total} c for ${goodName(h.good, h.qty)}: ${total - cost >= 0 ? `${total - cost} c profit` : `${cost - total} c down`}. Pema's shelves stay as they were.`;
+    }
+    if (h.mode === "sell" && h.merchant === "pema") {
+      state.flags["help.pema.sold"] = Number(state.flags["help.pema.sold"] ?? 0) + h.qty;
+      const kept = offered !== null ? (offered - dealUnit(h)) * h.qty : 0;
+      if (kept > 0) { state.flags["help.pema.kept"] = Number(state.flags["help.pema.kept"] ?? 0) + kept; adjustRep(state, "pema", 2); }
+    }
+    if (h.mode === "buy" && h.merchant === "pema") state.flags["help.pema.paid"] = Number(state.flags["help.pema.paid"] ?? 0) + total;
     if (h.mode === "sell" && h.merchant === "pema" && i === 3) {
+      state.flags.firstBuyer = "pema";
       state.flags.deliveredPema = true;
       const cost = Number(state.flags.tutCost ?? total);
-      say = `Bought for ${cost} c, sold for ${total} c: you made ${total - cost} c. And look at my shelves!`;
+      const gaveUp = offered !== null ? (offered - dealUnit(h)) * h.qty : 0;
+      say = gaveUp > 0 ? (total >= cost ? `You made ${total - cost} c and left ${gaveUp} c in my till? Kavi. Look at my shelves!` : `${cost - total} c out of your own pocket, for my shelves? I won't forget this.`) : `Bought for ${cost} c, sold for ${total} c: you made ${total - cost} c. And look at my shelves!`;
       market.say("pema", "You saved my morning, Kavi!", 4);
     }
     if (h.mode === "buy" && h.moves > 0) { state.flags.haggled = true; if (out.gain > 0) say = `${out.gain} c cheaper than the first offer. Nicely done.`; }
@@ -1219,9 +1326,13 @@ export async function createPlay(game: Game): Promise<Play> {
       const need = Number(state.flags[`reopenNeed.${id}`] ?? 0);
       return { line: "rent_closed", text: `${v.rent_closed} Rent went unpaid.${need > 0 ? ` ${need} more mangoes and I can reopen.` : ""}` };
     }
+    // connected, rent is the contract's: say "paid" only once NEAR recorded today's charge, else it is a forecast
+    const day = playerId() ? marketDay() : null;
+    if (day !== null && Number(state.flags[`lastRent.${id}`] ?? -1) >= day) return { line: "rent_ok", text: `${v.rent_ok} Rent paid on the market ledger today. ${m.cash} c left.` };
+    const when = day !== null ? "when the market charges it" : "tonight";
     return m.cash >= m.rent
-      ? { line: "rent_ok", text: `${v.rent_ok} ${m.cash} c in the till, the ${m.rent} c rent is covered.` }
-      : { line: "rent_risk", text: `${v.rent_risk} Only ${m.cash} c in the till and rent is ${m.rent} c.` };
+      ? { line: "rent_ok", text: `${v.rent_ok} ${m.cash} c in the till, enough for the ${m.rent} c rent ${when}.` }
+      : { line: "rent_risk", text: `${v.rent_risk} Only ${m.cash} c in the till and rent is ${m.rent} c, due ${when}.` };
   };
   const rentNight = (done: () => void): void => {
     drawBoards();
@@ -1264,29 +1375,57 @@ export async function createPlay(game: Game): Promise<Play> {
   // ---------------------------------------------------------------- orchard ----
   /** The Mango Orchard (west of the Spire): a few free mangoes each morning, minted on NEAR once per market day,
    *  to carry to whoever bids best. The rule lives in pricing.ts (ORCHARD_PICK, ORCHARD_HOURS). */
-  let orchardAt: THREE.Vector3 | null = null, picking = false;
+  let orchardAt: THREE.Vector3 | null = null, picking = false, basket: OrchardBasket | null = null;
+  /** The orchard grounds (the map's Mango Orchard area, see map.ts AREAS): any tree there reaches the day's crate. */
+  const ORCHARD_AREA = { x0: -59, z0: -94, x1: -34.5, z1: -74 };
   const atOrchard = (): boolean => {
-    orchardAt ??= game.look.scene.getObjectByName("PLACARD_orchard")?.getWorldPosition(new THREE.Vector3()) ?? null; // town loads async
-    return orchardAt !== null && Math.hypot(player.body.x - orchardAt.x, player.body.z - orchardAt.z) < ORCHARD_REACH_M;
+    if (!orchardAt) { // town loads async: the crate goes beside the sign once the sign exists
+      orchardAt = game.look.scene.getObjectByName("PLACARD_orchard")?.getWorldPosition(new THREE.Vector3()) ?? null;
+      if (orchardAt) {
+        const x = orchardAt.x + 1.8, z = orchardAt.z + 1.1;
+        basket = createOrchardBasket(game.look.scene, new THREE.Vector3(x, market.floor(x, z, 0), z), ORCHARD_PICK);
+      }
+    }
+    if (!orchardAt) return false;
+    const b = player.body, a = ORCHARD_AREA;
+    return Math.hypot(b.x - orchardAt.x, b.z - orchardAt.z) < ORCHARD_REACH_M || (b.x > a.x0 && b.x < a.x1 && b.z > a.z0 && b.z < a.z1);
   };
   const orchardOpen = (): boolean => { const h = (state.minute % MINUTES_PER_DAY) / 60; return h >= ORCHARD_HOURS[0] && h < ORCHARD_HOURS[1]; };
+  /** One period, the same as the relayer's: connected, the on-chain market day; offline, the game day. */
+  const orchardToday = (): string => { const md = playerId() ? marketDay() : null; return md !== null ? `m${md}` : `g${dayOf(state.minute)}`; };
+  const pickedToday = (): boolean => state.flags.orchardDay === orchardToday();
+  const orchardHours = `${String(ORCHARD_HOURS[0]).padStart(2, "0")}:00 to ${ORCHARD_HOURS[1]}:00`;
+  game.onUpdate.push((dt) => {
+    if (!basket) return;
+    basket.setBusy(picking);
+    if (!picking) basket.setReady(orchardOpen() && !pickedToday());
+    basket.update(dt);
+    state.flags.orchardReady = orchardOpen() && !pickedToday(); // the guide offers the orchard as an opportunity
+  });
   const pickAtOrchard = async (): Promise<void> => {
-    if (picking) return;
-    if (!orchardOpen()) { hud.toast(`The pickers have finished for today. Come back between ${String(ORCHARD_HOURS[0]).padStart(2, "0")}:00 and ${ORCHARD_HOURS[1]}:00.`); return; }
-    const id = playerId();
-    // One period, the same as the relayer's: connected, the on-chain market day; offline, the game day.
-    const md = id ? marketDay() : null;
-    const today = md !== null ? `m${md}` : `g${dayOf(state.minute)}`;
-    if (state.flags.orchardDay === today) { hud.toast(`You've picked your share ${md !== null ? "this market day" : "today"}. The trees need a rest.`); return; }
+    if (picking) return; // a second press while NEAR answers does nothing: one request per pick
+    if (!orchardOpen()) { hud.toast(`The pickers have finished for today. Come back between ${orchardHours}.`); return; }
+    const id = playerId(), today = orchardToday();
+    if (pickedToday()) { hud.toast(`You've picked your share ${id ? "this market day" : "today"}. The trees need a rest.`); return; }
     picking = true;
     const r = id ? await pickOrchard(id) : { status: "local" };
     picking = false;
-    if (r.status === "picked") { state.flags.orchardDay = today; hud.toast("You've picked your share this market day. The trees need a rest."); return; }
-    if (r.status !== "onchain" && r.status !== "local") { hud.toast("The orchard gate is stuck. Try again in a moment."); audio.synth("error"); return; }
+    // the relayer's once-a-day claim already holds this pick (another tab, or an answer lost on the way): sync, don't add
+    if (r.status === "picked") { state.flags.orchardDay = today; hud.toast("Your share for this market day was already picked. Checking your bag…"); if (id) void syncPlayer(id); return; }
+    if (r.status !== "onchain" && r.status !== "local") {
+      hud.toast(Number(r.httpStatus) === 429 ? "Too many pickers at once. Try again in a moment." : "The orchard gate is stuck: nothing was picked. Try again in a moment.");
+      audio.synth("error"); return;
+    }
     state.flags.orchardDay = today; state.flags.pickedOrchard = true;
     state.player.inventory.mango += ORCHARD_PICK; // NEAR minted them; the next wallet read confirms it
-    const best = TRADERS.map((m) => ({ m, b: bidFor(state, m, "mango") })).filter((x) => x.b).sort((a, b) => b.b!.price - a.b!.price)[0];
-    hud.toast(`+${ORCHARD_PICK} mangoes, picked fresh.${best ? ` ${state.merchants[best.m].name} pays the most for them: ${best.b!.price} c each.` : ""}`, true);
+    if (basket) { // the fruit leaves the crate for Kavi's hands
+      const dx = basket.at.x - player.root.position.x, dz = basket.at.z - player.root.position.z;
+      if (Math.hypot(dx, dz) < 6) player.heading = Math.atan2(dx, dz);
+      basket.pickTo(() => player.root.position.clone().add(new THREE.Vector3(0, 1.05, 0)));
+    }
+    void audio.sfx("goods");
+    const best = TRADERS.map((m) => ({ m, b: sellPrice(m) })).filter((x) => x.b !== null).sort((a, b) => b.b! - a.b!)[0];
+    hud.toast(`+${ORCHARD_PICK} mangoes, picked fresh.${best ? ` ${first(best.m)} pays the most for them right now: ${best.b} c each.` : " Nobody is bidding this minute: bids return as shelves empty."}`, true);
     const tx = typeof r.txHash === "string" ? r.txHash : undefined; // minted on NEAR (offline: a local pick, labelled so)
     state.receipts.push({ id: `orchard-${state.minute}`, kind: "orchard", minute: state.minute, summary: `Picked ${ORCHARD_PICK} mangoes at the orchard`, status: tx ? "onchain" : "local", txHash: tx });
     save();
@@ -1372,6 +1511,8 @@ export async function createPlay(game: Game): Promise<Play> {
     if (mode.kind === "walk" && rentHold <= 0) runClock(dt * (ff ? FF_MIN_PER_SEC : GAME_MIN_PER_SEC * (unlocked(state, "rent") ? 1 : TUTORIAL_CLOCK)));
     const hour = Math.floor(state.minute / 60);
     if (hour !== lastHour) { townHour(lastHour); lastHour = hour; drawBoards(); save(); }
+    nightIn -= dt;
+    if (nightIn <= 0 && !(ff && ff.real)) { nightIn = 1; storyBeat(); } // a forecast never decides the story
 
     if (mode.kind === "trade" || mode.kind === "talk") {
       const npc = mode.npc;
@@ -1440,7 +1581,7 @@ export async function createPlay(game: Game): Promise<Play> {
     const near = mode.kind === "walk" && !ff ? market.nearest(player.root.position) : null;
     if (!near && mode.kind === "walk" && !ff && atOrchard()) {
       hud.prompt.innerHTML = "";
-      hud.prompt.append(el("kbd", "", "F"), el("span", "", orchardOpen() ? `Pick mangoes (${ORCHARD_PICK} a day)` : `Orchard · picking ${String(ORCHARD_HOURS[0]).padStart(2, "0")}:00 to ${ORCHARD_HOURS[1]}:00`));
+      hud.prompt.append(el("kbd", "", "F"), el("span", "", picking ? "Picking…" : !orchardOpen() ? `Orchard · picking ${orchardHours}` : pickedToday() ? "Orchard · your share is picked, back next market day" : `Pick today's ${ORCHARD_PICK} mangoes`));
       hud.prompt.style.display = "block";
     } else if (near) {
       const trader = TRADERS.includes(near.id as MerchantId);
@@ -1456,6 +1597,24 @@ export async function createPlay(game: Game): Promise<Play> {
     renderHint();
   };
   game.onUpdate.push(update);
+
+  // ---------------------------------------------------------------- the night Pema almost closed ----
+  let nightIn = 0;
+  /** Starts the arc once Pema has told her story and the connection is known, then reports its result the moment the
+   *  chain (or the offline market) has one: a reaction at her stall, never earlier. */
+  const storyBeat = (): void => {
+    if (state.flags.talkedPema && state.flags["night.start"] === undefined && (playerId() || isOffline())) { startNight(state, storyClock()); save(); }
+    const wasRecovered = state.flags["night.recovered"] === true;
+    const out = updateNight(state, storyClock());
+    if (out) {
+      const pema = state.merchants.pema;
+      market.say("pema", out === "kept" ? `Rent paid. ${Math.floor(pema.cash)} c left!` : "The shutters... rent came up short.", 5);
+      hud.toast(out === "kept" ? "Pema made rent. Her stall stays open." : "Pema couldn't make rent. Her stall closed.", out === "kept");
+      void audio.sfx(out === "kept" ? "step_done" : "closed");
+      townHour(lastHour); drawBoards(); afterProgress(); save();
+    }
+    if (!wasRecovered && state.flags["night.recovered"] === true) { market.say("pema", "Open again! Thank you, all of you.", 5); townHour(lastHour); save(); }
+  };
 
   // ---------------------------------------------------------------- invest ----
   const investIn = (id: MerchantId, qty: number): void => {
@@ -1485,6 +1644,7 @@ export async function createPlay(game: Game): Promise<Play> {
   };
   const applyInvest = (id: MerchantId, n: number): void => {
     invest(state, id, n);
+    if (id === "pema") state.flags["help.pema.paid"] = Number(state.flags["help.pema.paid"] ?? 0) + shareCost(id, n) - (n / SHARE_PACK[id].per) * SHARE_PACK[id].backing;
     // Pema spends part of her partner's money on the harbor's storage fee: her held crates are finally on the way.
     const released = id === "pema" && payReleaseFee(state, "pema-mangoes", "merchant").ok;
     market.say(id, released ? "A partner! I've paid the harbor. My crates are coming!" : VOICES[id].lines.invest_done, 4);
@@ -1510,9 +1670,10 @@ export async function createPlay(game: Game): Promise<Play> {
     const epoch = ledgerEpoch;
     const [all, stalls] = await Promise.all([
       Promise.all(TRADERS.map((id) => balances(merchantAccount(id)).catch(() => null))),
-      view<{ merchant: string; open: boolean; need: string; delivered: string; supply: string }[]>("get_stalls").catch(() => null),
+      view<{ merchant: string; open: boolean; need: string; delivered: string; supply: string; last_rent: number | null }[]>("get_stalls").catch(() => null),
     ]);
     for (const s of stalls ?? []) if ((TRADERS as readonly string[]).includes(s.merchant)) state.flags[`supply.${s.merchant}`] = Number(s.supply);
+    if (epoch === ledgerEpoch) for (const s of stalls ?? []) if ((TRADERS as readonly string[]).includes(s.merchant)) state.flags[`lastRent.${s.merchant}`] = s.last_rent ?? -1;
     if (ff || epoch !== ledgerEpoch) return; // a forecast runs on the local model; a read older than a trade is stale
     TRADERS.forEach((id, i) => {
       const b = all[i];
@@ -1732,6 +1893,10 @@ export async function createPlay(game: Game): Promise<Play> {
       const npc = market.nearest(player.root.position);
       if (!npc) return;
       if (npc.id === "pema" && stepIndex(state) <= 1) { state.flags.nearPema = true; openTalk(npc, PEMA_INTRO); return; }
+      const nightOut = state.flags["night.outcome"] as NightOutcome | undefined;
+      if (npc.id === "pema" && nightOut && !state.flags["night.heard"] && !inTutorial(state)) {
+        openTalk(npc, pemaEpilogue(state, nightOut, state.flags["night.mode"] === "chain", reopenGap(state, "pema"))); return;
+      }
       if (!TRADERS.includes(npc.id as MerchantId)) { openTalk(npc); return; }
       const m = state.merchants[npc.id as MerchantId];
       if (m.status !== "open" && sellPrice(npc.id as MerchantId) === null && !tabsFor(npc.id as MerchantId).includes("invest")) {
