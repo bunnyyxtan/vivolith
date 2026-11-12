@@ -77,6 +77,23 @@ export async function chainStatus(): Promise<ChainStatus> {
 export const pickOrchard = (account: string): Promise<Record<string, unknown>> => post("pick", { account }).catch(() => ({ status: "failed" }));
 
 /** A merchant explains its price and day (relayer route `talk`): `ai` only when NEAR AI phrased it. */
+/** A merchant's latest bid decision from the server (NEAR AI when it answered, else the rule price). Read-only. */
+export interface AgentDecision {
+  readonly merchant: string; readonly day: number; readonly source: "ai" | "fallback"; readonly model: string | null;
+  readonly action: string; readonly basePrice: number; readonly price: number; readonly confidence: number | null;
+  readonly receipt: { readonly id: string | null; readonly status: string; readonly note: string };
+  readonly justification: readonly string[]; readonly line: string; readonly fallbackReason: string | null;
+  readonly txHash: string | null; readonly at: number;
+}
+export async function agentDecision(id: string): Promise<AgentDecision | null> {
+  try {
+    const r = await fetch(`/api/near/decisions?merchant=${encodeURIComponent(id)}`);
+    if (!r.ok) return null;
+    const j = (await r.json()) as { decisions?: AgentDecision[] };
+    return j.decisions?.[0] ?? null;
+  } catch { return null; }
+}
+
 export async function askMerchant(id: string): Promise<{ line: string; ai: boolean } | null> {
   const r = await post("talk", { npc: id }).catch(() => null);
   return r && typeof r.line === "string" ? { line: r.line, ai: r.source === "ai" } : null;

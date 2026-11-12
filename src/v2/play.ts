@@ -25,7 +25,7 @@ import { applyTactic, closeDeal, dealTotal, dealUnit, isLocked, lockKey, openHag
 import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
 import {
-  EXPLORER_ACCOUNT, EXPLORER_TX, balances, buyPosted, sellPosted, connectGuest, haggleDeal, marketTick, merchantAccount, playerId, playerLabel, receipts as chainReceipts,
+  EXPLORER_ACCOUNT, EXPLORER_TX, agentDecision, type AgentDecision, balances, buyPosted, sellPosted, connectGuest, haggleDeal, marketTick, merchantAccount, playerId, playerLabel, receipts as chainReceipts,
   settleDay, claimDividends, lastMarketTurn, askMerchant, pickOrchard, marketDay, isOffline, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
 } from "../near/chain";
 
@@ -234,6 +234,7 @@ export async function createPlay(game: Game): Promise<Play> {
   townHour(lastHour);
 
   // ---------------------------------------------------------------- world readouts ----
+  let aiDecision: AgentDecision | null = null, aiCheckedAt = 0; // Pema's NEAR AI decision, see refreshDecision
   const drawBoards = (): void => {
     for (const id of TRADERS) market.setStall(id, { stock: id === "arin" ? state.merchants[id].stock.lassi : state.merchants[id].stock.mango, open: state.merchants[id].status === "open", upgraded: state.player.shares[id] >= UPGRADE_AT, pull: stallPull(state, id) });
     for (const n of market.npcs) {
@@ -249,7 +250,7 @@ export async function createPlay(game: Game): Promise<Play> {
       n.board.draw({
         title: id === "arin" ? "Lassi" : `${m.name.split(" ")[id === "pema" ? 1 : 0]}'s mangoes`,
         price: `${priceOf(state, id).price} c`,
-        sub: b ? `We buy mangoes · ${b.price} c` : id === "arin" ? `${m.stock.lassi} glasses` : `${m.stock.mango} in stock`,
+        sub: b ? `We buy mangoes · ${id === "pema" && aiDecision?.source === "ai" && aiDecision.txHash ? aiDecision.price : b.price} c${id === "pema" && aiDecision?.source === "ai" && aiDecision.txHash ? " · NEAR AI" : ""}` : id === "arin" ? `${m.stock.lassi} glasses` : `${m.stock.mango} in stock`,
         closed: m.status !== "open",
         // the stall's real till against its real rent: green when it can pay, red when it is at risk of closing
         rent: m.status === "open" ? { ok: m.cash >= m.rent, text: m.cash >= m.rent ? `Rent ${m.rent} c · covered` : `Rent ${m.rent} c · till only ${m.cash} c` } : undefined,
@@ -538,6 +539,7 @@ export async function createPlay(game: Game): Promise<Play> {
     price.append(el("b", "", `${unit} c`), el("span", "", tab === "buy" ? "each" : "paid each"));
     item.append(el("i", `ico ${good}`), left, price);
     hud.panel.append(item);
+    if (id === "pema") { void refreshDecision(); if (aiDecision) hud.panel.append(decisionCard(aiDecision)); }
     if (tab === "buy") {
       const why = button(mode.why ? "Hide the reasons" : `Why ${unit} c?`, "tp-why", () => { if (mode.kind === "trade") { mode = { ...mode, why: !mode.why }; renderTrade(); } });
       hud.panel.append(why);
@@ -582,6 +584,32 @@ export async function createPlay(game: Game): Promise<Play> {
     }
     acts.append(button("Leave", "ghost full", () => endPanel(), "Esc"));
     hud.panel.append(acts);
+  };
+
+  // Pema's NEAR AI bid decision (server/near/agent.ts): shown only as what it is, spoken once when its transaction is confirmed.
+  const spokenDecisions = new Set<string>();
+  const refreshDecision = async (): Promise<void> => {
+    if (Date.now() - aiCheckedAt < 60_000) return;
+    aiCheckedAt = Date.now();
+    const d = await agentDecision("pema");
+    if (!d || (aiDecision && aiDecision.at === d.at && aiDecision.txHash === d.txHash)) return;
+    aiDecision = d;
+    drawBoards();
+    if (mode.kind === "trade" && mode.id === "pema") renderTrade();
+    const key = `${d.day}:${d.txHash}`;
+    if (d.source === "ai" && d.txHash && !spokenDecisions.has(key)) { spokenDecisions.add(key); void audio.line("pema", d.line); } // her confirmed decision, in her voice
+  };
+  const decisionCard = (d: AgentDecision): HTMLElement => {
+    const card = el("div", "tp-text tp-note");
+    const move = d.action === "hold" ? `kept her mango bid at ${d.price} c` : `${d.action === "raise" ? "raised" : "lowered"} her mango bid from ${d.basePrice} to ${d.price} c`;
+    card.append(el("b", "", d.source === "ai" ? "NEAR AI decision: " : "Rule price: "), document.createTextNode(d.source === "ai" ? `Pema ${move}.` : `Pema ${move} (NEAR AI did not decide: ${d.fallbackReason ?? "off"}).`));
+    if (d.source === "ai") {
+      card.append(el("div", "", `Why: ${d.justification.join("; ")}.`));
+      card.append(el("div", "", `${d.model ?? "model"}${d.confidence !== null ? ` · confidence ${Math.round(d.confidence * 100)}%` : ""} · ${d.receipt.id ? `receipt ${d.receipt.id.slice(0, 12)} (${d.receipt.status})` : "no receipt"}`));
+    }
+    if (d.txHash) { const a = el("a", "", "view transaction"); a.href = `${EXPLORER_TX}${d.txHash}`; a.target = "_blank"; a.rel = "noopener"; card.append(a); }
+    else card.append(el("div", "", "No new transaction was needed."));
+    return card;
   };
 
   let asked: { id: MerchantId; line: string; ai: boolean } | null = null, asking = false;

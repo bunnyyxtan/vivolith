@@ -14,6 +14,7 @@ import { MERCHANTS, keyPairFromSeed, merchantKey, residentKey, type MerchantId }
 import { RESIDENTS, planResident, type Offer } from "../../src/economy/residents.ts";
 import { synthesize } from "./voice.ts";
 import { answer, factsFor } from "./talk.ts";
+import { agentConfig, attachTx, decideBid, recentDecisions, type Decision } from "./agent.ts";
 import { ORCHARD_PICK, bidFor, planMerchantTrades, quote } from "../../src/economy/pricing.ts";
 import { closingNeed, shopperWant } from "../../src/economy/sim.ts";
 import { initialEconomy, type EconomyState } from "../../src/economy/state.ts";
@@ -743,6 +744,7 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
   const { provider, relayer } = account(cfg);
   const st = await chainEconomy(provider, cfg);
   const posted = new Map((await view<OfferRow[]>(provider, cfg.contractId, "get_offers", {})).map((o) => [orderKey(o), o]));
+  const agentCfg = agentConfig(env);
   const signerOf = (id: MerchantId): Account => new Account(`${id}.${cfg.relayerId}`, provider, new KeyPairSigner(merchantKey(id, secret)));
   const log: string[] = [];
   const txs: string[] = [];
@@ -796,9 +798,17 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
     // a closed stall sells nothing until it reopens (the contract refuses those sales anyway)
     for (const good of m.sells) want("ask", good, m.status === "open" ? m.stock[good] : 0, quote(st, id, good, false).price);
     // Shares need no orders: their terms are fixed in the contract, which issues and buys back on demand.
+    let agent: Decision | null = null;
     for (const good of ["mango", "lemon"] as const) {
       const b = bidFor(st, id, good);
-      want("bid", good, b ? Math.min(b.qty, Math.floor(m.cash / Math.max(1, b.price))) : 0, b?.price ?? 1);
+      let price = b?.price ?? 1;
+      if (good === "mango" && b) { // NEAR AI decides Pema's mango bid (agent.ts); off, or any failure, leaves the rule price
+        const out = await decideBid({ cfg: agentCfg, st, id, offers: [...posted.values()], day, fetchImpl: fetch as never });
+        agent = out.decision;
+        price = out.price;
+        if (agent) log.push(`${id} ${agent.source === "ai" ? "NEAR AI" : "rule"} decision: ${agent.action} mango bid ${agent.basePrice} -> ${agent.price} c${agent.fallbackReason ? ` (${agent.fallbackReason})` : ""}`);
+      }
+      want("bid", good, b ? Math.min(b.qty, Math.floor(m.cash / Math.max(1, price))) : 0, price);
     }
     // Function-call keys allow one action per transaction: one tx per order, in sequence for this merchant.
     const hashes: string[] = [];
@@ -808,6 +818,10 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
       const fc = call.functionCall!;
       const a = JSON.parse(new TextDecoder().decode(fc.args)) as { token_id: string; qty: string; price: string; per?: string };
       log.push(`${id} ${fc.methodName === "list" ? "asks" : "bids"} ${a.qty === "0" ? "withdrawn for" : `${a.qty} x ${a.price} c${a.per ? ` per ${a.per}` : ""} for`} ${a.token_id}${r.ok ? "" : ` FAILED: ${r.error}`}`);
+    }
+    if (agent) { // keep the hash of the transaction that carried the decision (none when the bid was already posted)
+      const at = calls.findIndex((c) => c.functionCall?.methodName === "bid" && (JSON.parse(new TextDecoder().decode(c.functionCall.args)) as { token_id: string }).token_id === "mango");
+      if (at >= 0 && hashes[at]) attachTx(id, day, hashes[at]); // a repeat tick posts nothing: the first hash stays
     }
     return hashes;
   }));
@@ -956,6 +970,10 @@ export async function handle(route: string, req: Request, env: RelayEnv): Promis
     if (route === "settle") return await settle(cfg);
     if (route === "deal") return await deal(cfg, req, env);
     if (route === "tick") return await tick(cfg, env);
+    if (route === "decisions" && req.method === "GET") { // read-only: the merchants' recent NEAR AI / rule decisions
+      const who = new URL(req.url).searchParams.get("merchant");
+      return json(200, { decisions: recentDecisions((MERCHANTS as readonly string[]).includes(who ?? "") ? (who as MerchantId) : undefined) });
+    }
     if (route === "pick") return await pick(cfg, req);
     if (route === "talk") return await talk(cfg, req, env);
     if (route === "social") return await social(cfg, req, env);
