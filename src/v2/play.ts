@@ -5,11 +5,11 @@ import * as THREE from "three";
 import type { Game } from "./game";
 import { createMarket, type Market, type Npc } from "./market";
 import { createHud, el, type Hud } from "./hud";
-import { createGuide, DELIVERY_PRICE, GOALS, inTutorial, investTarget, STEPS, stepIndex, titleOf, tutorSeller, unlocked, type Target } from "./guide";
+import { createGuide, NEWCOMER_FLOOR, GOALS, inTutorial, investTarget, STEPS, stepIndex, titleOf, tutorSeller, unlocked, type Target } from "./guide";
 import { loadGame, saveGame, clearSave } from "../economy/save";
 import { calibrateSoles } from "./soles";
-import { adjustRep, advance, invest, MAX_PACKS, payReleaseFee, recordRestock, REOPEN_SHARE, reopenGap, sellShares, SHARE_PACK, shareCost, shareRefund, shareSupply, tryReopen, UPGRADE_AT } from "../economy/sim";
-import { bidFor, quote, lassiPrice, stallPull, ORCHARD_PICK, ORCHARD_HOURS, HAGGLE_FLOOR, type Quote } from "../economy/pricing";
+import { adjustRep, advance, shopperWant, invest, MAX_PACKS, payReleaseFee, recordRestock, REOPEN_SHARE, reopenGap, sellShares, SHARE_PACK, shareCost, shareRefund, shareSupply, tryReopen, UPGRADE_AT } from "../economy/sim";
+import { bidFor, quote, lassiPrice, stallPull, ORCHARD_PICK, ORCHARD_HOURS, HAGGLE_FLOOR, DIVIDEND_BPS, type Quote } from "../economy/pricing";
 import { clockOf, dayOf, MERCHANT_IDS, MINUTES_PER_DAY, STARTER_COINS, type EconomyState, type Good, type MerchantId, type Receipt } from "../economy/state";
 import { RESIDENTS } from "../economy/residents";
 import { audio } from "./audio";
@@ -155,7 +155,7 @@ const PEMA_INTRO: Conversation = {
     },
     deal: {
       speaker: "Auntie Pema",
-      text: () => `You would? Bless you. I'll pay ${DELIVERY_PRICE} coins a mango, more than Tomas charges you. Three would get me through today.`,
+      text: (s) => { const b = bidFor(s, "pema", "mango")?.price; return b ? `You would? Bless you. I pay ${b} coins a mango, what I can still sell them on for. Three would get me through today.` : "You would? Bless you. My shelves are stocked for now, but rent is rent: every sale counts."; },
       next: null,
     },
   },
@@ -287,8 +287,20 @@ export async function createPlay(game: Game): Promise<Play> {
     for (const k of Object.keys(state.flags)) if (k.startsWith(`agentPrice.${id}.`)) delete state.flags[k];
     if (d && d.live && d.source === "ai" && d.txHash && (side === "ask" || side === "bid")) state.flags[`agentPrice.${id}.${side}.${good}`] = d.price;
   };
+  /** A stall's mood, from its real till and status: struggling while open with less than the rent in the till,
+   *  recovering for a game day after it reopens (seen as a closed-to-open change here, whoever caused it). */
+  const seenOpen = new Map<MerchantId, boolean>();
+  const moodOf = (id: MerchantId): "struggling" | "recovering" | null => {
+    const m = state.merchants[id], open = m.status === "open";
+    if (seenOpen.get(id) === false && open) state.flags[`reopenedAt.${id}`] = state.minute;
+    seenOpen.set(id, open);
+    if (!open) return null;
+    const at = state.flags[`reopenedAt.${id}`];
+    if (typeof at === "number" && state.minute - at < MINUTES_PER_DAY && state.minute >= at) return "recovering";
+    return m.cash < m.rent ? "struggling" : null;
+  };
   const drawBoards = (): void => {
-    for (const id of TRADERS) market.setStall(id, { stock: id === "arin" ? state.merchants[id].stock.lassi : state.merchants[id].stock.mango, open: state.merchants[id].status === "open", upgraded: state.player.shares[id] >= UPGRADE_AT, pull: stallPull(state, id) });
+    for (const id of TRADERS) market.setStall(id, { stock: id === "arin" ? state.merchants[id].stock.lassi : state.merchants[id].stock.mango, open: state.merchants[id].status === "open", upgraded: state.player.shares[id] >= UPGRADE_AT, pull: stallPull(state, id), mood: moodOf(id) });
     for (const n of market.npcs) {
       if (!n.board) continue;
       if (n.id === "harbor") {
@@ -497,14 +509,13 @@ export async function createPlay(game: Game): Promise<Play> {
   // ---------------------------------------------------------------- trading ----
   const goodFor = (id: MerchantId, tab: Tab): Good => (tab === "buy" && id === "arin" ? "lassi" : "mango");
   /** What a merchant asks this player. On the first day's buying step the tutorial seller gives a newcomer's price
-   *  (DELIVERY_PRICE - 2, never above his posted price and never below the 55% the relayer lets a merchant sign), so
+   *  (NEWCOMER_FLOOR, never above his posted price and never below the 55% the relayer lets a merchant sign), so
    *  three mangoes always fit the starter purse and always sell to Pema at a profit, whatever the live market. */
   const buyUnit = (id: MerchantId): number => {
     const p = priceOf(state, id).price;
-    return stepIndex(state) === 2 && id === tutorSeller(state) ? Math.min(p, Math.max(Math.ceil(p * 0.55), DELIVERY_PRICE - 2)) : p;
+    return stepIndex(state) === 2 && id === tutorSeller(state) ? Math.min(p, Math.max(Math.ceil(p * 0.55), NEWCOMER_FLOOR)) : p;
   };
   const sellPrice = (id: MerchantId): number | null => {
-    if (id === "pema" && stepIndex(state) === 3) return DELIVERY_PRICE;
     return bidFor(state, id, "mango")?.price ?? null;
   };
   /** A struggling stall's friend's price: below its bid and its own shelf price, so the stall earns on every mango it
@@ -547,7 +558,7 @@ export async function createPlay(game: Game): Promise<Play> {
     frame(npc);
     const closed = state.merchants[id].status !== "open";
     const newcomer = tab === "buy" && buyUnit(id) < priceOf(state, id).price;
-    const say = id === "pema" && stepIndex(state) === 3 ? `Are those for me? ${DELIVERY_PRICE} coins each, as promised!`
+    const say = id === "pema" && stepIndex(state) === 3 && sellPrice(id) !== null ? `Are those for me? ${sellPrice(id)} coins each, what I can pay and still sell them on.`
       : newcomer ? `New in town? ${buyUnit(id)} c a mango, just this once. The board says ${priceOf(state, id).price}.`
       : closed ? VOICES[id].lines.closed : WHO[id].hello;
     mode = { kind: "trade", npc, id, tab, qty: q, say, tone: closed ? "bad" : "", why: false, h: null, done: 0 };
@@ -594,7 +605,10 @@ export async function createPlay(game: Game): Promise<Play> {
     if (rows.length) d.append(document.createTextNode(` Elsewhere: ${rows.map((r) => `${first(r.x)} ${r.p} c${r.note}`).join(" · ")}.`));
     const pema = state.merchants.pema;
     if (id !== "pema" && tab === "sell" && pema.status === "open" && pema.cash < pema.rent && state.flags["night.start"] && !state.flags["night.outcome"]) d.append(el("div", "", `Pema is ${pema.rent - Math.floor(pema.cash)} c short of rent and her shelves hold ${pema.stock.mango}.`));
-    if (id === "pema" && tab === "sell" && pema.status === "open" && pema.cash < pema.rent) d.append(el("div", "", `Her till: ${Math.floor(pema.cash)} c of the ${pema.rent} c rent. She sells mangoes at ${priceOf(state, "pema").price} c, so whatever she pays above that leaves her till for good.`));
+    if (id === "pema" && tab === "sell" && pema.status === "open" && pema.cash < pema.rent) {
+      const ask = priceOf(state, "pema").price, margin = ask - unit;
+      d.append(el("div", "", `Her till: ${Math.floor(pema.cash)} c of the ${pema.rent} c rent. Your mangoes cost her ${unit} c each now and sell on at ${ask} c: ${margin > 0 ? `${margin} c back per mango, once shoppers buy them` : "she earns nothing on them"}.`));
+    }
     return d;
   };
   /** After a confirmed deal: how it moved this stall's price, and why (stock is the main lever, see pricing.ts). */
@@ -677,8 +691,13 @@ export async function createPlay(game: Game): Promise<Play> {
       friend();
       if (unlocked(state, "haggle") && m.status === "open" && modeFor(state, id) === tab && good === "mango") {
         const shut = isLocked(state, id) && !(stepIndex(state) === HAGGLE_STEP && id === tutorSeller(state));
-        const hb = button("Haggle", "full", () => startHaggle(), String(acts.querySelectorAll("button").length + 1), shut ? "not again today: you pushed too hard" : "try for a better price");
-        hb.disabled = shut;
+        // no room to negotiate (a reseller already at the most it can pay and still sell on): say so, don't offer a dead haggle
+        const probe = openHaggle(structuredClone(state), id);
+        const lesson = stepIndex(state) === HAGGLE_STEP && id === tutorSeller(state); // the tutorial's haggle is always playable
+        const room = lesson || (!("error" in probe) && (probe.mode === "buy" ? Math.floor(probe.limit + 1e-6) < probe.open : Math.ceil(probe.limit - 1e-6) > probe.open));
+        const why = "error" in probe || probe.mode === "sell" ? `${first(id)} can't pay more and still sell them on` : `${first(id)} won't go below what restocking costs`;
+        const hb = button("Haggle", "full", () => startHaggle(), String(acts.querySelectorAll("button").length + 1), shut ? "not again today: you pushed too hard" : room ? "try for a better price" : why);
+        hb.disabled = shut || !room;
         acts.append(hb);
       }
     }
@@ -750,7 +769,20 @@ export async function createPlay(game: Game): Promise<Play> {
     const rc = await chainReceipts(me).catch(() => null);
     if (!rc) return;
     for (const id of TRADERS) divPaid.set(id, rc.filter((x) => x.kind === "dividend" && x.counterparty === merchantAccount(id)).reduce((n, x) => n + Number(x.qty), 0));
+    // earned but not yet paid out: the contract's own count, claimed for the player each market turn
+    const pend = await view<{ merchant: string; coins: string }[]>("get_pending", { account_id: me }).catch(() => null);
+    for (const r of pend ?? []) if ((TRADERS as readonly string[]).includes(r.merchant)) divOwed.set(r.merchant as MerchantId, Number(r.coins));
     if (mode.kind === "trade" && mode.tab === "invest") renderTrade();
+  };
+  const divOwed = new Map<MerchantId, number>();
+  /** A forecast, never a promise: today's street sales at today's prices (sim.ts shopperWant over the 12 open hours),
+   *  half of it shared over every share. Real payouts follow real sales. */
+  const OPEN_HOURS = 12;
+  const forecastPerShare = (id: MerchantId): number => {
+    const m = state.merchants[id];
+    if (m.status !== "open") return 0;
+    const rev = m.sells.reduce((n, g) => n + Math.min(m.stock[g] + (g === "lassi" ? m.stock.mango * 4 : 0), shopperWant(state, id, g) * OPEN_HOURS) * (g === "lassi" ? lassiPrice(state).price : quote(state, id, g, false).price), 0);
+    return (rev * DIVIDEND_BPS) / 10_000 / Math.max(1, shareSupply(state, id));
   };
   const renderInvestBody = (id: MerchantId): void => {
     if (mode.kind !== "trade") return;
@@ -768,11 +800,14 @@ export async function createPlay(game: Game): Promise<Play> {
     // what ownership has really paid: NEAR's dividend receipts from this stall (connected), the local ledger offline
     const me = playerId(), paidOut = me ? divPaid.get(id) : Number(state.flags[`div.${id}`] ?? 0);
     if (me) void refreshDivs(me);
-    if (own > 0) fact(me ? "Paid to you (recent NEAR receipts)" : "Paid to you", paidOut === undefined ? "checking…" : `${paidOut} c`);
+    if (own > 0) fact(me ? "Paid to you · confirmed on NEAR" : "Paid to you", paidOut === undefined ? "checking…" : `${paidOut} c`);
+    if (own > 0 && me) fact("Earned, paid next market turn", divOwed.has(id) ? `${divOwed.get(id)} c` : "checking…");
+    const f = forecastPerShare(id) * per;
+    fact("Forecast per pack", m.status !== "open" ? "0 c while closed" : `about ${f < 1 ? f.toFixed(1) : Math.round(f)} c a day`);
     hud.panel.append(facts);
     if (own > 0 || mode.done <= 0) hud.panel.append(el("div", "tp-text tp-note", m.status === "open"
-      ? `${m.shop} is open: every sale it makes pays shareholders. Nothing is promised: a slow day pays little, and if it misses rent it pays nothing until it reopens. Selling back always returns ${backing} c a pack.`
-      : `${m.shop} is closed: it pays no dividends until deliveries reopen it. Selling back still returns ${backing} c a pack.`));
+      ? `The forecast is today's street sales at today's prices, not a promise: slow days pay less, and a missed rent pays nothing until the stall reopens. Selling back returns ${backing} c a pack, ${price - backing} c less than a pack costs.`
+      : `${m.shop} is closed: it pays no dividends until deliveries reopen it. Selling back still returns ${backing} c a pack, ${price - backing} c less than it costs.`));
     const acts = el("div", "tp-acts");
     if (mode.done > 0) { /* the result line is showing */ }
     else if (max <= 0) acts.append(el("div", "tp-text full", `A pack of ${per} costs ${price} c and you have ${coins} c. Sell some goods first, then come back.`));

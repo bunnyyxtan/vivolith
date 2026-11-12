@@ -76,6 +76,14 @@ function relationship(m: Merchant, rep: number): PriceFactor {
   return { label: `${label} (${pct(mult)})`, multiplier: mult };
 }
 
+/** What restocking one unit costs this stall: what its own standing bid pays (Pema restocks at LOYAL_RESTOCK x cost,
+ *  Mira buys surplus at ARB_RESTOCK x cost), else the base cost. */
+export const LOYAL_RESTOCK = 1.35, ARB_RESTOCK = 1.4, CLOSED_RESTOCK = 1.8;
+/** No stall sells below what restocking costs it plus this margin: a discount may squeeze, never lose on every sale. */
+export const COST_MARGIN = 1.15;
+export const restockCost = (m: Merchant, good: Good): number =>
+  m.style === "loyal" ? Math.round(m.baseCost[good] * LOYAL_RESTOCK) : m.style === "arbitrage" ? Math.max(1, Math.round(m.baseCost[good] * ARB_RESTOCK)) : m.baseCost[good];
+
 /** Cheapest posted price among the other open sellers of `good` with stock. */
 function rivalBest(state: EconomyState, self: MerchantId, good: Good): { id: MerchantId; price: number } | null {
   let best: { id: MerchantId; price: number } | null = null;
@@ -124,6 +132,11 @@ export function quote(state: EconomyState, merchantId: MerchantId, good: Good, f
       raw = rival.price - 1;
     }
   }
+  const floor = Math.ceil(restockCost(m, good) * COST_MARGIN - 1e-9);
+  if (Math.round(raw) < floor) { // shortage, rent pressure or undercutting never push the price under the cost of restocking
+    factors.push({ label: `Won't sell below restock cost, ${restockCost(m, good)} c (${pct(floor / raw)})`, multiplier: floor / raw });
+    raw = floor;
+  }
   return { price: Math.max(1, Math.round(raw)), factors };
 }
 
@@ -171,18 +184,18 @@ function bidForRule(state: EconomyState, id: MerchantId, good: Good): Bid | null
     // Every closed stall buys mangoes until deliveries reopen it (the contract counts them), whatever its style.
     const left = state.flags[`reopenNeed.${id}`];
     const need = typeof left === "number" ? left : m.target.mango - m.stock.mango;
-    return { price: Math.round(m.baseCost.mango * 1.8), qty: Math.max(1, need), reason: "Restocking to reopen" };
+    return { price: Math.round(m.baseCost.mango * CLOSED_RESTOCK), qty: Math.max(1, need), reason: "Restocking to reopen" };
   }
   const short = m.target[good] - m.stock[good];
   if (short <= 0) return null;
   switch (m.style) {
-    case "loyal": // restocks once shelves fall under half, pays up to 1.8x cost
-      return m.sells.includes(good) && m.stock[good] < m.target[good] * 0.5 ? { price: Math.round(m.baseCost[good] * 1.8), qty: short, reason: "Restocking her shelves" } : null;
+    case "loyal": // restocks once shelves fall under half, at a price she can resell above (see the cost floor in quote)
+      return m.sells.includes(good) && m.stock[good] < m.target[good] * 0.5 ? { price: restockCost(m, good), qty: short, reason: "Restocking her shelves" } : null;
     case "gouger": // supplied by his harbor contract; never helps a rival by buying
       return null;
     case "arbitrage": { // only buys when another stall is sitting on surplus
       const glut = MERCHANT_IDS.some((o) => o !== id && state.merchants[o].stock[good] > state.merchants[o].target[good] * 1.2);
-      return m.sells.includes(good) && glut ? { price: Math.max(1, Math.round(m.baseCost[good] * 1.4)), qty: short, reason: "Buys surplus cheap to resell" } : null;
+      return m.sells.includes(good) && glut ? { price: restockCost(m, good), qty: short, reason: "Buys surplus cheap to resell" } : null;
     }
     case "steady": // fixed fair price for the mangoes his lassi needs
       return good === "mango" ? { price: Math.round(m.baseCost.mango * 2), qty: short, reason: "Steady supply for lassi at a fixed fair price" } : null;
@@ -199,7 +212,7 @@ export interface MerchantTrade {
 }
 
 /** Coins a merchant never spends on other merchants' goods: kept to pay players who bring deliveries
- *  (the tutorial's 3 mangoes at 6 c), so a stall's own restocking can't leave it unable to buy from Kavi. */
+ *  (three mangoes at a posted bid), so a stall's own restocking can't leave it unable to buy from Kavi. */
 export const TILL_RESERVE = 18;
 
 /** Units a seller keeps back from other merchants (Tomas sells his whole glut; others keep 30% for shoppers). */

@@ -4,7 +4,7 @@
 //
 //   buy:  the merchant sells to you  -> tactics push the unit price DOWN toward their floor
 //   sell: the merchant buys from you -> tactics push their offer UP toward their ceiling
-import { bidFor, quote, cheapestMango } from "./pricing.ts";
+import { bidFor, quote, cheapestMango, restockCost, HAGGLE_FLOOR, HAGGLE_CEILING } from "./pricing.ts";
 import type { EconomyState, Good, MerchantId } from "./state.ts";
 import { dayOf } from "./state.ts";
 import { adjustRep } from "./sim.ts";
@@ -133,7 +133,8 @@ export function openHaggle(s: EconomyState, id: MerchantId): HaggleSession | { e
     const qty = Math.min(LOT, m.stock[good], Math.floor(s.player.coins / q.price));
     if (m.stock[good] <= 0) return { error: "Sold out." };
     if (qty <= 0) return { error: `Not enough coins (${q.price} c each).` };
-    const floor = Math.min(q.price, m.baseCost[good] * (1 + m.greed * 0.3) * (m.cash < m.rent ? 0.9 : 1));
+    // never under what restocking costs the stall, nor under the lowest price the relayer lets a merchant sign
+    const floor = Math.min(q.price, Math.max(m.baseCost[good] * (1 + m.greed * 0.3) * (m.cash < m.rent ? 0.9 : 1), restockCost(m, good), Math.floor(q.price * HAGGLE_FLOOR)));
     return { merchant: id, good, mode, qty, unit: q.price, open: q.price, limit: floor, patience: PERSONALITY[id].patience, used: {}, history: [], moves: 0, over: null };
   }
   const have = s.player.inventory[good];
@@ -142,11 +143,14 @@ export function openHaggle(s: EconomyState, id: MerchantId): HaggleSession | { e
   const scarcity = Math.min(2.2, Math.max(0.8, 1 + 1.1 * (1 - m.stock[good] / Math.max(1, m.target[good]))));
   // A posted bid is a promise: haggling opens there and can only climb (to 1.3x, inside the relayer's 1.5x cap).
   const bid = bidFor(s, id, good)?.price ?? null;
+  if (bid === null) return { error: `${m.name} isn't buying mangoes right now.` }; // the relayer refuses a sale with no bid
   const reach = Math.max(m.baseCost[good] * scarcity, (c.rivalPrice ?? m.baseCost[good]) * 1.15, bid === null ? 0 : bid * BID_STRETCH);
   const offer = Math.max(1, bid ?? 0, Math.round(reach * 0.62));
   const qty = Math.min(LOT, have, Math.floor(m.cash / offer));
   if (qty <= 0) return { error: `${m.name} can't afford mangoes right now.` };
-  const ceiling = Math.max(offer, Math.min(reach, m.cash / qty)); // never haggled past what the till can pay
+  // never haggled past what the till can pay, the relayer's signing window, or (for a stall that resells) its own shelf price
+  const resale = m.sells.includes(good) ? Math.max(bid, quote(s, id, good, false).price - 1) : Infinity;
+  const ceiling = Math.max(offer, Math.min(reach, Math.floor(m.cash / qty), Math.floor(bid * HAGGLE_CEILING), resale));
   return { merchant: id, good, mode, qty, unit: offer, open: offer, limit: ceiling, patience: PERSONALITY[id].patience, used: {}, history: [], moves: 0, over: null };
 }
 
@@ -223,6 +227,8 @@ export function applyTactic(s: EconomyState, h: HaggleSession, t: Tactic): MoveR
   // Clamp between the merchant's limit and 20% worse than the opening.
   const worst = h.mode === "buy" ? h.open * 1.2 : h.open * 0.8;
   unit = h.mode === "buy" ? Math.min(worst, Math.max(h.limit, unit)) : Math.max(worst, Math.min(h.limit, unit));
+  // the deal settles in whole coins (dealUnit rounds a sale up): never more than the till pays for this quantity
+  if (h.mode === "sell") unit = Math.min(unit, Math.floor(s.merchants[h.merchant].cash / qty));
   const patience = Math.max(0, h.patience - (success ? PATIENCE_HIT : PATIENCE_FAIL));
   const over = patience <= 0 ? "walked" : null;
   if (over) line = h.mode === "buy" ? "Enough. Come back tomorrow." : "I have a kitchen to run. Tomorrow.";
@@ -327,11 +333,11 @@ export function verifyDealUnit(s: EconomyState, id: MerchantId, side: Mode, good
   return better(unit, replayed) ? refused(`that haggle reaches ${replayed} c, not ${unit} c`, reference) : { ok: true, reason: "haggled", reference, kind: "haggle" };
 }
 
-/** The two scripted first-day prices (the tutorial's newcomer buy and Pema's delivery sale). They depend on tutorial state
- *  the chain cannot see, so the relayer allows each once per player (a Redis claim) and only inside the old window. */
-export function newcomerPrice(side: Mode, id: MerchantId, unit: number, reference: number): "buy" | "sell" | null {
+/** The one scripted first-day price: the tutorial's newcomer buy. It depends on tutorial state the chain cannot see,
+ *  so the relayer allows it once per player (a Redis claim) and only inside the old window. Pema's first delivery is
+ *  paid at her posted bid (a scripted 6 c sank her: she resells at 5 c). */
+export function newcomerPrice(side: Mode, id: MerchantId, unit: number, reference: number): "buy" | null {
   if (side === "buy" && (id === "tomas" || id === "mira") && unit <= reference && unit >= Math.max(Math.ceil(reference * 0.55), 4)) return "buy";
-  if (side === "sell" && id === "pema" && unit === 6) return "sell";
   return null;
 }
 

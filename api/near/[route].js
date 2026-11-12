@@ -11526,7 +11526,7 @@ function initialEconomy() {
 				baseCost: stock(3, 1, 0),
 				target: stock(24, 30, 0),
 				greed: .1,
-				rent: 40,
+				rent: 30,
 				rentEveryDays: 2,
 				cash: 24,
 				stock: stock(3, 16, 0),
@@ -11702,6 +11702,14 @@ function relationship(m, rep) {
 		multiplier: mult
 	};
 }
+/** What restocking one unit costs this stall: what its own standing bid pays (Pema restocks at LOYAL_RESTOCK x cost,
+*  Mira buys surplus at ARB_RESTOCK x cost), else the base cost. */
+const LOYAL_RESTOCK = 1.35;
+const ARB_RESTOCK = 1.4;
+const CLOSED_RESTOCK = 1.8;
+/** No stall sells below what restocking costs it plus this margin: a discount may squeeze, never lose on every sale. */
+const COST_MARGIN = 1.15;
+const restockCost = (m, good) => m.style === "loyal" ? Math.round(m.baseCost[good] * LOYAL_RESTOCK) : m.style === "arbitrage" ? Math.max(1, Math.round(m.baseCost[good] * ARB_RESTOCK)) : m.baseCost[good];
 /** Cheapest posted price among the other open sellers of `good` with stock. */
 function rivalBest(state, self, good) {
 	let best = null;
@@ -11768,6 +11776,14 @@ function quote(state, merchantId, good, forPlayer = true) {
 			raw = rival.price - 1;
 		}
 	}
+	const floor = Math.ceil(restockCost(m, good) * COST_MARGIN - 1e-9);
+	if (Math.round(raw) < floor) {
+		factors.push({
+			label: `Won't sell below restock cost, ${restockCost(m, good)} c (${pct(floor / raw)})`,
+			multiplier: floor / raw
+		});
+		raw = floor;
+	}
 	return {
 		price: Math.max(1, Math.round(raw)),
 		factors
@@ -11819,7 +11835,7 @@ function bidForRule(state, id, good) {
 		const left = state.flags[`reopenNeed.${id}`];
 		const need = typeof left === "number" ? left : m.target.mango - m.stock.mango;
 		return {
-			price: Math.round(m.baseCost.mango * 1.8),
+			price: Math.round(m.baseCost.mango * CLOSED_RESTOCK),
 			qty: Math.max(1, need),
 			reason: "Restocking to reopen"
 		};
@@ -11828,7 +11844,7 @@ function bidForRule(state, id, good) {
 	if (short <= 0) return null;
 	switch (m.style) {
 		case "loyal": return m.sells.includes(good) && m.stock[good] < m.target[good] * .5 ? {
-			price: Math.round(m.baseCost[good] * 1.8),
+			price: restockCost(m, good),
 			qty: short,
 			reason: "Restocking her shelves"
 		} : null;
@@ -11836,7 +11852,7 @@ function bidForRule(state, id, good) {
 		case "arbitrage": {
 			const glut = MERCHANT_IDS.some((o) => o !== id && state.merchants[o].stock[good] > state.merchants[o].target[good] * 1.2);
 			return m.sells.includes(good) && glut ? {
-				price: Math.max(1, Math.round(m.baseCost[good] * 1.4)),
+				price: restockCost(m, good),
 				qty: short,
 				reason: "Buys surplus cheap to resell"
 			} : null;
@@ -12783,7 +12799,7 @@ function openHaggle(s, id) {
 		const qty = Math.min(LOT, m.stock[good], Math.floor(s.player.coins / q.price));
 		if (m.stock[good] <= 0) return { error: "Sold out." };
 		if (qty <= 0) return { error: `Not enough coins (${q.price} c each).` };
-		const floor = Math.min(q.price, m.baseCost[good] * (1 + m.greed * .3) * (m.cash < m.rent ? .9 : 1));
+		const floor = Math.min(q.price, Math.max(m.baseCost[good] * (1 + m.greed * .3) * (m.cash < m.rent ? .9 : 1), restockCost(m, good), Math.floor(q.price * HAGGLE_FLOOR)));
 		return {
 			merchant: id,
 			good,
@@ -12804,10 +12820,12 @@ function openHaggle(s, id) {
 	const c = context(s, id, good);
 	const scarcity = Math.min(2.2, Math.max(.8, 1 + 1.1 * (1 - m.stock[good] / Math.max(1, m.target[good]))));
 	const bid = bidFor(s, id, good)?.price ?? null;
+	if (bid === null) return { error: `${m.name} isn't buying mangoes right now.` };
 	const reach = Math.max(m.baseCost[good] * scarcity, (c.rivalPrice ?? m.baseCost[good]) * 1.15, bid === null ? 0 : bid * BID_STRETCH);
 	const offer = Math.max(1, bid ?? 0, Math.round(reach * .62));
 	const qty = Math.min(LOT, have, Math.floor(m.cash / offer));
 	if (qty <= 0) return { error: `${m.name} can't afford mangoes right now.` };
+	const resale = m.sells.includes(good) ? Math.max(bid, quote(s, id, good, false).price - 1) : Infinity;
 	return {
 		merchant: id,
 		good,
@@ -12815,7 +12833,7 @@ function openHaggle(s, id) {
 		qty,
 		unit: offer,
 		open: offer,
-		limit: Math.max(offer, Math.min(reach, m.cash / qty)),
+		limit: Math.max(offer, Math.min(reach, Math.floor(m.cash / qty), Math.floor(bid * HAGGLE_CEILING), resale)),
 		patience: PERSONALITY[id].patience,
 		used: {},
 		history: [],
@@ -12945,6 +12963,7 @@ function applyTactic(s, h, t) {
 	}
 	const worst = h.mode === "buy" ? h.open * 1.2 : h.open * .8;
 	unit = h.mode === "buy" ? Math.min(worst, Math.max(h.limit, unit)) : Math.max(worst, Math.min(h.limit, unit));
+	if (h.mode === "sell") unit = Math.min(unit, Math.floor(s.merchants[h.merchant].cash / qty));
 	const patience = Math.max(0, h.patience - (success ? PATIENCE_HIT : PATIENCE_FAIL));
 	const over = patience <= 0 ? "walked" : null;
 	if (over) line = h.mode === "buy" ? "Enough. Come back tomorrow." : "I have a kitchen to run. Tomorrow.";
@@ -13025,11 +13044,11 @@ function verifyDealUnit(s, id, side, good, unit, tactics, rep = 0) {
 		kind: "haggle"
 	};
 }
-/** The two scripted first-day prices (the tutorial's newcomer buy and Pema's delivery sale). They depend on tutorial state
-*  the chain cannot see, so the relayer allows each once per player (a Redis claim) and only inside the old window. */
+/** The one scripted first-day price: the tutorial's newcomer buy. It depends on tutorial state the chain cannot see,
+*  so the relayer allows it once per player (a Redis claim) and only inside the old window. Pema's first delivery is
+*  paid at her posted bid (a scripted 6 c sank her: she resells at 5 c). */
 function newcomerPrice(side, id, unit, reference) {
 	if (side === "buy" && (id === "tomas" || id === "mira") && unit <= reference && unit >= Math.max(Math.ceil(reference * .55), 4)) return "buy";
-	if (side === "sell" && id === "pema" && unit === 6) return "sell";
 	return null;
 }
 // server/near/talk.ts

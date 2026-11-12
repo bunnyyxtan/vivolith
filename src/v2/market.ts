@@ -83,6 +83,8 @@ export interface StallState {
   readonly upgraded: boolean;
   /** 0..2 from pricing.ts stallPull. */
   readonly pull: number;
+  /** struggling: open but the till is short of rent; recovering: reopened within the last day. */
+  readonly mood?: "struggling" | "recovering" | null;
 }
 
 const CRATE_UNITS = 4; // one crate on the pile per 4 units of stock
@@ -121,7 +123,17 @@ function makeStallDressing(scene: THREE.Scene, post: Post, y: number): (s: Stall
     g.add(c);
     return c;
   });
-  const shutter = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 1.0), new THREE.MeshToonMaterial({ color: 0x5b6470, side: THREE.DoubleSide }));
+  // roller shutter: grey with slat lines (a small canvas, repeated), so a half-lowered one still reads as a shutter
+  const sc = document.createElement("canvas");
+  sc.width = 8; sc.height = 32;
+  const sx = sc.getContext("2d")!;
+  sx.fillStyle = "#8b94a0"; sx.fillRect(0, 0, 8, 32);
+  sx.fillStyle = "#5b6470"; sx.fillRect(0, 26, 8, 6);
+  const slats = new THREE.CanvasTexture(sc);
+  slats.colorSpace = THREE.SRGBColorSpace;
+  slats.wrapS = slats.wrapT = THREE.RepeatWrapping;
+  slats.repeat.set(1, 9);
+  const shutter = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 1.0), new THREE.MeshToonMaterial({ color: 0xffffff, map: slats, side: THREE.DoubleSide }));
   shutter.position.set(front + side * 0.15, y + 1.05, post.npc.z);
   shutter.rotation.y = face;
   scene.add(shutter);
@@ -145,11 +157,37 @@ function makeStallDressing(scene: THREE.Scene, post: Post, y: number): (s: Stall
   const lamp = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.14, 0.3, 10), lampMat);
   lamp.position.set(front + side * 0.35, y + 2.05, post.npc.z);
   scene.add(lamp);
+  // Recovering: a hand-painted "Open again" banner hung under the canopy for the day after a reopening.
+  const bc = document.createElement("canvas");
+  bc.width = 512; bc.height = 96;
+  const bx = bc.getContext("2d")!;
+  bx.fillStyle = "#f4ead2"; bx.fillRect(0, 0, 512, 96);
+  bx.fillStyle = "#00a86b"; bx.fillRect(0, 0, 512, 10); bx.fillRect(0, 86, 512, 10);
+  bx.fillStyle = "#1a2238"; bx.font = "700 52px Inter, system-ui, sans-serif"; bx.textAlign = "center"; bx.textBaseline = "middle";
+  bx.fillText("Open again", 256, 50);
+  const btex = new THREE.CanvasTexture(bc);
+  btex.colorSpace = THREE.SRGBColorSpace;
+  const banner = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 0.24), new THREE.MeshBasicMaterial({ map: btex, side: THREE.DoubleSide }));
+  banner.position.set(front + side * 0.5, y + 1.48, post.npc.z); // under the canopy edge, below the shop sign
+  banner.rotation.y = face;
+  banner.visible = false;
+  scene.add(banner);
   applyToon(g, 0.008, undefined, true);
+  let mood: StallState["mood"] = null, open = true, t = 0;
+  window.setInterval(() => { // a struggling stall's lantern gutters: cheap, and only this one material
+    if (!open || mood !== "struggling") return;
+    t += 1;
+    setGlowBase(lampMat, LANTERN_GLOW * (t % 7 === 0 || t % 11 === 0 ? 0.25 : 0.7));
+  }, 140);
   return (s) => {
     const n = Math.min(MAX_CRATES, Math.ceil(s.stock / CRATE_UNITS));
     crates.forEach((c, i) => { c.visible = i < n; });
-    shutter.visible = !s.open;
+    mood = s.open ? s.mood ?? null : null; open = s.open;
+    // closed: the shutter is all the way down; struggling: half down over the counter, the stall trading behind it
+    shutter.visible = !s.open || mood === "struggling";
+    shutter.scale.y = s.open ? 0.5 : 1; // struggling: the top half of the opening, the bottom still trading
+    shutter.position.y = y + (s.open ? 1.3 : 1.05);
+    banner.visible = mood === "recovering";
     up.visible = s.upgraded;
     setGlowBase(lampMat, s.open ? LANTERN_GLOW : 0);
   };

@@ -40,7 +40,7 @@ custody balance. Coin supply is exactly the mints minus the burns, readable at a
 - **Who gets it:** every new account. `register_player` mints `STARTER_COIN` (40 c) on NEAR the first time an account
   joins the market, and never again for that account. A reload, Continue or New Game reuses the account and mints
   nothing (verified on testnet 2026-11-09: coin supply unchanged by repeated `guest`/`register` calls).
-- **Why 40 c:** the first day costs about 12 c for three mangoes at the newcomer price (the delivery earns 18 c back),
+- **Why 40 c:** the first day costs about 12 c for three mangoes at the newcomer price (they sell back at Pema's or Arin's posted bid),
   9 to 15 c for the haggle purchase, and 5 c for a pack of Pema shares. 40 c covers all of that with room left for a
   pack at a 10 c stall, so a new player never runs dry before their first profit. Accounts registered before the
   change keep their 25 c history; nothing was re-granted.
@@ -156,6 +156,22 @@ partners' shares take coin out of the stall.
   - The Guild never mints after its seed. Its assets cannot grow past 200 through dues.
   - The relayer lends whenever a till is under 18 c (one tutorial delivery), or under a closed stall's whole reopening
     cost, and collects from tills above 80 c.
+
+## 5b. Stall sustainability (2026-11-12)
+
+- **Cost floor:** no stall posts an ask below what restocking costs it times `COST_MARGIN` (1.15). Pema restocks at
+  `LOYAL_RESTOCK` (1.35 x cost, 4 c), so she asks at least 5 c. Before this, her bid (1.8 x cost, 5 c) sat above her
+  ask (3 c, after the shortage cap and the rent-due discount): every mango she bought lost money, and supplying her
+  closed her sooner.
+- **Rent:** Pema's rent is 30 c every two days, like Mira's (Tomas keeps 40 c for the prime pitch).
+- **No scripted rescue price:** the first delivery is paid at Pema's posted bid; the relayer no longer allows a one-off 6 c sale.
+- **Haggling stays tradeable:** a negotiated price never leaves the relayer's signing window, never exceeds what the
+  till can pay in whole coins, never goes under a stall's restock cost, and never makes a reseller pay above its
+  own shelf price (`haggle.check.ts` explores every 3-move sequence on 96 stall states).
+- `node src/economy/sustain.check.ts`, 14 days: unhelped, Pema closes on 2 days and recovers; supplied with the
+  orchard's 3 mangoes a day at her bid, she never closes; selling them to Arin instead earns the player about twice
+  as much. Tomas and Arin never close.
+- **Live state:** these rules reach NEAR only when the relayer is redeployed; the deployed relayer still runs the old rules.
 
 ## 6. Merchant behaviour (relayer, every market turn)
 

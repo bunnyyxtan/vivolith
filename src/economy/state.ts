@@ -105,7 +105,7 @@ export function initialEconomy(): EconomyState {
       pema: {
         id: "pema", name: "Auntie Pema", shop: "Pema's Fruit", style: "loyal",
         sells: ["mango", "lemon"], baseCost: stock(3, 1, 0), target: stock(24, 30, 0),
-        greed: 0.1, rent: 40, rentEveryDays: 2,
+        greed: 0.1, rent: 30, rentEveryDays: 2,
         cash: 24, stock: stock(3, 16, 0), recentSales: stock(0, 0, 0), status: "open",
       },
       tomas: {

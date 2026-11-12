@@ -24,6 +24,17 @@ paid call was possible). Anything that needs the live chain is marked READY FOR 
 | Haggle: merchant reaction over their head per tactic | VERIFIED offline | Browser: Buy double landed, 18 c for 6 (opened 24 c) |
 | Frame time at the orchard crate | MEASURED | 3.0 ms median (`frameTime(60)`, 964x906 pane, RTX 3050) |
 
+### Phase 1b: economy depth and integration (2026-11-12, local only)
+
+| Item | Status | Evidence |
+|---|---|---|
+| Pema's structural loss (bid 5 c above ask 3 c) fixed: restock-cost floor on every ask, loyal restock bid 1.35 x cost, Pema rent 30 c, no scripted 6 c delivery | VERIFIED offline; READY FOR LIVE VERIFICATION (needs relayer redeploy) | `node src/economy/sustain.check.ts`: Pema closed days 10 -> 2 unhelped, 12 -> 0 when supplied; Arin pays the player ~2x for the same mangoes |
+| Haggle: negotiated price always inside the relayer window, affordable in whole coins (bug found: 32 c offered from a 30 c till), never under restock cost, resellers capped at their shelf price; no sell haggle without a bid; roomless haggle disabled with the reason | VERIFIED (checks) | `haggle.check.ts` explores every 3-move sequence on 96 stall states; tutorial haggle still wins a coin |
+| Investment: owned, paid (NEAR receipts), earned-not-yet-paid (`get_pending`), labelled forecast per pack, buy-back loss stated | VERIFIED offline (forecast and texts); pending read is chain-only | Browser: "Forecast per pack about 0.5 c a day", buy-back 1 c under cost |
+| Orchard failed-mint retry in the API bundle | VERIFIED in bundle, NOT DEPLOYED | `releaseOnce` defined and called only on `!r.ok` |
+| Pema stall moods from real state: struggling (half shutter, guttering lantern), closed (full slatted shutter), recovering (Open again banner for a game day) | VERIFIED offline | `phase1b-pema-struggling.jpg`, `phase1b-pema-closed.jpg`, `phase1b-pema-recovering.jpg` (closed and recovering staged by calling setStall directly) |
+| Browser pass after the last text changes (haggle reason, margin note) | BLOCKED | The browser pane refused new WebGL contexts after many reloads; typecheck and checks pass |
+
 ### Phase 1 live pass on testnet (2026-11-12, approved by the owner)
 
 Dev relayer with real testnet keys, NEAR AI and ElevenLabs keys blanked (`near-world-live-noai`), one fresh guest

@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { initialEconomy } from "./state.ts";
 import { accrueSale, advance, challengeStandingContract, invest, payReleaseFee, pemaBuysFromTomas, recordRestock, reopenGap, sellShares, shareSupply, teahouseForwardBuy, tryReopen } from "./sim.ts";
-import { bidFor, profitRun, quote } from "./pricing.ts";
+import { bidFor, profitRun, quote, restockCost } from "./pricing.ts";
 import { RESIDENTS, executableOffers, planResident, type Offer } from "./residents.ts";
 
 // 0. A closed stall still bids for stock, and reopens the moment deliveries cover the gap (not before).
@@ -46,10 +46,13 @@ assert.equal(shut.flags["reopenNeed.pema"], undefined);
 
 const hours = (h: number) => h * 60;
 
-// 1. Do nothing: the held shipment starves Pema and she cannot make Day 1 rent.
+// 1. Do nothing: Pema scrapes through Day 1 rent with a thin till, then the held shipment starves her by Day 3.
 const idle = initialEconomy();
 advance(idle, hours(12.5)); // 09:00 -> 21:30
-assert.equal(idle.merchants.pema.status, "closed", `idle path: pema cash ${idle.merchants.pema.cash}`);
+assert.equal(idle.merchants.pema.status, "open", `idle path, day 1: pema cash ${idle.merchants.pema.cash}`);
+assert.ok(idle.merchants.pema.cash < idle.merchants.pema.rent, "idle path, day 1: nothing left for the next rent");
+advance(idle, hours(48));
+assert.equal(idle.merchants.pema.status, "closed", `idle path, day 3: pema cash ${idle.merchants.pema.cash}`);
 
 // 2. Player pays the storage fee at 10:00: mangoes arrive 11:30, prices fall, Pema makes rent.
 const rescue = initialEconomy();
@@ -58,7 +61,9 @@ const before = quote(rescue, "pema", "mango").price;
 assert.ok(payReleaseFee(rescue, "pema-mangoes").ok);
 advance(rescue, hours(2));
 const after = quote(rescue, "pema", "mango").price;
-assert.ok(after < before, `price should fall after delivery: ${before} -> ${after}`);
+// the crates end the shortage; her price can't fall under her restock-cost floor (pricing.ts COST_MARGIN)
+assert.ok(after <= before && rescue.merchants.pema.stock.mango > 20, `delivery stocks her without raising the price: ${before} -> ${after}`);
+assert.ok(after >= Math.ceil(restockCost(rescue.merchants.pema, "mango") * 1.15 - 1e-9), "never under restock cost");
 advance(rescue, hours(9.5));
 assert.equal(rescue.merchants.pema.status, "open", `rescue path: pema cash ${rescue.merchants.pema.cash}`);
 

@@ -22,8 +22,9 @@ export interface Step {
 
 const f = (s: EconomyState, k: string): boolean => s.flags[k] === true;
 
-/** Price Pema pays for the first delivery: she is desperate and generous (the relayer caps deals server-side). */
-export const DELIVERY_PRICE = 6;
+/** The newcomer's price floor at the tutorial seller (the relayer's newcomerPrice allows a buy down to 4 c once).
+ *  Pema's first delivery is paid at her real posted bid: a scripted price above what she resells for would sink her. */
+export const NEWCOMER_FLOOR = 4;
 
 /** Who sells the tutorial its mangoes: Tomas, unless the shared market has closed him or emptied his crates. */
 export const tutorSeller = (s: EconomyState): MerchantId => {
@@ -55,7 +56,7 @@ export const STEPS: readonly Step[] = [
   },
   {
     id: "deliver", title: "Sell your mangoes: Pema needs them", target: "pema",
-    detail: () => `Pema pays ${DELIVERY_PRICE} c a mango and needs stock to sell before rent. Other stalls post their own bids: the trade panel compares them. Your call.`,
+    detail: (s) => { const b = bidFor(s, "pema", "mango")?.price; return `${b ? `Pema bids ${b} c a mango` : "Pema isn't bidding this minute"} and needs stock to sell before rent. Other stalls post their own bids: the trade panel compares them. Your call.`; },
     done: (s) => f(s, "deliveredPema") || f(s, "soldElsewhere"),
     reward: "",
   },
