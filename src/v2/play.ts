@@ -25,7 +25,7 @@ import { applyTactic, closeDeal, dealTotal, dealUnit, isLocked, lockKey, openHag
 import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
 import {
-  EXPLORER_ACCOUNT, EXPLORER_TX, agentDecision, type AgentDecision, balances, buyPosted, sellPosted, connectGuest, haggleDeal, marketTick, merchantAccount, playerId, playerLabel, receipts as chainReceipts,
+  EXPLORER_ACCOUNT, EXPLORER_TX, agentDecision, finalHeight, type AgentDecision, type ChainReceipt, balances, buyPosted, sellPosted, connectGuest, haggleDeal, marketTick, merchantAccount, playerId, playerLabel, receipts as chainReceipts,
   settleDay, claimDividends, lastMarketTurn, askMerchant, pickOrchard, marketDay, isOffline, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
 } from "../near/chain";
 
@@ -1538,23 +1538,42 @@ export async function createPlay(game: Game): Promise<Play> {
    *  them to that stall to say it. Only receipts newer than the first look count, so history is not replayed. */
   const residentSeen: Record<string, number> = {};
   const nameOf = (acct: string): string => state.merchants[acct.split(".")[0] as MerchantId]?.name ?? acct.split(".")[0];
+  const BLOCK_SEC = 1.1, DAY_SEC = 600; // NEAR's block time (for "how long ago") and one market day
+  const tradeText = (x: ChainReceipt): string => {
+    const qty = Number(x.qty), price = Number(x.price);
+    return x.kind === "sold" ? `sold ${qty} ${x.token_id === "mango" ? (qty === 1 ? "mango" : "mangoes") : x.token_id} to ${nameOf(x.counterparty)} for ${qty * price} c` : `bought a ${x.token_id} from ${nameOf(x.counterparty)} for ${price} c`;
+  };
+  const ago = (sec: number): string => (sec < 90 ? "just now" : `${Math.round(sec / 60)} min ago`);
+  /** A resident's confirmed trades. New ones (seen while playing) are walked to the stall and said there; trades from
+   *  before this session opened are only told as past, with their age, never acted out as if they were live. "NEAR AI
+   *  chose this" appears only when a persisted Jev decision for that resident, with its transaction, was made at that time. */
   const syncResidents = async (): Promise<void> => {
+    const height = await finalHeight();
+    const past: string[] = [];
     await Promise.all(RESIDENTS.map(async (r, who) => {
       const rc = await chainReceipts(merchantAccount(r.id)).catch(() => null);
       if (!rc) return;
       const from = residentSeen[r.id];
       residentSeen[r.id] = Math.max(from ?? 0, ...rc.map((x) => x.block_height));
-      if (from === undefined || ff) return;
-      const fresh = rc.filter((y) => y.block_height > from).sort((a, b) => a.block_height - b.block_height);
-      // the resident's NEAR AI plan for today (a confirmed one only): said at the stall with the trade it chose
-      const plan = fresh.length ? await agentDecision(r.id) : null;
-      const tag = plan && plan.source === "ai" && plan.txHash && plan.day === Math.floor(Date.now() / 600000) ? " NEAR AI chose this." : "";
-      for (const x of fresh) {
+      if (ff) return;
+      const first = from === undefined;
+      const fresh = rc.filter((y) => (y.kind === "sold" || y.kind === "bought") && (first || y.block_height > from)).sort((a, b) => a.block_height - b.block_height);
+      const age = (x: ChainReceipt): number | null => (height === null ? null : Math.max(0, height - x.block_height) * BLOCK_SEC);
+      const recent = first ? fresh.filter((x) => (age(x) ?? Infinity) <= DAY_SEC).slice(-2) : fresh;
+      if (!recent.length) return;
+      const plan = await agentDecision(r.id); // persisted (Redis) Jev decision, or null
+      const chose = (x: ChainReceipt): string => {
+        const a = age(x);
+        return plan && plan.source === "ai" && plan.txHash && a !== null && Math.abs((Date.now() - plan.at) / 1000 - a) < 180 ? " NEAR AI chose this." : "";
+      };
+      for (const x of recent) {
+        if (first) { past.push(`${r.name}, ${ago(age(x) ?? 0)}: ${tradeText(x)}.${chose(x)}`); continue; }
         const mer = x.counterparty.split(".")[0], qty = Number(x.qty), price = Number(x.price);
-        if (x.kind === "sold") market.life.errand(who, mer, `${r.name}: ${qty} ${x.token_id === "mango" ? "mangoes" : `${x.token_id}s`} for ${nameOf(x.counterparty)}. +${qty * price} c${tag}`);
-        else if (x.kind === "bought") market.life.errand(who, mer, `${r.name}: one ${x.token_id}, ${price} c. Lunch!${tag}`);
+        if (x.kind === "sold") market.life.errand(who, mer, `${r.name}: ${qty} ${x.token_id === "mango" ? "mangoes" : `${x.token_id}s`} for ${nameOf(x.counterparty)}. +${qty * price} c${chose(x)}`);
+        else market.life.errand(who, mer, `${r.name}: one ${x.token_id}, ${price} c. Lunch!${chose(x)}`);
       }
     }));
+    if (past.length) hud.toast(past.join("  ·  "));
   };
   /** A market turn's log: a resident who could not afford food goes and stands at the stall, saying the real price. */
   const hungry = (t: Record<string, unknown>): void => {

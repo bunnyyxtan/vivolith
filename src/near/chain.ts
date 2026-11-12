@@ -358,6 +358,8 @@ export async function balances(accountId: string): Promise<Record<string, number
   return Object.fromEntries(rows.map(([t, v]) => [t, Number(v)]));
 }
 
+/** The latest final block height (null when the RPC does not answer): how old a receipt is, in blocks. */
+export const finalHeight = async (): Promise<number | null> => { try { return (await provider.viewBlock({ finality: "final" })).header.height; } catch { return null; } };
 export const receipts = (accountId: string): Promise<ChainReceipt[]> => view<ChainReceipt[]>("get_receipts", { account_id: accountId });
 
 /** Asks the relayer to run the merchants' autonomous turn and the day's settlement (both throttled server-side). */
