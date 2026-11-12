@@ -140,7 +140,7 @@ async function kv(cfg: Config, cmd: ["GET", string] | ["SET", string, string]): 
 const agentMemory = new Map<string, { v: string; until: number }>();
 /** The decision guard's store: the same Upstash Redis REST the limiter and market clock use (persistent, shared by every
  *  instance), else per-instance memory for local dev. Redis errors throw: agent.ts then falls back to the rule price. */
-function decisionStore(cfg: Config): DecisionStore {
+export function decisionStore(cfg: Config): DecisionStore {
   if (cfg.redisUrl && cfg.redisToken) {
     const cmd = async (args: string[]): Promise<string | null> => {
       const r = await fetch(cfg.redisUrl!, { method: "POST", headers: { authorization: `Bearer ${cfg.redisToken}`, "content-type": "application/json" }, body: JSON.stringify(args) });
@@ -198,7 +198,7 @@ interface TxResult {
 }
 
 /** Final outcome of a transaction: ok only if the transaction and every receipt succeeded. */
-function outcome(r: unknown): TxResult {
+export function outcome(r: unknown): TxResult {
   const o = r as { transaction?: { hash?: string }; status?: unknown; receipts_outcome?: { outcome: { status: unknown } }[] };
   const statuses = [o.status, ...(o.receipts_outcome ?? []).map((x) => x.outcome.status)];
   const failure = statuses.find((s) => typeof s === "object" && s !== null && "Failure" in s) as { Failure: unknown } | undefined;
@@ -644,7 +644,7 @@ interface StallRow { merchant: string; open: boolean; need: string; delivered: s
 
 /** Rebuilds the four merchants from their on-chain balances and stall status so the shared rules in src/economy run
  *  on real state (a closed stall is closed for the planner, the pricing and the Guild alike). */
-async function chainEconomy(provider: JsonRpcProvider, cfg: Config): Promise<EconomyState> {
+export async function chainEconomy(provider: JsonRpcProvider, cfg: Config): Promise<EconomyState> {
   const st = initialEconomy();
   st.flags.onchain = true;
   for (const s of await view<StallRow[]>(provider, cfg.contractId, "get_stalls", {})) {

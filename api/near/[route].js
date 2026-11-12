@@ -12974,15 +12974,14 @@ function verifyDealUnit(s, id, side, good, unit, tactics, rep = 0) {
 	});
 	if (!Number.isInteger(unit) || unit < 1) return refused("bad unit price");
 	const better = (a, b) => side === "buy" ? a < b : a > b;
-	if (good !== "mango") {
-		const ref = side === "buy" ? quote(s, id, good).price : bidFor(s, id, good)?.price ?? 0;
-		return better(unit, ref) ? refused(`the price is ${ref} c`, ref) : {
-			ok: true,
-			reason: "rule price",
-			reference: ref,
-			kind: "rule"
-		};
-	}
+	const rule = side === "buy" ? quote(s, id, good).price : bidFor(s, id, good)?.price ?? 0;
+	if (!better(unit, rule)) return {
+		ok: true,
+		reason: "rule price",
+		reference: rule,
+		kind: "rule"
+	};
+	if (good !== "mango") return refused(`the price is ${rule} c`, rule);
 	const probe = structuredClone(s);
 	probe.player.coins = Math.max(probe.player.coins, 999);
 	probe.player.inventory.mango = side === "sell" ? Math.max(LOT, probe.player.inventory.mango) : 0;

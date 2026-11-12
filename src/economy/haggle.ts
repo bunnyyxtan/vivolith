@@ -305,10 +305,9 @@ export function verifyDealUnit(s: EconomyState, id: MerchantId, side: Mode, good
   const refused = (reason: string, reference = 0): PriceCheck => ({ ok: false, reason, reference, kind: "refused" });
   if (!Number.isInteger(unit) || unit < 1) return refused("bad unit price");
   const better = (a: number, b: number): boolean => (side === "buy" ? a < b : a > b); // a is a better price for the player than b
-  if (good !== "mango") { // no haggle exists for these: the posted price is the price
-    const ref = side === "buy" ? quote(s, id, good).price : bidFor(s, id, good)?.price ?? 0;
-    return better(unit, ref) ? refused(`the price is ${ref} c`, ref) : { ok: true, reason: "rule price", reference: ref, kind: "rule" };
-  }
+  const rule = side === "buy" ? quote(s, id, good).price : bidFor(s, id, good)?.price ?? 0;
+  if (!better(unit, rule)) return { ok: true, reason: "rule price", reference: rule, kind: "rule" }; // works for a closed stall too
+  if (good !== "mango") return refused(`the price is ${rule} c`, rule); // no haggle exists for these: the posted price is the price
   const probe = structuredClone(s);
   probe.player.coins = Math.max(probe.player.coins, 999);
   probe.player.inventory.mango = side === "sell" ? Math.max(LOT, probe.player.inventory.mango) : 0; // modeFor follows what the player holds
