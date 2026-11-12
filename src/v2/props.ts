@@ -42,6 +42,13 @@ const PLACARDS: Record<string, { w: number; h: number; style: "civic" | "dark" |
   way_ge: { w: 2.2, h: 0.8, style: "civic", logo: "none", lines: [{ text: "↑ Spire Station", size: 0.3, weight: 700 }, { text: "↖ Demo Day Lawn", size: 0.3, weight: 700 }] },
 };
 
+/** How far (metres, along the board's readable direction) a placard is moved from its PLACARD_ empty. Found by the sign
+ *  audit (rays from player-camera positions to the face): the post of a posted board is a 10 cm square centred on the
+ *  empty, so its front half stood over the lettering (Mango Orchard and the four way signs): the board now hangs
+ *  0.12 m in front of it, the post behind. The Builders' Yard board sat 0.52 m inside the wall it hangs on: moved out to
+ *  the wall face. town.glb is not rebuilt for this; blender/build_v2_spire_district.py still has the old positions. */
+const PLACARD_NUDGE: Record<string, number> = { orchard: 0.12, way_w: 0.12, way_e: 0.12, way_gw: 0.12, way_ge: 0.12, yard: 0.56 };
+
 function placard(id: string): THREE.Object3D | null {
   const p = PLACARDS[id];
   if (!p) return null;
@@ -52,6 +59,7 @@ function placard(id: string): THREE.Object3D | null {
   const g = new THREE.Group();
   g.add(back, face);
   g.name = `placard_${id}`;
+  g.position.z = PLACARD_NUDGE[id] ?? 0;
   return g;
 }
 
