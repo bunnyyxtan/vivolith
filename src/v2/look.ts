@@ -35,8 +35,14 @@ interface Key {
 }
 const DAY: Omit<Key, "at"> = {
   zen: [0.04, 0.24, 0.86], mid: [0.12, 0.45, 0.98], hor: [0.5, 0.76, 1.0], cloud: [1, 1, 1], sun: "#fff4de", sunI: 3.4,
-  dir: [SUN_DIR.x, SUN_DIR.y, SUN_DIR.z], sky: "#9ccaff", ground: "#8a9cc8", hemiI: 1.0, fog: "#8fc6ff", exposure: 1.2, glow: DAY_GLOW,
+  // fill 1.6 (was 1.0): at 1.0 midday shade (the Spire's shadow over the Harbor Depot yard) fell to near-black navy;
+  // now shade reads light slate blue (a less saturated sky fill, so the graded shade is not navy), sunlit surfaces
+  // unchanged (the sun still dominates). Pixel probes: depot yard shade 46,63,83 -> 77,83,92; avenue 43,63,92 -> 51,65,87
+  dir: [SUN_DIR.x, SUN_DIR.y, SUN_DIR.z], sky: "#bcd3ee", ground: "#8a9cc8", hemiI: 1.6, fog: "#8fc6ff", exposure: 1.2, glow: DAY_GLOW,
 };
+/** Light level that means "full daylight" for character ink (the day key before the fill was raised): dusk and night ink
+ *  keep their tuned strength. */
+const INK_REF = 3.4 * 0.3 + 1.0 * 0.7;
 const DAWN: Omit<Key, "at"> = {
   zen: [0.1, 0.22, 0.55], mid: [0.45, 0.45, 0.7], hor: [1.0, 0.66, 0.45], cloud: [1.0, 0.82, 0.75], sun: "#ffc58a", sunI: 2.0,
   dir: [0.75, 0.25, 0.35], sky: "#c8b8d8", ground: "#7a6a80", hemiI: 0.85, fog: "#e8b89a", exposure: 1.15, glow: 0.35,
@@ -222,7 +228,7 @@ export function createLook(canvas: HTMLCanvasElement): Look {
       renderer.toneMappingExposure = a.exposure + (b.exposure - a.exposure) * t;
       setGlow(a.glow + (b.glow - a.glow) * t);
       // character ink follows the light of the hour: 1 by day, ~0.5 at dusk, ~0.3 at night
-      setInkLight(Math.pow((sun.intensity * 0.3 + hemi.intensity * 0.7) / (DAY.sunI * 0.3 + DAY.hemiI * 0.7), 1.5));
+      setInkLight(Math.min(1, Math.pow((sun.intensity * 0.3 + hemi.intensity * 0.7) / INK_REF, 1.5)));
       // the sky's reflections: re-bake every quarter game-hour (a few ms; never per frame)
       const q = Math.floor(h * 4), now = performance.now();
       if (q !== lastBake && now - bakedAt > 500) { lastBake = q; bakedAt = now; rebakeEnv(); } // fast-forward: twice a second at most

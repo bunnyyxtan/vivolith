@@ -129,6 +129,27 @@ Offline or isolated only (mocked RPC, mocked NEAR AI, or offline browser play):
 | Residents (Lin, Dev) and real NEAR settlement in this journey | NOT PLAYED | Residents only act in on-chain market turns; a connected run writes to the shared testnet market (production) and needs the owner's approval |
 | At 800x600 the trade panel covers the objective card's rent meter | OPEN | Seen in `rentnight-a1-choice-at-pema.jpg`; not checked at 1080p |
 
+## Phase 5: world quality and atmosphere (2026-11-13)
+
+**Status: DEVELOPMENT COMPLETE (local, offline play).** Played in the browser pane (`near-world-offline`, 1024x768,
+pixel ratio 1, RTX 3050). Before/after captures: `docs/evidence/phase5-before-*.jpg`, `phase5-after-*.jpg`. Traffic
+measured with a frame-by-frame probe over `window.__traffic` (a "pop" = one frame with a body jump > 0.25 m or a yaw
+step > 0.06 rad). No asset was generated, bought or rebuilt; town.glb fixes are applied at load.
+
+| Item | Status | Evidence |
+|---|---|---|
+| Missing `car_van.glb` (404, two empty dock bays): town.glb names `car_van` slots but no such model exists. The slots now load the existing EV pickup, fitted to the van collider (z scale 0.92, 0.15 m back) so its nose stops at the dock wall instead of 0.4 m inside it | FIXED, VERIFIED | `phase5-after-dock-vans.jpg`; no request >= 400 in the resource log after reload |
+| Cars popped 0.7-1.8 m (yaw up to 0.53 rad) at every park / leave: the path parameter is the axle midpoint but bay paths end at the front axle, and pull-out and reverse-out restarted the axles from the path. Bay paths now end when the leading axle arrives, leaving keeps the axle in place, and after any change of path or direction the leading axle's offset from its new path is eased out over 1.5 m of driving (never while standing) | FIXED, VERIFIED | Probe before: 19 pops / 90 s. After: 0 pops in 150 + 140 s (53 park/leave transitions, 0 car overlaps) |
+| Cars froze their front axle then jumped 1.4 m after U-turn rings: `cafe_f0` and siblings are 0.47 m stubs and the look-ahead reached only one lane ahead. The lane after a stub (< 6 m) is now chosen in advance and looked through | FIXED, VERIFIED | Traced car 5: front frozen at (-53, 71.6) for 7 frames, then 1.39 m jump; after: 0 such events |
+| Grass tufts (26k triangles of flat green trapezoids on every lawn and tree pit) read as cheap blobs | REMOVED | `phase5-before-orchard.jpg` vs `phase5-after-orchard.jpg`; one draw call and its shadow pass fewer |
+| Asphalt read near-black navy (cool grey under the blue fill and the 1.3 saturation grade) | FIXED | Warm grey `#625c58`: slate in shade, warm grey in sun (`phase5-after-market.jpg`, `-road.jpg`) |
+| Harbor Depot yard: paver tops exported with v fixed near 0.9, smearing one texel row into dark streaks | FIXED | Top faces re-mapped like the market (u = x, v = z + 1) at load |
+| Midday shade (the Spire's shadow over the depot yard) went near-black navy | FIXED | Day fill 1.0 -> 1.6 with a less saturated sky colour; pixel probes: depot shade 46,63,83 -> 77,83,92, avenue shade 43,63,92 -> 51,65,87. Character ink keeps its old day/dusk/night levels (fixed reference). Dawn, dusk and night keys unchanged: dusk reads warm violet, night and Rent Night (21:05) keep lamps, stall lights and the Spire's neon readable without blooming over Kavi (`phase5-after-dusk.jpg`, `-night.jpg`, `-rentnight.jpg`) |
+| Street sounds: passing cars were a flat stereo effect. `audio.sfx(id, at)` now plays a world sound through a panner (inverse distance, ref 4 m, max 60 m) at the car's position; street sounds (cars, footsteps) moved to a bus under the dialogue duck, like ambience and music, so speech stays clear. Ambience (day / market / night beds), footsteps and event effects were already wired and are unchanged; the Phase 3 voice route and the silent fallback are untouched | IMPLEMENTED, VERIFIED (instrumented) | Instrumented `AudioContext`: Kavi placed beside a moving car, one `car_pass` through a panner at the car (refDistance 4); the next two within the 5 s quiet gap stayed silent as designed. Not listened to by a human |
+| Performance | MEASURED | Render (gl.finish, median of 3x60) / simulation per 1/60 step: market 3.5 / 2.2 ms, stalls 3.2 / 2.3, orchard 2.1 / 1.9, depot 2.4 / 1.9, dock 2.1 / 2.1, avenue 2.9 / 1.9, dusk 3.1 / 2.8, night 3.0 / 2.1, Rent Night 3.0 / 2.4. Same range as Phase 4 (render 2.9-3.8, sim 1.5-1.8; pane run-to-run spread ~0.5 ms). Not measured at 1080p |
+| Checks | PASS | Client typecheck; economy, haggle, recovery, sustain, collision, map, npc, story; server agent, autonomy, butterfly, turn, voice; production build (`lines.json` regenerated) |
+| Not done | OPEN | The depot's service counter is still a plain box; lawns are flat colour now (no replacement grass); the car sound stays where the car was when it started (~2 s); no new ambience for the harbor (no audio generated, by instruction); outline thickness not changed (characters and props looked clean in every capture) |
+
 ## Phase 4: living characters and town behaviour (2026-11-13)
 
 **Status: DEVELOPMENT COMPLETE (local, offline play).** Measured with a frame-by-frame probe over the whole town

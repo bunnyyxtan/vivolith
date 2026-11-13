@@ -28,6 +28,8 @@ const load = (): Levels => {
 
 let ctx: AudioContext | null = null;
 let master: GainNode, music: GainNode, amb: GainNode, voiceBus: GainNode, sfxBus: GainNode, duck: GainNode;
+/** Sounds of the street (footsteps, passing cars): effects volume, but under the duck so speech stays clear. */
+let world: GainNode;
 const levels = load();
 const buffers = new Map<string, Promise<AudioBuffer | null>>();
 let live = 0;
@@ -39,9 +41,9 @@ function start(): void {
   if (ctx) { void ctx.resume(); return; }
   try { ctx = new AudioContext(); } catch { return; } // no Web Audio: the game runs silent
   master = ctx.createGain(); duck = ctx.createGain();
-  music = ctx.createGain(); amb = ctx.createGain(); voiceBus = ctx.createGain(); sfxBus = ctx.createGain();
-  // music and ambience duck under voices; ambience follows the effects volume
-  music.connect(duck); amb.connect(duck); duck.connect(master);
+  music = ctx.createGain(); amb = ctx.createGain(); voiceBus = ctx.createGain(); sfxBus = ctx.createGain(); world = ctx.createGain();
+  // music, ambience and street sounds duck under voices; ambience and street follow the effects volume
+  music.connect(duck); amb.connect(duck); world.connect(duck); duck.connect(master);
   sfxBus.connect(master); voiceBus.connect(master); master.connect(ctx.destination);
   apply();
   for (const k of ["music", "ambience"] as const) if (want[k]) void setLoop(k, want[k]!);
@@ -53,7 +55,7 @@ window.addEventListener("click", (e) => { if ((e.target as HTMLElement | null)?.
 function apply(): void {
   if (!ctx) return;
   master.gain.value = levels.muted ? 0 : 1;
-  music.gain.value = levels.music; voiceBus.gain.value = levels.voice; sfxBus.gain.value = levels.sfx; amb.gain.value = levels.sfx * AMB_GAIN;
+  music.gain.value = levels.music; voiceBus.gain.value = levels.voice; sfxBus.gain.value = levels.sfx; world.gain.value = levels.sfx; amb.gain.value = levels.sfx * AMB_GAIN;
 }
 
 function fetchBuffer(url: string): Promise<AudioBuffer | null> {
@@ -260,15 +262,23 @@ export const audio = {
   },
   /** Synthesised effects (always available once audio has started). */
   synth,
-  /** A generated effect file; silent until it exists. */
-  async sfx(id: SfxFile): Promise<void> {
+  /** A generated effect file; silent until it exists. With `at` it is a street sound: panned and quieter with distance
+   *  from the camera, and ducked under speech. */
+  async sfx(id: SfxFile, at?: { x: number; y: number; z: number }): Promise<void> {
     if (!ctx || live >= MAX_SFX) return;
     const buf = await fetchBuffer(sfxUrl(id));
     if (!buf || !ctx) return;
     live++;
     const s = ctx.createBufferSource(), g = ctx.createGain();
     s.buffer = buf; g.gain.value = SFX_GAIN[id] ?? 1;
-    s.connect(g).connect(sfxBus); s.onended = () => live--; s.start();
+    if (at) {
+      // ponytail: the sound stays where the car was when it started (about 2 s); follow the car if that ever shows
+      const p = ctx.createPanner();
+      p.panningModel = "equalpower"; p.distanceModel = "inverse"; p.refDistance = 4; p.rolloffFactor = 1; p.maxDistance = 60;
+      p.positionX.value = at.x; p.positionY.value = at.y; p.positionZ.value = at.z;
+      s.connect(g).connect(p).connect(world);
+    } else s.connect(g).connect(sfxBus);
+    s.onended = () => live--; s.start();
   },
   /** A footstep: one of the generated steps at random, else the synthesised scuff. */
   async step(): Promise<void> {
@@ -279,7 +289,7 @@ export const audio = {
     live++;
     const s = ctx.createBufferSource(), g = ctx.createGain();
     s.buffer = buf; s.playbackRate.value = 0.94 + Math.random() * 0.12; g.gain.value = 0.55; // variety, sits under everything
-    s.connect(g).connect(sfxBus); s.onended = () => live--; s.start();
+    s.connect(g).connect(world); s.onended = () => live--; s.start();
   },
   /** One merchant line by id (kept for callers that know the line). */
   async say(id: MerchantId, _line: LineId, text: string): Promise<void> { await audio.line(id, text); },

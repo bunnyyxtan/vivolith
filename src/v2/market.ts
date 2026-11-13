@@ -335,6 +335,25 @@ async function loadTown(colliders: Box[], scene: THREE.Scene): Promise<THREE.Obj
     const gltf = await loadGLB("/models/v2/town.glb");
     const m = prepareModel(gltf.scene);
     colliders.push(...m.colliders);
+    // Look fixes on the baked town (not rebuilt for them): the 26k-triangle grass tufts read as flat green blobs on
+    // every lawn and tree pit; the cool asphalt went navy under the blue fill, a warm grey reads as slate in shade.
+    gltf.scene.getObjectByName("TOWN_town_tuft")?.removeFromParent();
+    const asphalt = gltf.scene.getObjectByName("TOWN_town_asphalt");
+    if (asphalt instanceof THREE.Mesh && asphalt.material instanceof THREE.MeshStandardMaterial) asphalt.material.color.set("#625c58");
+    // Some paver tops (the Harbor Depot yard, the south strips) were exported with v fixed near 0.9, smearing one texel
+    // row into dark streaks; every top face now uses the market's mapping (one tile per metre: u = x, v = z + 1).
+    const pavers = gltf.scene.getObjectByName("TOWN_v2_pavers__tint_f6eee6");
+    if (pavers instanceof THREE.Mesh) {
+      pavers.updateWorldMatrix(true, false);
+      const g = pavers.geometry as THREE.BufferGeometry, pos = g.attributes.position, nor = g.attributes.normal, uv = g.attributes.uv;
+      const w = new THREE.Vector3();
+      for (let i = 0; i < pos.count; i++) {
+        if (nor.getY(i) < 0.9) continue;
+        w.fromBufferAttribute(pos, i).applyMatrix4(pavers.matrixWorld);
+        uv.setXY(i, w.x, w.z + 1);
+      }
+      uv.needsUpdate = true;
+    }
     gltf.scene.traverse((o) => { // street lamps and lit windows follow the time of day (dim at noon)
       if (o instanceof THREE.Mesh) for (const mat of Array.isArray(o.material) ? o.material : [o.material]) trackGlow(mat);
     });

@@ -1700,9 +1700,8 @@ export async function createPlay(game: Game): Promise<Play> {
     // a car passing close by (traffic.ts exposes its cars for playtests); one at a time, not every second
     carQuiet -= 1;
     const cars = (window as unknown as { __traffic?: { x: number; z: number; v: number; obj: THREE.Object3D }[] }).__traffic ?? [];
-    if (entered && carQuiet <= 0 && cars.some((c) => c.obj.visible && c.v > 2 && Math.hypot(c.x - player.body.x, c.z - player.body.z) < CAR_SOUND_M)) {
-      carQuiet = CAR_QUIET_SEC; void audio.sfx("car_pass");
-    }
+    const passing = entered && carQuiet <= 0 ? cars.find((c) => c.obj.visible && c.v > 2 && Math.hypot(c.x - player.body.x, c.z - player.body.z) < CAR_SOUND_M) : undefined;
+    if (passing) { carQuiet = CAR_QUIET_SEC; void audio.sfx("car_pass", { x: passing.x, y: 0.6, z: passing.z }); } // heard from the car's side
   };
   let carQuiet = 0;
   const runClock = (minutes: number): void => {

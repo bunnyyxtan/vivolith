@@ -60,4 +60,6 @@ recordings, alignment, in-game first audio 1.70 s, streaming comparison, route h
 - [ ] 13/13 checks, client typecheck, build; API bundle built from the same tree.
 - [ ] Status route: driver, agents, Redis; `market-turn` 401 without the secret.
 - [ ] Browser pass on vivolith.world: welcome, guest, first trade, Rent Night, report. Frame time measured with the
-      pane visible. Known: `car_van.glb` 404, trade panel overlaps the objective card at 800x600.
+      pane visible. Known: trade panel overlaps the objective card at 800x600 (`car_van.glb` 404 fixed in Phase 5).
+- [ ] Phase 5 look at 1080p with the pane visible: frame time on the market, depot and avenue route, and a human listen
+      to street sounds under a merchant conversation (passing car panned, ducked under the voice).
