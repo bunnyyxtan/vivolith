@@ -1,0 +1,75 @@
+{
+  "what": "Phase 2 production release c2ace0b and the first live NEAR AI conversations (authorized 2026-11-13: at most 3 paid chat calls)",
+  "deploy": {
+    "commit": "c2ace0b",
+    "method": "npm run deploy from a clean detached worktree (uncommitted audio, six Pema recordings, jev-probe.ts not shipped)",
+    "deployment": "https://vivolith-jneb85v3k-shivam929s-projects.vercel.app",
+    "aliases": ["https://vivolith.world", "https://vivolith.vercel.app"],
+    "env_added": { "NEAR_AI_CHAT_MODEL": "google/gemini-2.5-flash-lite", "NEAR_AI_DAILY_CHATS": "3" },
+    "env_absent": ["NEAR_AGENT_MERCHANTS", "NEAR_MARKET_DRIVER", "NEAR_SCHEDULER_SECRET", "CRON_SECRET", "NEAR_AI_MODEL"],
+    "vercel_json_crons": "none"
+  },
+  "pre_deploy_checks": {
+    "checks": "12/12 *.check.ts pass in the clean worktree",
+    "client_typecheck": "tsc --noEmit (src) clean",
+    "server_typecheck": "no Phase 2 errors; @types/node is not installed (node: imports, process, Buffer unresolved); pre-existing: near-api-js `finality` option typing (since dce1056), unused `planResident` (07250b1) / `coinMove` (5db5b35) / `res` (agent.ts), null narrowing in agent.check.ts",
+    "build": "npm run build OK (vite + api bundle); the committed api/near/[route].js differs from a clean rebuild only in module order and path comments (same routes and features); Vercel rebuilds it from source during the deploy"
+  },
+  "production_after_deploy": {
+    "page_commit": "c2ace0b",
+    "status": { "driver": "players", "agents_enabled": [], "halted": false, "rateLimit": "persistent", "usedToday_before": { "decision": 0, "chat": 0, "verify": 0 } },
+    "chronicle": ["trade confirmed: A player sold 1 mango to Pema at 1 c.", "reopened confirmed: Pema's stall reopened after a delivery."],
+    "decisions": { "arin": [], "pema": [] },
+    "market_turn": "401 for GET, POST and a wrong bearer (\"scheduler only\")",
+    "last_market_turn": "1794507686326 ms (no turn triggered during this release)"
+  },
+  "live_chat": {
+    "at": "2026-11-13T09:04:12Z",
+    "route": "POST https://vivolith.world/api/near/talk",
+    "results": [
+      {
+        "npc": "pema",
+        "account": "g88b8a3081b294900.bunnyy-nearworld.testnet (the existing authorized delivery guest; no new account)",
+        "question": "You're open again! How did you reopen, and how much do you still owe the Guild?",
+        "http": 200, "ms": 1735, "source": "ai",
+        "line": "Oh, hello dear! Yes, the stall is open again. We just needed to get some fresh fruit in. As for the Guild, I still owe them 163 coins, but we'll chip away at it, don't you worry.",
+        "grounding": "PASS: open, 163 c Guild debt, reopened by fruit coming in (the confirmed 1-mango delivery). Did not name the player's own delivery although the bond fact was available"
+      },
+      {
+        "npc": "arin",
+        "question": "How is the market looking today, and what's your trading strategy right now?",
+        "http": 200, "ms": 1547, "source": "ai",
+        "line": "The market is always a bit of a dance, isn't it? I'm focusing on selling the lassi we have left, as there are only five available.",
+        "grounding": "PASS: chain holds lassi 5 (ask 3 x 4 c). No claim to remember the earlier Jev test (production decisions for arin are empty). Vague: did not mention his 1 x 6 c mango bid"
+      },
+      {
+        "npc": "picker",
+        "question": "How's work at the orchard going? What are you carrying, and who could you sell it to?",
+        "http": 200, "ms": 1546, "source": "ai",
+        "line": "The morning pick was good, I've got six lovely mangos right here! Arin Okoye will buy them for six coins each, or Tomas Vell and Mira Sol will pay five.",
+        "grounding": "PARTIAL: buyers and prices match the chain (Arin bid 6 c, Tomas 5 c, Mira 5 c). Wrong: Lin holds 65 mangoes on chain (six is her daily pick); each bid is for 1 mango, not all of them. The number guard passed it because 6 is in the facts"
+      }
+    ],
+    "budget_check": {
+      "fourth_request": "pema, 'What do you think of the harbor today?' -> source script (scripted line from facts), no model call",
+      "usedToday_after": { "decision": 0, "chat": 4, "verify": 0 },
+      "note": "the counter counts attempts: 3 allowed calls plus 1 refused at the cap"
+    },
+    "paid_calls": 3,
+    "cost": "not reported by the route; estimate about 0.0003 USD total at 0.1/0.4 USD per M tokens (~600 in + ~60 out each)"
+  },
+  "chain_state_read_at_check": {
+    "arin": { "coin": 19, "mango": 5, "lassi": 5 },
+    "picker": { "coin": 181, "mango": 65 },
+    "pema": { "coin": 0, "mango": 14 },
+    "offers": ["pema bid lemon 1 x 1", "tomas bid mango 1 x 5", "mira bid mango 1 x 5", "arin bid mango 1 x 6", "arin ask lassi 3 x 4"]
+  },
+  "browser": {
+    "method": "production page loaded in the built-in browser behind a same-origin fetch guard that refused every non-GET /api/near/* call except talk",
+    "blocked": ["POST /api/near/guest"],
+    "result": "title, name entry, welcome and city render; no guest created, no market turn sent; notebook Town tab says the session is offline and lists local events only",
+    "console_errors": ["404 /models/v2/props/car_van.glb (pre-existing traffic model, loaded inside try/catch; no client code changed since 7eb1b4d)"],
+    "audio": "title music, day ambience and day music 200",
+    "not_measured": "frame time (the browser pane was hidden, so requestAnimationFrame was paused); in-game dialogue panel at a stall (needs walking to a stall with a chain account)"
+  }
+}
