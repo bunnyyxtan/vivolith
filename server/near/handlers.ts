@@ -17,7 +17,7 @@ import { gameLine, speechToken, speechTokenOk, synthesize, voiceSecret, voiceTex
 import { MAX_QUESTION, answer, factsFor, moodOf, playerFacts, residentFacts, type Exchange, type Ledger, type Receipt } from "./talk.ts";
 import { readMemory } from "./memory.ts";
 import { LEVERS, agentConfig, applyLivePrices, attachTx, claimBidSend, decideBid, decideResident, decisionFor, livePrices, priceMoved, recentDecisions, releaseBidSend, type AgentConfig, type Decision, type DecisionStore } from "./agent.ts";
-import { agentsHalted, fromScheduler, opsConfig, spend, usage } from "./ops.ts";
+import { agentsHalted, fromScheduler, opsConfig, spend, takeTestTurn, testTurnKey, usage } from "./ops.ts";
 import { AGENTS, memoriesFor, recordMemories, verifyPass } from "./autonomy.ts";
 import { verifyDecision } from "./verify.ts";
 import type { ChainReceipt, MemoryRow, Snapshot } from "./memory.ts";
@@ -245,6 +245,8 @@ async function status(cfg: Config, env: RelayEnv): Promise<Response> {
     // who moves the market and whether agents may use NEAR AI right now (no secrets, no limits beyond today's use)
     driver: ops.driver,
     agents: { enabled, halted: await agentsHalted(ops, store), usedToday: await usage(store) },
+    // bounded playtest: the cap and how many market turns it has used (null = no cap)
+    testTurns: ops.testTurns === null ? null : { run: ops.testRun, limit: ops.testTurns, used: Number(await store.get(testTurnKey(ops.testRun)).catch(() => null) ?? 0) },
     lastTick: last ? (JSON.parse(last) as unknown) : null,
     configured: configured(cfg),
     network: "testnet",
@@ -905,6 +907,9 @@ async function tick(cfg: Config, env: RelayEnv, trusted = false, scope: "market"
   const ops = opsConfig(env);
   if (ops.driver === "scheduler" && !trusted) return json(200, { status: "scheduled", message: "market turns run on the city's own schedule" });
   if (!(await claimTick(cfg))) return json(200, { status: "skipped", message: "the merchants moved less than a minute ago" });
+  // bounded playtest (NEAR_TEST_TURNS): checked before any chain read or signature, for browser and scheduler turns alike
+  const cap = await takeTestTurn(ops, decisionStore(cfg));
+  if (!cap.ok) return json(200, { status: "capped", message: "the playtest's market turns are used up", run: ops.testRun, limit: ops.testTurns, used: cap.used });
   const secret = (env.NEAR_MERCHANT_SECRET ?? "").trim();
   if (!secret) throw new HttpError(503, "merchant keys not configured");
   const { provider, relayer } = account(cfg);

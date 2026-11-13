@@ -202,4 +202,28 @@ const calls = (method: string, filter: (a: Record<string, string>) => boolean = 
   const lin = await talk({ npc: "picker", question: "What are you doing today?" });
   assert.equal(lin.body.speaker, "picker"); assert.ok(chatCalls.at(-1)!.messages[0].content.includes("You are Lin, a orchard picker") || chatCalls.at(-1)!.messages[0].content.includes("You are Lin"));
 }
+// 7. bounded playtest: NEAR_TEST_TURNS caps market turns from every driver before anything is read or signed
+{
+  const capEnv = { NEAR_TEST_TURNS: "2", NEAR_TEST_RUN: "check-run" };
+  const statuses: unknown[] = [];
+  for (let k = 0; k < 4; k++) {
+    nextDay(); reset(); sent.length = 0;
+    const t = await turn(capEnv, k % 2 === 1); // browser and scheduler turns share one cap
+    statuses.push(t.status);
+    if (t.status === "capped") { assert.equal(sent.length, 0, "a capped turn signed nothing"); assert.equal(t.limit, 2); }
+  }
+  assert.deepEqual(statuses, ["onchain", "onchain", "capped", "capped"], "exactly 2 turns ran for the run");
+  nextDay(); reset(); sent.length = 0;
+  assert.equal((await turn({ NEAR_TEST_TURNS: "2", NEAR_TEST_RUN: "other-run" })).status, "onchain", "a new run id has its own count");
+  for (const bad of ["0", "abc", "-1"]) {
+    nextDay(); reset(); sent.length = 0;
+    const t = await turn({ NEAR_TEST_TURNS: bad, NEAR_TEST_RUN: "fresh" });
+    assert.equal(t.status, "capped", `NEAR_TEST_TURNS=${bad} allows nothing`); assert.equal(sent.length, 0);
+  }
+  nextDay(); reset();
+  const st = (await (await handle("status", new Request("http://localhost/api/near/status"), { ...env, ...capEnv })).json()) as { testTurns: unknown };
+  assert.deepEqual(st.testTurns, { run: "check-run", limit: 2, used: 4 }, "status reports the cap and every attempt counted");
+  nextDay(); reset(); sent.length = 0;
+  assert.equal((await turn()).status, "onchain", "no cap set: today's behaviour");
+}
 console.log("market turn handler checks passed");
