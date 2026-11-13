@@ -105,6 +105,7 @@ for (const t of ["Rent paid. 15 c left!", "Only 4 c in the till and rent is 30 c
   assert.equal(m.status, 200); assert.equal(m.body.mock, true); assert.equal(m.body.mime, "audio/wav");
   assert.equal(m.body.words?.length, 6);
   assert.ok(m.body.words!.every((t, i, w) => i === 0 || t > w[i - 1]));
+  assert.ok(Buffer.from(m.body.audio!, "base64").subarray(44).every((b) => b === 0), "the mock is silent: no placeholder hum");
 }
 
 // 6. talk -> voice: what is voiced is the validated reply's own sentences; an ungrounded model line is never voiced

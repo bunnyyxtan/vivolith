@@ -15014,9 +15014,8 @@ function remember(key, body) {
 }
 /** Placeholder speech for mock mode: one soft voiced syllable per word at the speaker's pitch, pauses at punctuation,
 *  as a 16 kHz mono WAV, with the exact start of every word. Not a voice: it only exercises timing and playback. */
-function mockVoice(speaker, text) {
-	const RATE = 16e3, WORD = .26;
-	const pitch = 140 + [...speaker].reduce((n, c) => n + c.charCodeAt(0), 0) * 37 % 140;
+function mockVoice(_speaker, text) {
+	const RATE = 16e3;
 	const words = text.split(/\s+/);
 	const starts = [];
 	let t = .05;
@@ -15024,15 +15023,7 @@ function mockVoice(speaker, text) {
 		starts.push(t);
 		t += .32 + (/[.!?]$/.test(w) ? .3 : /[,;:]$/.test(w) ? .15 : 0);
 	}
-	const n = Math.ceil((t + .1) * RATE), pcm = new Int16Array(n);
-	starts.forEach((s, i) => {
-		const f = pitch * (1 + .08 * Math.sin(i * 1.7));
-		for (let k = 0; k < WORD * RATE; k++) {
-			const x = k / RATE;
-			const y = Math.sin(Math.PI * x / WORD) ** 2 * (.6 * Math.sin(2 * Math.PI * f * x) + .25 * Math.sin(4 * Math.PI * f * x) + .1 * Math.sin(6 * Math.PI * f * x));
-			pcm[Math.floor(s * RATE) + k] = Math.round(y * 6e3);
-		}
-	});
+	const pcm = new Int16Array(Math.ceil((t + .1) * RATE));
 	const head = Buffer.alloc(44);
 	head.write("RIFF", 0);
 	head.writeUInt32LE(36 + pcm.byteLength, 4);

@@ -5,8 +5,9 @@
 // only voices what is left. The key stays on the server. Answers are cached by (speaker, mood, text); identical
 // requests in flight share one paid call; a request timeout and a daily character budget bound the cost. Over budget
 // or unavailable, the game shows subtitles without speech.
-// Mock mode (VIVOLITH_VOICE_MOCK=1, never on a production deployment): a locally synthesised placeholder voice with
-// exact word timings, so the whole pipeline can be played without credits. Responses say `mock: true`.
+// Mock mode (VIVOLITH_VOICE_MOCK=1, never on a production deployment): silent audio with exact word timings, so the
+// whole pipeline (subtitles, mouth, cancel, replay) can be played without credits. It used to hum a tone per word, which
+// players heard as "uh uh uh". Responses say `mock: true`.
 // Who may spend: a line the server itself validated carries a short-lived speech token (HMAC over speaker, mood and
 // text, see speechToken); any other line must be, sentence by sentence, one the game's own text can produce (lines.json:
 // exact sentences, or template shapes whose slots hold only numbers, closed word sets or one name; scripts/audio/lines.ts),
@@ -142,22 +143,13 @@ function remember(key: string, body: VoiceBody): VoiceResult {
 
 /** Placeholder speech for mock mode: one soft voiced syllable per word at the speaker's pitch, pauses at punctuation,
  *  as a 16 kHz mono WAV, with the exact start of every word. Not a voice: it only exercises timing and playback. */
-function mockVoice(speaker: string, text: string): { audio: string; words: number[] } {
+function mockVoice(_speaker: string, text: string): { audio: string; words: number[] } {
   const RATE = 16000, WORD = 0.26, GAP = 0.06;
-  const pitch = 140 + (([...speaker].reduce((n, c) => n + c.charCodeAt(0), 0) * 37) % 140);
   const words = text.split(/\s+/);
   const starts: number[] = [];
   let t = 0.05;
   for (const w of words) { starts.push(t); t += WORD + GAP + (/[.!?]$/.test(w) ? 0.3 : /[,;:]$/.test(w) ? 0.15 : 0); }
-  const n = Math.ceil((t + 0.1) * RATE), pcm = new Int16Array(n);
-  starts.forEach((s, i) => {
-    const f = pitch * (1 + 0.08 * Math.sin(i * 1.7));
-    for (let k = 0; k < WORD * RATE; k++) {
-      const x = k / RATE, env = Math.sin((Math.PI * x) / WORD) ** 2;
-      const y = env * (0.6 * Math.sin(2 * Math.PI * f * x) + 0.25 * Math.sin(4 * Math.PI * f * x) + 0.1 * Math.sin(6 * Math.PI * f * x));
-      pcm[Math.floor(s * RATE) + k] = Math.round(y * 6000);
-    }
-  });
+  const pcm = new Int16Array(Math.ceil((t + 0.1) * RATE)); // silence: the timing is what the mock is for
   const head = Buffer.alloc(44);
   head.write("RIFF", 0); head.writeUInt32LE(36 + pcm.byteLength, 4); head.write("WAVEfmt ", 8);
   head.writeUInt32LE(16, 16); head.writeUInt16LE(1, 20); head.writeUInt16LE(1, 22); head.writeUInt32LE(RATE, 24);

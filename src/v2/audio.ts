@@ -20,8 +20,6 @@ const SFX_GAIN: Partial<Record<SfxFile, number>> = { car_pass: 4, rent_bell: 2.5
 const FADE_SEC = 2.5, DUCK = 0.35, MAX_SFX = 6;
 /** A short breath between sentences of one reply, so joined clips sound like one person talking. */
 const SENTENCE_GAP_SEC = 0.12;
-/** Each merchant's pitch for the fallback "voice blips" when no recorded line exists. */
-const BLIP: Record<MerchantId, number> = { pema: 330, tomas: 180, mira: 420, arin: 240 };
 
 const load = (): Levels => {
   try { return { music: 0.5, voice: 0.9, sfx: 0.7, muted: false, ...(JSON.parse(localStorage.getItem(STORE) ?? "{}") as Partial<Levels>) }; }
@@ -238,12 +236,9 @@ async function speakLine(speaker: string, parts: readonly string[], o: LineOptio
     total += c.buf.duration;
     if (my !== lineSeq) return stop();
   }
+  // voice unavailable (no recording and the voice service refused, failed or is off): the subtitle shows the whole line
+  // and the character stays silent. The square-wave "syllables" played here before were heard as a repeated "uh uh uh".
   o.onWords?.(Number.MAX_SAFE_INTEGER);
-  if (!total && pieces.length && my === lineSeq) { // voice unavailable: short blips, so the subtitle never appears in silence
-    const syl = Math.min(6, Math.max(2, Math.round(count(all) / 2)));
-    const f = BLIP[speaker as MerchantId] ?? 260;
-    for (let i = 0; i < syl; i++) blip(f * (0.9 + Math.random() * 0.25), ctx.currentTime + i * 0.09, 0.07, "square", 0.05, voiceBus);
-  }
   if (my === lineSeq) { speaking = null; if (current === ac) current = null; }
   return stop();
 }

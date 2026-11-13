@@ -155,6 +155,15 @@ a SCRIPTED errand call (offline there are no resident receipts); live receipts s
 | Performance: far on-screen townsfolk animate on alternate frames and re-measure their soles every 4th update (`coarse`) | MEASURED | Spire square: townsfolk animation 1.13 -> 0.34-0.42 ms/frame, sim step 3.1-3.3 -> 1.5-1.8 ms; Pema's stall 1.9 -> 1.3-1.7 ms; render 2.9-3.8 ms (1280x720, RTX 3050) |
 | Not done | OPEN | No new clips (rigs carry Idle, Walk, Run, Sit, Talking, Startled, Wave, Look; Agree on merchants except Pema); no carry clip, so carrying stays the procedural arm pose; townsfolk cannot be addressed (only merchants talk); an errand starts at once even from a bench (they stand up first) |
 
+### Voice quality correction (2026-11-13)
+
+| Item | Status | Evidence |
+|---|---|---|
+| Reported "uh, uh, uh" reproduced in the desktop game: Pema's unrecorded first-day greeting, voice route 502 (no key offline), then 6 square-wave oscillators on the voice bus. Root cause: the client's fallback "voice blips" in `src/v2/audio.ts` (any failed or refused line: 502, 403, 429, 503, timeout; also townsfolk chatter) and, in the dev mock config, `mockVoice` humming a tone per word. Recordings and ElevenLabs output were not the cause | REPRODUCED | `docs/evidence/voice-quality-correction.json` (instrumented AudioContext) |
+| Fix: a line without audio shows its whole subtitle and stays silent (mouth still); the dev mock returns silence with the same word timings | FIXED, VERIFIED | Same line after: 0 oscillators. Tomas recorded greeting 3.28 s with mouth in sync; trade line recorded 2.88 s; Esc 1 s in: voice and mouth stop at once; Rent Night recorded opener then figures as text; 20 s of street chatter: 0 placeholder sounds. `voice.check` asserts the mock is silent |
+| Six voices: recorded hello of Pema, Tomas, Mira, Arin and live samples of Lin and Dev transcribe as their lines (Whisper large-v3-turbo, local); no filler vocalisations | VERIFIED (machine); natural sound NEEDS HUMAN LISTEN | same file. Still unresolved: Pema "Thirty crates!" and Ines "Your call." transcribe as "Pretty crates" / "You're cool" (no credits to re-take) |
+| Unrecorded lines (Pema's first-day greeting and live figures) are silent when the voice service is off or refuses; with the production key they are voiced as before | KNOWN | RELEASE_CHECKLIST §4 greeting recording |
+
 ## Phase 3: voiced conversations (2026-11-13)
 
 **Status: LIVE-VOICE VERIFIED (local), 2026-11-13.** Genuine ElevenLabs audio was generated and played through the
