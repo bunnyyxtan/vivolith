@@ -11498,6 +11498,219 @@ function executableOffers(offers, stalls) {
 	}
 	return out;
 }
+// src/v2/audio-manifest.ts
+const shared = {
+	closed: "The shutters are down: I couldn't make rent. Bring me stock and I can open again.",
+	reopen: "We're open again, thanks to you!",
+	rent_ok: "Lights on!",
+	rent_risk: "I'm in trouble.",
+	rent_closed: "Shutters down."
+};
+/** Four recognisable merchants: one voice each, chosen once and kept. */
+const VOICES = {
+	pema: {
+		brief: "warm, kind older woman, motherly market auntie",
+		voiceId: "pFZP5JQG7iQjIQuC4Bku",
+		tag: "[warmly]",
+		lines: {
+			hello: "Fresh mangoes, when the harbor lets me have them.",
+			thanks: "Thank you, dear. Come back soon.",
+			...shared,
+			haggle_ok: "Oh, alright, dear.",
+			haggle_no: "Now, now, be fair with me.",
+			refuse: "That's my last word, dear.",
+			bump: "Oh! Careful, dear!",
+			invest_pitch: "Buy a few shares, dear, and you share in every mango I sell.",
+			invest_done: "A partner! Thank you, dear.",
+			shares_sold: "Of course, dear. Come back anytime."
+		}
+	},
+	tomas: {
+		brief: "smooth, confident middle-aged man, salesman's charm, a little smug",
+		voiceId: "N2lVS1w4EtoT3dr4eOWO",
+		tag: "[confidently]",
+		lines: {
+			hello: "Mangoes! More than this street can eat.",
+			thanks: "Pleasure. Bring more coin next time.",
+			...shared,
+			haggle_ok: "Fine, fine. You win this one.",
+			haggle_no: "Ha! Not a chance.",
+			refuse: "We're done here.",
+			bump: "Watch the merchandise!",
+			invest_pitch: "Want a piece of my stall? Every sale I make, you take your cut.",
+			invest_done: "Welcome aboard, partner. Now let's sell some mangoes.",
+			shares_sold: "Cashing out? Your loss."
+		}
+	},
+	mira: {
+		brief: "quick, bright young woman, playful and sharp",
+		voiceId: "cgSgspJ2msm6clMCkdW9",
+		tag: "[playfully]",
+		lines: {
+			hello: "Whatever Tomas charges, I'll do a coin cheaper.",
+			thanks: "Good trade. Tell your friends.",
+			...shared,
+			haggle_ok: "Ooh, sharp. Okay!",
+			haggle_no: "Nice try!",
+			refuse: "Nope, I'm out.",
+			bump: "Hey, eyes up!",
+			invest_pitch: "Own a slice of my stall and earn on every flip I make.",
+			invest_done: "Partner! Let's make some coin.",
+			shares_sold: "Sold back. No hard feelings!"
+		}
+	},
+	arin: {
+		brief: "warm, confident, expressive tea house owner, a natural merchant",
+		voiceId: "iP95p4xoKVk53GoZ742B",
+		tag: "[warmly]",
+		lines: {
+			hello: "Lassi's fresh. And I always need mangoes.",
+			thanks: "That's the afternoon's lassi sorted.",
+			...shared,
+			haggle_ok: "That seems fair.",
+			haggle_no: "I can't go that low.",
+			refuse: "Let's leave it there.",
+			bump: "Whoa, sorry about that!",
+			invest_pitch: "Shares in the tea house pay out every time I sell a lassi.",
+			invest_done: "Thank you. We'll do well together.",
+			shares_sold: "That's alright. The door's always open."
+		}
+	}
+};
+/** Townsfolk reaction voices (pre-made ElevenLabs voices): each townsperson keeps one voice; bump lines are what the
+*  speech bubble shows, so sound and text match. Files: /audio/voice/folk<n>/bump_<k>.mp3. */
+const FOLK_VOICES = [
+	{
+		voiceId: "FGY2WhTYpPnrIDTdsKH5",
+		tag: "[surprised]",
+		bump: ["Whoa!", "Hey, watch out!"]
+	},
+	{
+		voiceId: "IKne3meq5aSn9XLyUdCD",
+		tag: "[startled]",
+		bump: ["Oof!", "Easy there!"]
+	},
+	{
+		voiceId: "pqHfZKP75CvOlQylNhV4",
+		tag: "[grumbling]",
+		bump: ["Careful!", "Hey!"]
+	},
+	{
+		voiceId: "XrExE9yKIg1WjnnlVkGX",
+		tag: "[surprised]",
+		bump: ["Excuse you!", "Oh my!"]
+	}
+];
+/** Every voiced character, by speaker id: merchants, townsfolk voices (folk0..3) and the non-trading cast. The server
+*  voice route (server/near/voice.ts) speaks lines that have no recorded file with exactly these voices. */
+const SPEAKERS = {
+	...Object.fromEntries(Object.entries(VOICES).map(([id, v]) => [id, {
+		voiceId: v.voiceId,
+		tag: v.tag
+	}])),
+	...Object.fromEntries(FOLK_VOICES.map((v, n) => [`folk${n}`, {
+		voiceId: v.voiceId,
+		tag: v.tag.replace(/\[(surprised|startled|grumbling)\]/, "[casually]")
+	}])),
+	engineer: {
+		voiceId: "Xb7hH8MSUJpSbSDYk0k2",
+		tag: "[thoughtfully]"
+	},
+	harbor: {
+		voiceId: "CwhRBWXzGAHq8TQ4Fs17",
+		tag: "[gruffly]"
+	}
+};
+// server/near/voice.ts
+const MODEL = "eleven_v4";
+const MAX_TEXT = 240;
+/** ponytail: per server instance and day; move to Redis (shared counter) if many instances run at once. */
+const DAILY_CHARS = 6e3;
+const cache = /* @__PURE__ */ new Map();
+const CACHE_MAX = 300;
+let day = "";
+let spent = 0;
+async function synthesize(speaker, raw, apiKey) {
+	const v = SPEAKERS[speaker];
+	const text = raw.replace(/\s+/g, " ").trim().slice(0, MAX_TEXT);
+	if (!v) return {
+		status: 400,
+		body: {
+			status: "error",
+			message: "unknown speaker"
+		}
+	};
+	if (!text) return {
+		status: 400,
+		body: {
+			status: "error",
+			message: "empty line"
+		}
+	};
+	const key = `${speaker}|${text}`;
+	const hit = cache.get(key);
+	if (hit) return {
+		status: 200,
+		body: {
+			status: "ok",
+			mime: "audio/mpeg",
+			audio: hit
+		}
+	};
+	if (!apiKey) return {
+		status: 503,
+		body: {
+			status: "unconfigured",
+			message: "voice not configured"
+		}
+	};
+	const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+	if (today !== day) {
+		day = today;
+		spent = 0;
+	}
+	if (spent + text.length > DAILY_CHARS) return {
+		status: 429,
+		body: {
+			status: "budget",
+			message: "voice budget used for today"
+		}
+	};
+	spent += text.length;
+	const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${v.voiceId}?output_format=mp3_44100_64`, {
+		method: "POST",
+		headers: {
+			"xi-api-key": apiKey,
+			"content-type": "application/json",
+			accept: "audio/mpeg"
+		},
+		body: JSON.stringify({
+			text: `${v.tag} ${text}`,
+			model_id: MODEL
+		})
+	}).catch(() => null);
+	if (!r || !r.ok) {
+		spent -= text.length;
+		return {
+			status: 502,
+			body: {
+				status: "error",
+				message: `voice service ${r?.status ?? "unreachable"}`
+			}
+		};
+	}
+	const audio = Buffer.from(await r.arrayBuffer()).toString("base64");
+	if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value);
+	cache.set(key, audio);
+	return {
+		status: 200,
+		body: {
+			status: "ok",
+			mime: "audio/mpeg",
+			audio
+		}
+	};
+}
 // src/economy/state.ts
 const MERCHANT_IDS = [
 	"pema",
@@ -11619,13 +11832,7 @@ function initialEconomy() {
 	};
 }
 const dayOf = (minute) => Math.floor(minute / MINUTES_PER_DAY) + 1;
-const clockOf = (minute) => {
-	const m = minute % MINUTES_PER_DAY;
-	return `Day ${dayOf(minute)} ${String(Math.floor(m / 60)).padStart(2, "0")}:${String(Math.floor(m % 60)).padStart(2, "0")}`;
-};
 // src/economy/pricing.ts
-/** Share of a day's goods revenue a stall declares for its shareholders, in basis points (the contract's DIVIDEND_BPS). */
-const DIVIDEND_BPS = 5e3;
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const pct = (m) => `${m >= 1 ? "+" : ""}${Math.round((m - 1) * 100)}%`;
 /** How hard each personality reacts to its own stock level: [slope, min multiplier, max multiplier]. */
@@ -11910,23 +12117,6 @@ const HOURLY_DEMAND = {
 	lassi: 2.4
 };
 const ELASTICITY = 1.3;
-const LOG_LIMIT = 60;
-function log(state, kind, text) {
-	state.log.push({
-		minute: state.minute,
-		kind,
-		text
-	});
-	if (state.log.length > LOG_LIMIT) state.log.splice(0, state.log.length - LOG_LIMIT);
-}
-function sell(state, id, good, wanted, price) {
-	const m = state.merchants[id];
-	const units = Math.min(wanted, m.stock[good]);
-	m.stock[good] -= units;
-	m.cash += units * price;
-	if ((good !== "lassi" || id === "arin") && units > 0) accrueSale(state, id, units * price);
-	return units;
-}
 const FRUIT_SELLERS = MERCHANT_IDS.filter((id) => id !== "arin");
 /** Street shoppers per open hour wanting `good` from stall `id` at its current price (fractional units).
 *  The cheaper a stall is against a fair price, the more of them it draws. Also used by the merchants' NEAR agents. */
@@ -11943,795 +12133,6 @@ const stockValue = (m) => m.sells.reduce((v, g) => v + m.stock[g] * m.baseCost[g
 const shelfGap = (m) => Math.max(0, Math.ceil((m.rent * REOPEN_SHARE - stockValue(m)) / Math.max(1, m.baseCost.mango)));
 /** Mangoes a stall that closes right now must be brought before it reopens (the relayer passes it to charge_rent). */
 const closingNeed = (state, id) => Math.max(1, shelfGap(state.merchants[id]));
-/** The contract's revenue-event accrual, run locally (docs/ECONOMY_MATH.md): the moment a stall earns `revenue`,
-*  DIVIDEND_BPS of it is declared (the basis-point remainder carries), funded from the till with any arrears, and
-*  split over the shares that exist right now. The player's part is exact: whole coins now, the fraction carried. */
-function accrueSale(state, id, revenue) {
-	const m = state.merchants[id];
-	state.flags[`rev.${id}`] = Number(state.flags[`rev.${id}`] ?? 0) + revenue;
-	const units = Math.floor(revenue) * DIVIDEND_BPS + Number(state.flags[`revRem.${id}`] ?? 0);
-	const declared = Math.floor(units / 1e4);
-	state.flags[`revRem.${id}`] = units % 1e4;
-	const due = declared + Number(state.flags[`arrears.${id}`] ?? 0);
-	const funded = Math.max(0, Math.min(due, Math.floor(m.cash)));
-	state.flags[`arrears.${id}`] = due - funded;
-	const supply = shareSupply(state, id);
-	const owed = funded * state.player.shares[id] + Number(state.flags[`divDust.${id}`] ?? 0);
-	const paid = Math.floor(owed / supply);
-	state.flags[`divDust.${id}`] = owed - paid * supply;
-	if (paid <= 0) return;
-	m.cash -= paid;
-	state.player.coins += paid;
-	state.flags[`div.${id}`] = Number(state.flags[`div.${id}`] ?? 0) + paid;
-	state.flags[`divToday.${id}`] = Number(state.flags[`divToday.${id}`] ?? 0) + paid;
-}
-function playerBuy(state, id, good, qty) {
-	const m = state.merchants[id];
-	if (m.status !== "open") return {
-		ok: false,
-		message: `${m.shop} is closed.`
-	};
-	const price = quote(state, id, good).price;
-	const units = Math.min(qty, m.stock[good], Math.floor(state.player.coins / price));
-	if (units <= 0) return {
-		ok: false,
-		message: m.stock[good] <= 0 ? "Sold out." : "Not enough coins."
-	};
-	sell(state, id, good, units, price);
-	state.player.coins -= units * price;
-	state.player.inventory[good] += units;
-	log(state, "player", `You bought ${units} ${good}${units > 1 ? "s" : ""} from ${m.name} for ${units * price} c.`);
-	return {
-		ok: true,
-		message: `Bought ${units} for ${units * price} c.`
-	};
-}
-/** The player (or the receiving merchant, e.g. with a new partner's money) pays the harbor's storage fee: the held
-*  shipment departs now and arrives in 90 minutes. */
-function payReleaseFee(state, shipmentId, payer = "player") {
-	const s = state.shipments.find((x) => x.id === shipmentId);
-	if (!s || s.status !== "held") return {
-		ok: false,
-		message: "Nothing is held."
-	};
-	const m = state.merchants[s.to];
-	if ((payer === "player" ? state.player.coins : m.cash) < s.releaseFee) return {
-		ok: false,
-		message: `The fee is ${s.releaseFee} c.`
-	};
-	if (payer === "player") state.player.coins -= s.releaseFee;
-	else m.cash -= s.releaseFee;
-	s.status = "transit";
-	s.arriveAt = state.minute + 90;
-	log(state, "player", `${payer === "player" ? "You" : m.name} paid the ${s.releaseFee} c storage fee. Mangoes are on their way (${clockOf(s.arriveAt)}).`);
-	return {
-		ok: true,
-		message: "Shipment released."
-	};
-}
-/** Pema buys what she can afford from her rival, at his NPC price plus a spite markup. */
-function pemaBuysFromTomas(state, wanted) {
-	const p = state.merchants.pema;
-	const price = Math.round(quote(state, "tomas", "mango", false).price * 1.15);
-	const qty = Math.min(wanted, state.merchants.tomas.stock.mango, Math.floor(p.cash / price));
-	if (qty <= 0) return {
-		ok: false,
-		message: "Pema cannot afford a single crate from Tomas."
-	};
-	sell(state, "tomas", "mango", qty, price);
-	p.cash -= qty * price;
-	p.stock.mango += qty;
-	log(state, "trade", `Pema bought ${qty} mangoes from Tomas Vell at ${price} c each.`);
-	return {
-		ok: true,
-		message: `Pema bought ${qty} at ${price} c.`
-	};
-}
-/** Labs insight A: the player files the agent's finding that T. Vell's standing berth contract gives his
-*  cargo cold-storage priority. The harbor suspends it: Pema's hold clears at the next 06:00 and Tomas
-*  loses his free morning restock. */
-function challengeStandingContract(state) {
-	if (state.flags.contract) return {
-		ok: false,
-		message: "The contract has already been dealt with."
-	};
-	state.flags.contract = "challenged";
-	const s = state.shipments.find((x) => x.id === "pema-mangoes");
-	if (s && s.status === "held") {
-		const dayStart = Math.floor(state.minute / MINUTES_PER_DAY) * MINUTES_PER_DAY;
-		const next6 = dayStart + 360 > state.minute ? dayStart + 360 : dayStart + MINUTES_PER_DAY + 360;
-		s.autoReleaseAt = Math.min(s.autoReleaseAt, next6);
-	}
-	log(state, "quest", "Harbor suspended T. Vell's standing berth contract after a NEAR Labs report.");
-	return {
-		ok: true,
-		message: s?.status === "held" ? `Pema's hold now clears ${clockOf(s.autoReleaseAt)}.` : "Contract suspended."
-	};
-}
-/** Labs insight B: the agent matches the Tea House's mango need to Pema's held crates. The Tea House
-*  pre-pays at cost now; the crates go to it when the shipment lands. */
-function teahouseForwardBuy(state, qty) {
-	const tea = state.merchants.arin;
-	const price = state.merchants.pema.baseCost.mango;
-	const s = state.shipments.find((x) => x.id === "pema-mangoes");
-	if (!s || s.status === "delivered") return {
-		ok: false,
-		message: "The shipment already landed."
-	};
-	if (Number(state.flags.forwardQty ?? 0) > 0) return {
-		ok: false,
-		message: "A forward order is already booked."
-	};
-	const units = Math.min(qty, Math.floor(tea.cash / price));
-	if (units <= 0) return {
-		ok: false,
-		message: "The Tea House cannot pre-pay."
-	};
-	tea.cash -= units * price;
-	state.merchants.pema.cash += units * price;
-	state.flags.forwardQty = units;
-	log(state, "trade", `Tea House pre-paid Pema ${units * price} c for ${units} crates on the held shipment.`);
-	return {
-		ok: true,
-		message: `Tea House pre-paid ${units * price} c to Pema.`
-	};
-}
-/** Insight C: the player sells the finding to Tomas, who pays to keep his contract quiet. */
-function sellInsightToTomas(state, fee) {
-	if (state.flags.contract) return {
-		ok: false,
-		message: "The contract has already been dealt with."
-	};
-	const t = state.merchants.tomas;
-	const paid = Math.min(fee, Math.floor(t.cash));
-	t.cash -= paid;
-	state.player.coins += paid;
-	state.flags.contract = "sold";
-	log(state, "player", `+${paid} c: Tomas Vell paid you to forget his harbor contract.`);
-	return {
-		ok: true,
-		message: `+${paid} c from Tomas.`
-	};
-}
-function adjustRep(state, id, delta) {
-	state.player.rep[id] = Math.max(-50, Math.min(50, state.player.rep[id] + delta));
-}
-function addCoins(state, amount, why) {
-	state.player.coins += amount;
-	log(state, "player", `${amount >= 0 ? "+" : ""}${amount} c: ${why}`);
-}
-function note(state, text) {
-	log(state, "quest", text);
-}
-/** All shares of a stall in existence: the 300 floated plus any issued once those were sold (offline: tracked here;
-*  on NEAR: the contract's supply, synced into the same flag). */
-const shareSupply = (state, id) => Math.max(300, Number(state.flags[`supply.${id}`] ?? 300));
-// src/quests/labs.ts
-const shipment$1 = (s) => s.shipments.find((x) => x.id === "pema-mangoes");
-const held = (s) => shipment$1(s).status === "held";
-const INSIGHT_FEE = 12;
-const FORWARD_CRATES = 10;
-const engineer = {
-	npcId: "engineer",
-	name: "Ines Varga",
-	role: "Protocol engineer · NEAR Labs",
-	accent: "#83dcff",
-	entry: (s) => {
-		if (s.flags.contract || s.flags.labs === "forward") return "after";
-		return held(s) ? "intro" : "quiet";
-	},
-	nodes: {
-		intro: {
-			speaker: "Ines Varga",
-			text: () => "You're the one running errands for the fruit stall? Look at the feed. Our harbor agent reads every berth ledger on the Row. Pema's crates aren't held for a fee. They're queued behind T. Vell's cargo.",
-			next: "insight"
-		},
-		insight: {
-			speaker: "Ines Varga",
-			text: (s) => `Vell holds the standing contract for that berth. His crates get cold storage first, every morning at 06:00. Pema's wait until ${clockOf(shipment$1(s).autoReleaseAt)}. Nobody broke a rule. The contract just never expires. What do you want to do with it?`,
-			choices: [
-				{
-					label: "File it with the harbor. Contracts like that should be public.",
-					detail: () => "Harbor suspends Vell's berth priority · Pema's hold clears next 06:00 · Vell loses his free restock",
-					effect: (ctx) => {
-						const r = challengeStandingContract(ctx.econ);
-						ctx.toast(r.message);
-						if (r.ok) {
-							adjustRep(ctx.econ, "tomas", -8);
-							adjustRep(ctx.econ, "pema", 4);
-							ctx.settle("labs-contract-report", {
-								contract: "T.Vell-berth-2",
-								release: clockOf(shipment$1(ctx.econ).autoReleaseAt)
-							});
-						}
-					},
-					next: "filed"
-				},
-				{
-					label: "Can your agent find Pema a buyer instead?",
-					detail: () => `Tea House pre-pays Pema for ${FORWARD_CRATES} crates at cost · she makes rent tonight · crates go to the Tea House on arrival`,
-					available: (s) => Number(s.flags.forwardQty ?? 0) === 0,
-					effect: (ctx) => {
-						const r = teahouseForwardBuy(ctx.econ, FORWARD_CRATES);
-						ctx.toast(r.message);
-						if (r.ok) {
-							ctx.econ.flags.labs = "forward";
-							adjustRep(ctx.econ, "pema", 3);
-							adjustRep(ctx.econ, "arin", 4);
-							note(ctx.econ, "NEAR Labs matched the Tea House's mango order to Pema's held crates.");
-						}
-					},
-					next: "forward"
-				},
-				{
-					label: "Vell would pay to keep this quiet. I'll sell it to him.",
-					detail: () => `+${INSIGHT_FEE} c from Tomas · Pema keeps waiting · Ines will remember`,
-					effect: (ctx) => {
-						const r = sellInsightToTomas(ctx.econ, INSIGHT_FEE);
-						ctx.toast(r.message);
-						if (r.ok) adjustRep(ctx.econ, "tomas", 5);
-					},
-					next: "sold"
-				},
-				{
-					label: "Let me think about it.",
-					next: null
-				}
-			]
-		},
-		filed: {
-			speaker: "Ines Varga",
-			text: (s) => `Filed. The harbor master already suspended it. Pema's crates move at ${clockOf(shipment$1(s).autoReleaseAt)}, and Vell is about to have a very loud morning.`,
-			next: null
-		},
-		forward: {
-			speaker: "Ines Varga",
-			text: () => "Done. The agent matched the Tea House's morning order to Pema's crates. She gets paid now, they get mangoes when the cart lands. Nobody waits on Vell.",
-			next: null
-		},
-		sold: {
-			speaker: "Ines Varga",
-			text: () => "Your call. The feed keeps a record either way. That's rather the point of this building.",
-			next: null
-		},
-		after: {
-			speaker: "Ines Varga",
-			text: (s) => s.flags.contract === "sold" ? "The agent logged Vell's payment to you. Funny how a ledger remembers." : "Feed's quiet now. Come back when the Row does something strange. It always does.",
-			next: null
-		},
-		quiet: {
-			speaker: "Ines Varga",
-			text: () => "No holds on the harbor ledger today. Pema's crates landed. The agent's watching rent day instead.",
-			next: null
-		}
-	}
-};
-const tomasBuy = [
-	{
-		label: "Buy a mango",
-		detail: (s) => `${quote(s, "tomas", "mango").price} c`,
-		available: (s) => s.merchants.tomas.stock.mango > 0,
-		effect: (ctx) => ctx.toast(playerBuy(ctx.econ, "tomas", "mango", 1).message),
-		next: "shop"
-	},
-	{
-		label: "Buy a lemon",
-		detail: (s) => `${quote(s, "tomas", "lemon").price} c`,
-		available: (s) => s.merchants.tomas.stock.lemon > 0,
-		effect: (ctx) => ctx.toast(playerBuy(ctx.econ, "tomas", "lemon", 1).message),
-		next: "shop"
-	},
-	{
-		label: "Just looking.",
-		next: null
-	}
-];
-const tomas = {
-	npcId: "tomas",
-	name: "Tomas Vell",
-	role: "Vell's Fine Produce · stall 2",
-	accent: "#d9572b",
-	entry: (s) => s.merchants.tomas.status === "closed" ? "closed" : s.flags.contract === "challenged" ? "angry" : "shop",
-	nodes: {
-		shop: {
-			speaker: "Tomas Vell",
-			text: (s) => `Mangoes ${quote(s, "tomas", "mango").price}, lemons ${quote(s, "tomas", "lemon").price}. Fresh off the 06:00 cart. Some of us plan ahead.`,
-			choices: tomasBuy
-		},
-		angry: {
-			speaker: "Tomas Vell",
-			text: () => "Someone took a ledger to the harbor master. My berth, suspended. No morning cart. Buy something, or stop smiling.",
-			choices: tomasBuy
-		},
-		closed: {
-			speaker: "Tomas Vell",
-			text: () => "Closed. Even I have rent days.",
-			next: null
-		}
-	}
-};
-const arin = {
-	npcId: "arin",
-	name: "Arin Okoye",
-	role: "Saltlight Tea House",
-	accent: "#2f8f6b",
-	entry: (s) => s.merchants.arin.status === "closed" ? "closed" : "door",
-	nodes: {
-		door: {
-			speaker: "Arin Okoye",
-			text: (s) => `Mango lassi, ${quote(s, "arin", "lassi").price} coins for you. I buy my mangoes from whoever is cheapest at seven.` + (Number(s.flags.forwardQty ?? 0) > 0 ? " This week I pre-paid Pema for her held crates. Don't tell Tomas." : ""),
-			choices: [{
-				label: "One lassi, please.",
-				detail: (s) => `${quote(s, "arin", "lassi").price} c`,
-				available: (s) => s.merchants.arin.stock.lassi > 0,
-				effect: (ctx) => ctx.toast(playerBuy(ctx.econ, "arin", "lassi", 1).message),
-				next: "door"
-			}, {
-				label: "Another time.",
-				next: null
-			}]
-		},
-		closed: {
-			speaker: "Arin Okoye",
-			text: () => "We're closed tonight. No mangoes, no lassi.",
-			next: null
-		}
-	}
-};
-// src/quests/mango.ts
-const stage = (s) => s.flags.mango;
-const shipment = (s) => s.shipments.find((x) => x.id === "pema-mangoes");
-const reasons = (s, good) => quote(s, "pema", good).factors.slice(0, 3).map((f) => f.label).join(" · ");
-const buyChoices = [
-	{
-		label: "Buy a mango",
-		detail: (s) => `${quote(s, "pema", "mango").price} c  —  ${reasons(s, "mango")}`,
-		available: (s) => s.merchants.pema.stock.mango > 0,
-		effect: (ctx) => ctx.toast(playerBuy(ctx.econ, "pema", "mango", 1).message),
-		next: "shop"
-	},
-	{
-		label: "Buy a lemon",
-		detail: (s) => `${quote(s, "pema", "lemon").price} c  —  ${reasons(s, "lemon")}`,
-		available: (s) => s.merchants.pema.stock.lemon > 0,
-		effect: (ctx) => ctx.toast(playerBuy(ctx.econ, "pema", "lemon", 1).message),
-		next: "shop"
-	},
-	{
-		label: "That's all, Auntie.",
-		next: null
-	}
-];
-const CONVERSATIONS = {
-	pema: {
-		npcId: "pema",
-		name: "Auntie Pema",
-		role: "Fruit seller · Saltlight Market",
-		accent: "#0091fd",
-		entry: (s) => {
-			const st = stage(s);
-			if (s.merchants.pema.status === "closed") return "closed";
-			if (!st) return "intro";
-			if ((st === "accepted" || st === "accepted_hard") && shipment(s).status === "delivered") return "thanks";
-			if (st === "accepted" || st === "accepted_hard") return "waiting";
-			if (st === "rival") return "rival_after";
-			if (st === "refused") return "refused_after";
-			return "shop";
-		},
-		nodes: {
-			intro: {
-				speaker: "Auntie Pema",
-				text: (s) => `Three crates. That's all I have left, and rent is due tonight. My mangoes have been sitting at the harbor since dawn and nobody will tell me why. Meanwhile Tomas Vell sells his at ${quote(s, "tomas", "mango", false).price} coins and smiles about it.`,
-				next: "ask"
-			},
-			ask: {
-				speaker: "Auntie Pema",
-				text: () => "You look like someone who walks fast. Will you go down to the pier for me?",
-				choices: [
-					{
-						label: "I'll get your shipment from the harbor.",
-						detail: () => "Quest: The Mango Crisis · reward 20 c · Pema will remember this",
-						effect: (ctx) => {
-							ctx.econ.flags.mango = "accepted";
-							ctx.econ.flags.reward = 20;
-							adjustRep(ctx.econ, "pema", 8);
-							note(ctx.econ, "Quest started: get Pema's mangoes released at the harbor.");
-						},
-						next: "accept_kind"
-					},
-					{
-						label: "I'll do it, but twenty coins won't cover my time. Forty.",
-						detail: () => "Reward 40 c, paid from Pema's thin purse · reputation cost",
-						effect: (ctx) => {
-							ctx.econ.flags.mango = "accepted_hard";
-							ctx.econ.flags.reward = 40;
-							adjustRep(ctx.econ, "pema", -6);
-							note(ctx.econ, "Quest started (hard bargain): 40 c for Pema's mangoes.");
-						},
-						next: "accept_hard"
-					},
-					{
-						label: "Why not just buy from Tomas Vell?",
-						detail: (s) => `Pema pays Tomas ~${Math.round(quote(s, "tomas", "mango", false).price * 1.15)} c a crate from her ${Math.round(s.merchants.pema.cash)} c · Tomas gains`,
-						effect: (ctx) => {
-							ctx.econ.flags.mango = "rival";
-							const r = pemaBuysFromTomas(ctx.econ, 10);
-							adjustRep(ctx.econ, "pema", -10);
-							adjustRep(ctx.econ, "tomas", 6);
-							ctx.toast(r.message);
-						},
-						next: "rival"
-					},
-					{
-						label: "Sorry. Not my problem.",
-						detail: () => "Pema is on her own tonight",
-						effect: (ctx) => {
-							ctx.econ.flags.mango = "refused";
-							adjustRep(ctx.econ, "pema", -4);
-						},
-						next: "refused"
-					}
-				]
-			},
-			accept_kind: {
-				speaker: "Auntie Pema",
-				text: () => "Pier Road, south of the plaza. Ask at the dispatch board for Pema's Fruit. Hurry, the sun sets at the harbor first.",
-				next: null
-			},
-			accept_hard: {
-				speaker: "Auntie Pema",
-				text: () => "Forty. You drive a bargain like Tomas. Fine. Bring the mangoes and the Row will see how a deal gets done.",
-				next: null
-			},
-			rival: {
-				speaker: "Auntie Pema",
-				text: (s) => `Buy from Tomas. At his price. With what money? ... There. ${s.merchants.pema.stock.mango} crates, and my purse is lighter than my pride. Tomas will be laughing at the Tea House tonight.`,
-				next: null
-			},
-			refused: {
-				speaker: "Auntie Pema",
-				text: () => "Then go. The Row has seen newcomers like you before.",
-				next: null
-			},
-			waiting: {
-				speaker: "Auntie Pema",
-				text: (s) => {
-					const sh = shipment(s);
-					if (sh.status === "transit") return `They're coming? Arriving ${clockOf(sh.arriveAt ?? s.minute)}. I could kiss the harbor master.`;
-					return "Any news from the pier? The dispatch board at the end of Pier Road. Please.";
-				},
-				choices: [{
-					label: "Let me see what you have.",
-					next: "shop"
-				}, {
-					label: "On my way.",
-					next: null
-				}]
-			},
-			thanks: {
-				speaker: "Auntie Pema",
-				text: (s) => `Thirty crates! Look at my table. Prices back down to ${quote(s, "pema", "mango").price} and the Tea House already sent a boy over. Here, as promised.`,
-				onEnter: (ctx) => {
-					const s = ctx.econ;
-					const promised = Number(s.flags.reward ?? 20);
-					const paid = Math.min(promised, Math.max(0, Math.floor(s.merchants.pema.cash)));
-					s.merchants.pema.cash -= paid;
-					addCoins(s, paid, paid < promised ? `Pema paid ${paid} of ${promised} c (all she had)` : "Pema's reward");
-					adjustRep(s, "pema", s.flags.mango === "accepted" ? 10 : 3);
-					s.flags.mango = "rewarded";
-					ctx.toast(paid < promised ? `Pema could only pay ${paid} of ${promised} c` : `+${paid} c from Pema`);
-				},
-				next: "shop"
-			},
-			rival_after: {
-				speaker: "Auntie Pema",
-				text: (s) => `Tomas's mangoes. ${s.merchants.pema.stock.mango} left. Buy something or let me sulk.`,
-				choices: buyChoices
-			},
-			refused_after: {
-				speaker: "Auntie Pema",
-				text: () => "Oh. You again. Looking, or buying?",
-				choices: buyChoices
-			},
-			closed: {
-				speaker: "Auntie Pema",
-				text: () => "The shutters are down. Couldn't make rent. When the harbor lets my mangoes go, maybe I'll open again.",
-				next: null
-			},
-			shop: {
-				speaker: "Auntie Pema",
-				text: (s) => `Mangoes ${quote(s, "pema", "mango").price}, lemons ${quote(s, "pema", "lemon").price}. Prices change with the stock, dear, not my mood.`,
-				choices: buyChoices
-			}
-		}
-	},
-	harbor: {
-		npcId: "harbor",
-		name: "Harbor Dispatch",
-		role: "Pier 2 · cold storage ledger",
-		accent: "#83dcff",
-		entry: (s) => shipment(s).status === "held" ? "held" : shipment(s).status === "transit" ? "transit" : "done",
-		nodes: {
-			held: {
-				speaker: "Harbor Dispatch",
-				text: (s) => `HOLD · 30 crates mango · consignee Pema's Fruit. Reason: cold-storage fee unpaid (${shipment(s).releaseFee} c). Automatic release ${clockOf(shipment(s).autoReleaseAt)}. Standing contract holder for this berth: T. Vell.`,
-				choices: [{
-					label: "Pay the cold-storage fee",
-					detail: (s) => `-${shipment(s).releaseFee} c · crates leave now, arrive in 90 min`,
-					available: (s) => s.player.coins >= shipment(s).releaseFee,
-					effect: (ctx) => {
-						const r = payReleaseFee(ctx.econ, "pema-mangoes");
-						ctx.toast(r.message);
-						if (r.ok) ctx.settle("harbor-release", {
-							shipment: "pema-mangoes",
-							fee: shipment(ctx.econ).releaseFee,
-							crates: 30
-						});
-					},
-					next: "released"
-				}, {
-					label: "Leave it. The harbor will release it eventually.",
-					detail: (s) => `Pema waits until ${clockOf(shipment(s).autoReleaseAt)}`,
-					next: null
-				}]
-			},
-			released: {
-				speaker: "Harbor Dispatch",
-				text: () => "RELEASED · fee received · cart dispatched to Saltlight Market.",
-				next: null
-			},
-			transit: {
-				speaker: "Harbor Dispatch",
-				text: (s) => `IN TRANSIT · arriving ${clockOf(shipment(s).arriveAt ?? s.minute)}.`,
-				next: null
-			},
-			done: {
-				speaker: "Harbor Dispatch",
-				text: () => "DELIVERED · no holds on this berth.",
-				next: null
-			}
-		}
-	},
-	tomas,
-	arin,
-	engineer
-};
-// src/v2/audio-manifest.ts
-const shared = {
-	closed: "The shutters are down: I couldn't make rent. Bring me stock and I can open again.",
-	reopen: "We're open again, thanks to you!",
-	rent_ok: "Lights on!",
-	rent_risk: "I'm in trouble.",
-	rent_closed: "Shutters down."
-};
-/** Four recognisable merchants: one voice each, chosen once and kept. */
-const VOICES = {
-	pema: {
-		brief: "warm, kind older woman, motherly market auntie",
-		voiceId: "pFZP5JQG7iQjIQuC4Bku",
-		tag: "[warmly]",
-		lines: {
-			hello: "Fresh mangoes, when the harbor lets me have them.",
-			thanks: "Thank you, dear. Come back soon.",
-			...shared,
-			haggle_ok: "Oh, alright, dear.",
-			haggle_no: "Now, now, be fair with me.",
-			refuse: "That's my last word, dear.",
-			bump: "Oh! Careful, dear!",
-			invest_pitch: "Buy a few shares, dear, and you share in every mango I sell.",
-			invest_done: "A partner! Thank you, dear.",
-			shares_sold: "Of course, dear. Come back anytime."
-		}
-	},
-	tomas: {
-		brief: "smooth, confident middle-aged man, salesman's charm, a little smug",
-		voiceId: "N2lVS1w4EtoT3dr4eOWO",
-		tag: "[confidently]",
-		lines: {
-			hello: "Mangoes! More than this street can eat.",
-			thanks: "Pleasure. Bring more coin next time.",
-			...shared,
-			haggle_ok: "Fine, fine. You win this one.",
-			haggle_no: "Ha! Not a chance.",
-			refuse: "We're done here.",
-			bump: "Watch the merchandise!",
-			invest_pitch: "Want a piece of my stall? Every sale I make, you take your cut.",
-			invest_done: "Welcome aboard, partner. Now let's sell some mangoes.",
-			shares_sold: "Cashing out? Your loss."
-		}
-	},
-	mira: {
-		brief: "quick, bright young woman, playful and sharp",
-		voiceId: "cgSgspJ2msm6clMCkdW9",
-		tag: "[playfully]",
-		lines: {
-			hello: "Whatever Tomas charges, I'll do a coin cheaper.",
-			thanks: "Good trade. Tell your friends.",
-			...shared,
-			haggle_ok: "Ooh, sharp. Okay!",
-			haggle_no: "Nice try!",
-			refuse: "Nope, I'm out.",
-			bump: "Hey, eyes up!",
-			invest_pitch: "Own a slice of my stall and earn on every flip I make.",
-			invest_done: "Partner! Let's make some coin.",
-			shares_sold: "Sold back. No hard feelings!"
-		}
-	},
-	arin: {
-		brief: "warm, confident, expressive tea house owner, a natural merchant",
-		voiceId: "iP95p4xoKVk53GoZ742B",
-		tag: "[warmly]",
-		lines: {
-			hello: "Lassi's fresh. And I always need mangoes.",
-			thanks: "That's the afternoon's lassi sorted.",
-			...shared,
-			haggle_ok: "That seems fair.",
-			haggle_no: "I can't go that low.",
-			refuse: "Let's leave it there.",
-			bump: "Whoa, sorry about that!",
-			invest_pitch: "Shares in the tea house pay out every time I sell a lassi.",
-			invest_done: "Thank you. We'll do well together.",
-			shares_sold: "That's alright. The door's always open."
-		}
-	}
-};
-/** Townsfolk reaction voices (pre-made ElevenLabs voices): each townsperson keeps one voice; bump lines are what the
-*  speech bubble shows, so sound and text match. Files: /audio/voice/folk<n>/bump_<k>.mp3. */
-const FOLK_VOICES = [
-	{
-		voiceId: "FGY2WhTYpPnrIDTdsKH5",
-		tag: "[surprised]",
-		bump: ["Whoa!", "Hey, watch out!"]
-	},
-	{
-		voiceId: "IKne3meq5aSn9XLyUdCD",
-		tag: "[startled]",
-		bump: ["Oof!", "Easy there!"]
-	},
-	{
-		voiceId: "pqHfZKP75CvOlQylNhV4",
-		tag: "[grumbling]",
-		bump: ["Careful!", "Hey!"]
-	},
-	{
-		voiceId: "XrExE9yKIg1WjnnlVkGX",
-		tag: "[surprised]",
-		bump: ["Excuse you!", "Oh my!"]
-	}
-];
-/** Every voiced character, by speaker id: merchants, townsfolk voices (folk0..3) and the non-trading cast. The server
-*  voice route (server/near/voice.ts) speaks lines that have no recorded file with exactly these voices. */
-const SPEAKERS = {
-	...Object.fromEntries(Object.entries(VOICES).map(([id, v]) => [id, {
-		voiceId: v.voiceId,
-		tag: v.tag
-	}])),
-	...Object.fromEntries(FOLK_VOICES.map((v, n) => [`folk${n}`, {
-		voiceId: v.voiceId,
-		tag: v.tag.replace(/\[(surprised|startled|grumbling)\]/, "[casually]")
-	}])),
-	engineer: {
-		voiceId: "Xb7hH8MSUJpSbSDYk0k2",
-		tag: "[thoughtfully]"
-	},
-	harbor: {
-		voiceId: "CwhRBWXzGAHq8TQ4Fs17",
-		tag: "[gruffly]"
-	}
-};
-/** Fixed one-off lines spoken in the economy flow (the rest of that flow is live figures, voiced by an opener plus the server). */
-const EVENT_LINES = {
-	pema: ["You saved my morning, Kavi!", "A partner! I've paid the harbor. My crates are coming!"],
-	tomas: ["There you go. Don't tell Pema where you got them."],
-	mira: [],
-	arin: []
-};
-const REOPEN_THANKS = "We're open again, thanks to you!";
-(() => {
-	const out = {};
-	const eco = initialEconomy();
-	for (const [id, c] of Object.entries(CONVERSATIONS)) for (const n of Object.values(c.nodes)) try {
-		(out[id] ??= /* @__PURE__ */ new Set()).add(n.text(eco));
-	} catch {}
-	for (const [id, ls] of Object.entries(EVENT_LINES)) for (const l of ls) (out[id] ??= /* @__PURE__ */ new Set()).add(l);
-	for (const id of [
-		"pema",
-		"tomas",
-		"mira",
-		"arin"
-	]) (out[id] ??= /* @__PURE__ */ new Set()).add(REOPEN_THANKS);
-	return Object.fromEntries(Object.entries(out).map(([id, s]) => [id, [...s]]));
-})();
-// server/near/voice.ts
-const MODEL = "eleven_v4";
-const MAX_TEXT = 240;
-/** ponytail: per server instance and day; move to Redis (shared counter) if many instances run at once. */
-const DAILY_CHARS = 6e3;
-const cache = /* @__PURE__ */ new Map();
-const CACHE_MAX = 300;
-let day = "";
-let spent = 0;
-async function synthesize(speaker, raw, apiKey) {
-	const v = SPEAKERS[speaker];
-	const text = raw.replace(/\s+/g, " ").trim().slice(0, MAX_TEXT);
-	if (!v) return {
-		status: 400,
-		body: {
-			status: "error",
-			message: "unknown speaker"
-		}
-	};
-	if (!text) return {
-		status: 400,
-		body: {
-			status: "error",
-			message: "empty line"
-		}
-	};
-	const key = `${speaker}|${text}`;
-	const hit = cache.get(key);
-	if (hit) return {
-		status: 200,
-		body: {
-			status: "ok",
-			mime: "audio/mpeg",
-			audio: hit
-		}
-	};
-	if (!apiKey) return {
-		status: 503,
-		body: {
-			status: "unconfigured",
-			message: "voice not configured"
-		}
-	};
-	const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
-	if (today !== day) {
-		day = today;
-		spent = 0;
-	}
-	if (spent + text.length > DAILY_CHARS) return {
-		status: 429,
-		body: {
-			status: "budget",
-			message: "voice budget used for today"
-		}
-	};
-	spent += text.length;
-	const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${v.voiceId}?output_format=mp3_44100_64`, {
-		method: "POST",
-		headers: {
-			"xi-api-key": apiKey,
-			"content-type": "application/json",
-			accept: "audio/mpeg"
-		},
-		body: JSON.stringify({
-			text: `${v.tag} ${text}`,
-			model_id: MODEL
-		})
-	}).catch(() => null);
-	if (!r || !r.ok) {
-		spent -= text.length;
-		return {
-			status: 502,
-			body: {
-				status: "error",
-				message: `voice service ${r?.status ?? "unreachable"}`
-			}
-		};
-	}
-	const audio = Buffer.from(await r.arrayBuffer()).toString("base64");
-	if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value);
-	cache.set(key, audio);
-	return {
-		status: 200,
-		body: {
-			status: "ok",
-			mime: "audio/mpeg",
-			audio
-		}
-	};
-}
 // src/economy/haggle.ts
 const PERSONALITY = {
 	pema: {
@@ -13246,19 +12647,32 @@ function factsFor(st, id, offers, receipts, extra = {}) {
 	return {
 		facts,
 		script: price,
-		topics
+		topics,
+		ledger: { held: {
+			mango: m.stock.mango,
+			lemon: m.stock.lemon,
+			lassi: m.stock.lassi
+		} }
 	};
 }
-/** Facts for a resident (Lin, Dev): purse and goods on chain, the bids for their work, their meal, their plan, memory. */
+/** "1 mango", "65 mangoes", "2 lemons", "5 lassi". */
+const goodsOf = (good, n) => `${n} ${n === 1 || good === "lassi" ? good : good === "mango" ? "mangoes" : `${good}s`}`;
+/** Facts for a resident (Lin, Dev): purse and goods on chain, the bids for their work, their meal, their plan, memory.
+*  Each quantity is labelled with its role (held now, picked per day, what one order takes) so the chat model cannot
+*  swap them; `ledger` lets `grounded` check the same roles in the reply. */
 function residentFacts(r, held, offers, names, extra = {}) {
 	const bids = offers.filter((o) => o.side === "bid" && o.token_id === r.good && Number(o.qty) > 0).sort((a, b) => Number(b.price) - Number(a.price));
 	const meals = offers.filter((o) => o.side === "ask" && o.token_id === r.food && Number(o.qty) > 0).sort((a, b) => Number(a.price) - Number(b.price));
 	const who = (id) => names[id] ?? id;
 	const dFacts = decisionFacts(extra.decision ?? null), mFacts = memoryFacts(extra.memory ?? [], r.good, 2);
+	const have = held[r.good] ?? 0, shown = bids.slice(0, 3);
+	const takes = shown.reduce((n, o) => n + Number(o.qty), 0);
 	const facts = [
-		`You are ${r.name}, ${/^[aeiou]/i.test(r.job) ? "an" : "a"} ${r.job} in Saltlight Market. Each market day you earn ${r.perDay} ${r.good}s from ${r.reason}, sell them to a stall, then buy a ${r.food} to eat.`,
-		`You hold ${held.coin ?? 0} coins, ${held[r.good] ?? 0} ${r.good}s and ${held[r.food] ?? 0} ${r.food}.`,
-		...bids.slice(0, 3).map((o) => `${who(o.merchant)} pays ${o.price} coins a ${r.good}, for up to ${o.qty}.`),
+		`You are ${r.name}, ${/^[aeiou]/i.test(r.job) ? "an" : "a"} ${r.job} in Saltlight Market. You sell what you gather to the stalls, then buy a ${r.food} to eat.`,
+		`Your daily work: each market day you gather ${goodsOf(r.good, r.perDay)} from ${r.reason}. That is what you add each day, not what you have.`,
+		`What you hold right now, in total: ${goodsOf(r.good, have)}, ${held.coin ?? 0} coins and ${goodsOf(r.food, held[r.food] ?? 0)}.`,
+		...shown.map((o) => `${who(o.merchant)} has an order to buy at most ${goodsOf(r.good, Number(o.qty))} from you, at ${o.price} coins each.`),
+		...shown.length && takes < have ? [`Together these orders take at most ${goodsOf(r.good, takes)} of your ${goodsOf(r.good, have)}; nobody buys your whole stock today.`] : [],
 		...meals.slice(0, 2).map((o) => `${who(o.merchant)} sells a ${r.food} for ${o.price} coins.`),
 		...dFacts,
 		...mFacts
@@ -13267,14 +12681,23 @@ function residentFacts(r, held, offers, names, extra = {}) {
 	const script = best ? `${who(best.merchant)} pays best today, ${best.price} coins a ${r.good}.${meal ? ` Lunch is a ${r.food} at ${meal.price}.` : ""}` : `Nobody is buying ${r.good}s right now, so I'm holding mine.`;
 	const topics = {
 		price: script,
-		stock: `I've got ${held[r.good] ?? 0} ${r.good}s and ${held.coin ?? 0} coins.`
+		stock: `I've got ${goodsOf(r.good, have)} and ${held.coin ?? 0} coins.`
 	};
 	if (dFacts.length) topics.decision = firstPerson(dFacts[0]);
 	if (mFacts.length) topics.past = firstPerson(mFacts[0]);
 	return {
 		facts,
 		script,
-		topics
+		topics,
+		ledger: {
+			held: {
+				[r.good]: have,
+				[r.food]: held[r.food] ?? 0
+			},
+			perDay: { [r.good]: r.perDay },
+			takes: { [r.good]: takes },
+			each: { [r.good]: Math.max(0, ...shown.map((o) => Number(o.qty))) }
+		}
 	};
 }
 /** "Today you raised your ..." -> "Today I raised my ...": the scripted answer reads in the speaker's own voice. */
@@ -13334,11 +12757,35 @@ const spelled = (s) => s.replace(/\b[a-z]+\b/gi, (w) => {
 	return i >= 2 ? String(i) : TENS[k] !== void 0 ? String(TENS[k]) : w;
 });
 const numbers = (s) => spelled(s).match(/\d+(?:\.\d+)?/g) ?? [];
+const PER_DAY = /\b(a day|per day|each day|every day|daily|pick|picks|picked|picking|gather|gathered|this morning|each morning|every morning)\b/i;
+const HAVE = /\b(i've got|i have|i've|i hold|i'm holding|i am holding|i'm carrying|i am carrying|i carry|i still have|on my shelves|in my basket|my stock|in stock)\b/i;
+const BUY = /\b(buys?|buying|bought|takes?|taking|pays?|paying|wants?)\b/i;
+const WHOLE = /\b(them|all of them|them all|all my|all of my|every one|everything|the lot|my whole)\b/i;
+const COUNT = /\b(\d+)\s+((?:(?!coins?\b|c\b|for\b|at\b|a\b|an\b|per\b|each\b)[a-z'-]+\s+){0,2}?)(mango(?:e?s)?|lemons?|lassis?)\b/gi;
+const goodWord = (w) => w.toLowerCase().startsWith("mango") ? "mango" : w.toLowerCase().startsWith("lemon") ? "lemon" : "lassi";
+/** Role check for one clause: a count said with "I have" must be what is held, one said with "a day"/"picked" the daily
+*  amount, one a buyer takes no more than the orders take; "they'll buy them" cannot cover more than the orders take. */
+function rolesOk(clause, ledger) {
+	for (const m of clause.matchAll(COUNT)) {
+		const n = Number(m[1]), good = goodWord(m[3]);
+		if (PER_DAY.test(clause)) {
+			if (ledger.perDay?.[good] !== n) return false;
+		} else if (HAVE.test(clause)) {
+			if ((ledger.held[good] ?? 0) !== n) return false;
+		} else if (ledger.each && BUY.test(clause) && n > (ledger.each[good] ?? 0)) return false;
+	}
+	if (ledger.takes && BUY.test(clause) && WHOLE.test(clause)) {
+		if (Object.entries(ledger.takes).some(([good, t]) => (ledger.held[good] ?? 0) > t)) return false;
+	}
+	return true;
+}
 /** True if every number in `line` (digits or words from two upward) is one of the facts' numbers: the model may not
-*  invent a price, stock or sum. */
-function grounded(line, facts) {
+*  invent a price, stock or sum. With a ledger, every count of goods must also match its role (held, per day, orders). */
+function grounded(line, facts, ledger) {
 	const known = new Set(facts.flatMap(numbers));
-	return numbers(line).every((n) => known.has(n));
+	if (!numbers(line).every((n) => known.has(n))) return false;
+	if (!ledger) return true;
+	return spelled(line).split(/[.,;:!?]|\band\b|\bbut\b|\bor\b|\bwhile\b/i).every((c) => rolesOk(c, ledger));
 }
 const OFF_WORLD = /\b(blockchain|crypto|token|wallet|nft|smart contract|language model|as an ai|ai model|chatgpt|openai|llm)\b/i;
 /** Plain speakable text: no markdown, emoji, stage directions or quotes around the whole line. */
@@ -13365,7 +12812,7 @@ async function answer(i) {
 	const system = [
 		`You are ${p.name}, in Saltlight Market, a cosy anime city. How you talk: ${p.voice}.`,
 		"Answer the customer's question in one to three short spoken sentences, in character, in plain words.",
-		"Use only the facts below. Never state a number that is not in them. If the facts do not answer the question, say so in character and talk about what you do know.",
+		"Use only the facts below. Never state a number that is not in them. Keep each number with what it describes: what you hold now, what you gather each day and how many one order takes are different numbers. If the facts do not answer the question, say so in character and talk about what you do know.",
 		"Never mention blockchains, wallets, tokens, contracts or AI. No lists, no markdown, no emoji, no stage directions.",
 		"Facts:",
 		...i.facts.map((f) => `- ${f}`)
@@ -13404,7 +12851,7 @@ async function answer(i) {
 		});
 		if (!r.ok) return fallback;
 		const line = clean((await r.json()).choices?.[0]?.message?.content ?? "");
-		if (!line || line.length > MAX_LINE || OFF_WORLD.test(line) || !grounded(line, i.facts)) return fallback;
+		if (!line || line.length > MAX_LINE || OFF_WORLD.test(line) || !grounded(line, i.facts, i.ledger)) return fallback;
 		return reply("ai", i.id, line);
 	} catch {
 		return fallback;
@@ -16403,6 +15850,7 @@ async function talk(cfg, req, env) {
 		facts: built.facts,
 		script: built.script,
 		topics: built.topics,
+		ledger: built.ledger,
 		question,
 		history: Array.isArray(history) ? history : [],
 		allowed
