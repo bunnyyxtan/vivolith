@@ -45,9 +45,9 @@ recordings, alignment, in-game first audio 1.70 s, streaming comparison, route h
       continuity with the recordings) and the two lines Whisper misheard: `public/audio/voice/pema/s583444d9.mp3`
       ("Thirty crates!") and `public/audio/voice/engineer/s71b0f56e.mp3` ("Your call."). Re-take only what sounds wrong
       (`rm` the file, then `generate.ts --run voice --one <file>`).
-- [ ] Generate Pema's greeting opening `audio/voice/pema/sdc716855.mp3` "Oh, a new face! I'm Pema." (25 characters,
-      about 13 credits; `generate.ts --run voice --one audio/voice/pema/sdc716855.mp3`): plays at any shelf count. Optional:
-      `sa43fc250.mp3`, the whole 3-mango greeting (93 characters, about 45 credits). Until then the greeting is server-voiced.
+- [x] Pema's greeting opening `audio/voice/pema/sdc716855.mp3` "Oh, a new face! I'm Pema." generated 2026-11-14 (one
+      call, 14 credits); plays at any shelf count, the figures follow from the server. The whole 3-mango take
+      `sa43fc250.mp3` stays ungenerated (optional: offline new players only).
 - [ ] Moods heard live: Pema relieved, down, grateful (only worried was generated); soften a tag in `MOOD_TAG` if one
       is exaggerated. Rent Night kept and closed outcomes and a haggle reaction in the real voice.
 - [ ] Live talk route (NEAR AI, paid) plus voice: Ask to first audio with the pane visible (expected about 1.5-1.7 s

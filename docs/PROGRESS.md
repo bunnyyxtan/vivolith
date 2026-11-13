@@ -199,6 +199,13 @@ Silent dialogue and read-only inspection (2026-11-14, local, no deploy):
   every stall can pay"; real state "Stall rent in about 6 min · every stall can pay". 0 relayer txs over the 8-minute
   session (nearblocks). Layout: rent line at 1280x720 x 1020-1260 y 128-155, at 1920x1080 x 1699-1900 y 128-155,
   inside the wallet column, not clipped, no overlap with the mission card (x 20-385) or account chip.
+- Greeting opening recorded (authorized, 2026-11-14): `generate.ts --run voice --one audio/voice/pema/sdc716855.mp3`,
+  one call, Lily, `[warmly]`, eleven_v4; account 10508 -> 10522 = 14 credits. 3.28 s, mp3 44.1 kHz mono, -19.8 LUFS
+  (Pema's other takes -19.2 to -22.1), peak -3.4 dBFS, natural 0.35 s pause between the sentences; local Whisper
+  (small.en): "Oh, a new face. I'm Pema." 6 of 6 words, nothing else. Not yet heard by a person. In game (mock voice,
+  offline server probed unconfigured first): stock 7, 1, 2 and 4 all play the file (fetched once, no server request for
+  it), then the live shelf sentence from the server; words 1-6 lit across the clip, then the rest; stop() at 1.2 s cut it
+  at word 3 with no further audio.
 
 Verified offline in the browser: open stocked stall (Tomas), closed stall with stock (Pema, no goods outside, Closed card), vacant stall, reopening at 08:00 (shutter up, goods back), resident delivery to an open stall and to a shut stall (state injected to close her: labelled), trade and haggle panels with the mission visible, panel open at 20:58 (clock holds while trading), 1280x720 and 1920x1080, day and night. Not verified: a live resident delivery to a closed stall on testnet; sold-out display (no stall reached 0 stock in play). 13/13 checks, voice check, typecheck, build.
 
