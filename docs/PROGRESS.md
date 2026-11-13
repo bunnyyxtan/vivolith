@@ -129,6 +129,31 @@ Offline or isolated only (mocked RPC, mocked NEAR AI, or offline browser play):
 | Residents (Lin, Dev) and real NEAR settlement in this journey | NOT PLAYED | Residents only act in on-chain market turns; a connected run writes to the shared testnet market (production) and needs the owner's approval |
 | At 800x600 the trade panel covers the objective card's rent meter | OPEN | Seen in `rentnight-a1-choice-at-pema.jpg`; not checked at 1080p |
 
+## Phase 6: gameplay, game feel and production review (2026-11-14)
+
+**Status: IMPLEMENTATION COMPLETE (local, offline play).** Played in the browser pane with real key events
+(`near-world-offline-qa`, port 5178); the pane was hidden or occluded, so the loop was stepped with `__v2.sim` and visible
+FPS was not measured. Runs, numbers and labels: `docs/evidence/phase6-playtest.json`. No transaction, guest account,
+paid request, deploy or push.
+
+| Item | Status | Evidence |
+|---|---|---|
+| Playtest turn cap (release blocker): `NEAR_TEST_TURNS=N` (+ `NEAR_TEST_RUN=<id>`) allows at most N market turns per run, browser and scheduler together, counted atomically in the shared store after the turn lock and before any chain read or signature; store down, `0` or an invalid value refuses every turn; unset = today's behaviour; status route reports run, limit, used | VERIFIED (mocked RPC) | `turn.check.ts` case 7: 2 turns ran, the next 2 answered `capped` with 0 transactions; another run id counts on its own; `0`/`abc`/`-1` sign nothing. Commit `3c6a80a`; API bundle rebuilt in this phase |
+| Every open stall that never changed mood (Tomas from the first minute) showed a lowered shutter and a "Closed" card while trading: the curtain was never initialised and `tick` only calls `set` on a change | FIXED, VERIFIED | Before: Tomas hidden behind "Closed" at 10:00 on Day 1; after: counter and crates open |
+| Camera cut in to 0.6 m behind Kavi whenever the arm swept a lamp post (177 pole colliders under 0.5 m) | FIXED | Pole-thin colliders no longer clip the camera arm |
+| Selling to Pema lowered her till (24 -> 15 c) and the rent meter said "15 c short" with no sign of the stock she gained | FIXED, VERIFIED | Meter line "6 mangoes on her shelf: coins only once shoppers buy them" |
+| Haggle at the merchant's limit: a tactic that "worked" said "Fine, fine. You win this one" while the price did not move | FIXED, VERIFIED | Now "That's as low as I go." and counted as no win; session unchanged, so the relayer's replay is identical; `haggle.check.ts` case |
+| Arin's recorded refusal "I can't go that low." played when he was the buyer | FIXED | The seller's opener is dropped in a sell haggle |
+| Goal hints said "Press E" (E orbits the camera; F interacts) in three lines | FIXED | advice.ts, guide.ts |
+| Resuming a save made after 21:00 reopened an evening report even when it had been dismissed, and that report was empty ("A quiet stretch", +0 c) | FIXED, VERIFIED | The open report's start is saved; only that report comes back, with its content |
+| Closed Pema with stocked shelves said "Bring me stock and I can open again" beside "8 of 8 mangoes' worth" | FIXED, VERIFIED (offline) | "My shelves are stocked, so I open again at eight." / "Closed · shelves stocked: reopens at 08:00" |
+| Evening report showed "-20 c" in red after the coins became mangoes | FIXED | Purse line adds what the bag holds |
+| Runs: fresh player through the first day; Pema-support closed and kept branches; profit-first Orchard -> Arin; week fast-forward and Day 9 goals; broke purse, duplicate input, AI offline, interrupted epilogue, closed stall; reload mid-walk and after 21:00 | PLAYED | `phase6-runC-closed-report.jpg`, `phase6-runC-kept-report.jpg`, JSON |
+| Balance (14-day probe on the game's own rules): idle 40 c, Pema-support 242 c (100 c on day 5), profit-first 416 c (day 2), invest-heavy net worth 424 c | MEASURED | No dominant strategy; no change made |
+| Render cost (`gl.finish`, median of 3x60): 720p night 2.3-4.0 ms; 1080p night 2.9-6.0 ms, day 2.4-5.5 ms; simulation 1.5-2.0 ms per step | MEASURED (not visible FPS) | JSON; trade panel and HUD within the 1920x1080 viewport |
+| Checks | PASS | 13 economy/client/server checks, `voice.check`, client typecheck, production build (`lines.json` and API bundle regenerated) |
+| Not fixed | OPEN | Haggling always opens at 3 units (the panel's chosen quantity resets; the relayer replays a 3-unit haggle). Offline scripted rent line after rent was paid says "I need to sell" (shared with the relayer). Conversation camera keeps Kavi in front of the merchant. Visible-frame FPS at 1080p still needs the window in view |
+
 ## Phase 5: world quality and atmosphere (2026-11-13)
 
 **Status: DEVELOPMENT COMPLETE (local, offline play).** Played in the browser pane (`near-world-offline`, 1024x768,

@@ -10,8 +10,9 @@ Production today: `c2ace0b`. Local commits not deployed: `86cf4be` (Lin groundin
 ## 1. Connected playthrough (testnet)
 
 - [ ] Preflight: read shared market state (stalls, tills, Guild, posted orders, last turn) without writing.
-- [ ] Enumerate expected transaction types and accounts before the first market turn; enforce a hard turn cap
-      (browser 60 s ticks are not bounded today: a cap must exist in code or the run must not start).
+- [ ] Enumerate expected transaction types and accounts before the first market turn. The hard turn cap exists
+      (Phase 6, `3c6a80a`): set `NEAR_TEST_TURNS=<n>` and a fresh `NEAR_TEST_RUN=<id>` on the relayer that serves the
+      run, check `GET /api/near/status` shows `testTurns`, and deploy the rebuilt API bundle first.
 - [ ] One guest (40 c starter purse), recorded and kept for reuse.
 - [ ] Play: intro, Pema's problem, orchard, buy, offer comparison, haggle or invest, Rent Night, report, Chronicle.
 - [ ] Verify against chain: player balances, merchant tills/stock/orders, shopper purchases, Guild dues and
