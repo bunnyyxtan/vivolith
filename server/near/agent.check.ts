@@ -18,6 +18,7 @@ function memStore(): DecisionStore & { down: boolean; data: Map<string, string> 
     setNx: async (k: string, v: string) => { if (s.down) throw new Error("down"); if (data.has(k)) return false; data.set(k, v); return true; },
     set: async (k: string, v: string) => { if (s.down) throw new Error("down"); data.set(k, v); },
     del: async (k: string) => { if (s.down) throw new Error("down"); data.delete(k); },
+    incr: async (k: string) => { if (s.down) throw new Error("down"); const n = Number(data.get(k) ?? 0) + 1; data.set(k, String(n)); return n; },
   };
   return s;
 }

@@ -26,6 +26,8 @@ export interface ChainStatus {
   readonly auth: { readonly domain: string; readonly clientId: string } | null;
   /** Length of one on-chain market day (the relayer's MARKET_DAY_MS). */
   readonly marketDayMs?: number;
+  /** Who moves the market: players' browsers (default) or the city's own scheduler (server/near/ops.ts). */
+  readonly driver?: "players" | "scheduler";
 }
 
 export interface TxOutcome {
@@ -96,9 +98,15 @@ export async function agentDecision(id: string): Promise<AgentDecision | null> {
   } catch { return null; }
 }
 
-export async function askMerchant(id: string): Promise<{ line: string; ai: boolean } | null> {
-  const r = await post("talk", { npc: id }).catch(() => null);
-  return r && typeof r.line === "string" ? { line: r.line, ai: r.source === "ai" } : null;
+/** The server-issued conversation id: the server keeps the last few exchanges under it (the client never sends history). */
+let conversation: string | null = null;
+/** Asks a merchant or resident (Lin `picker`, Dev `porter`) the player's own question (relayer route `talk`). The answer
+ *  is grounded in their chain state, decisions and memory; `ai` only when NEAR AI phrased it. `sentences` is the same
+ *  line split for a streaming voice. */
+export async function askMerchant(id: string, question = ""): Promise<{ line: string; ai: boolean; sentences: string[] } | null> {
+  const r = await post("talk", { npc: id, question: question.slice(0, 200), account: playerId() ?? undefined, conv: conversation ?? undefined }).catch(() => null);
+  if (r && typeof r.conv === "string") conversation = r.conv;
+  return r && typeof r.line === "string" ? { line: r.line, ai: r.source === "ai", sentences: Array.isArray(r.sentences) ? (r.sentences as string[]) : [r.line] } : null;
 }
 
 /** When the market last took a turn on NEAR (a fresh read, not the cached status). */

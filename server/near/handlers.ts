@@ -4,7 +4,7 @@
 //
 // Routes: GET status | POST guest {publicKey} | POST relay {signedDelegate: base64} | POST settle | POST deal | POST tick
 //         | POST social {idToken, guest?} | POST claim {account}
-import { createHash, createPublicKey, verify as verifySignature, type JsonWebKey } from "node:crypto";
+import { createHash, createPublicKey, randomBytes, verify as verifySignature, type JsonWebKey } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,8 +13,13 @@ import { Account, JsonRpcProvider, KeyPairSigner, PublicKey, SCHEMA, actions, ne
 import { MERCHANTS, keyPairFromSeed, merchantKey, residentKey, type MerchantId } from "./keys.ts";
 import { RESIDENTS, executableOffers, planResident, type Offer } from "../../src/economy/residents.ts";
 import { synthesize } from "./voice.ts";
-import { answer, factsFor } from "./talk.ts";
-import { LEVERS, agentConfig, applyLivePrices, attachTx, claimBidSend, decideBid, decideResident, livePrices, priceMoved, recentDecisions, releaseBidSend, type AgentConfig, type Decision, type DecisionStore } from "./agent.ts";
+import { MAX_QUESTION, answer, factsFor, playerFacts, residentFacts, type Exchange, type Receipt } from "./talk.ts";
+import { readMemory } from "./memory.ts";
+import { LEVERS, agentConfig, applyLivePrices, attachTx, claimBidSend, decideBid, decideResident, decisionFor, livePrices, priceMoved, recentDecisions, releaseBidSend, type AgentConfig, type Decision, type DecisionStore } from "./agent.ts";
+import { agentsHalted, fromScheduler, opsConfig, spend, usage } from "./ops.ts";
+import { AGENTS, memoriesFor, recordMemories, verifyPass } from "./autonomy.ts";
+import { verifyDecision } from "./verify.ts";
+import type { ChainReceipt, MemoryRow, Snapshot } from "./memory.ts";
 import { ORCHARD_PICK, bidFor, dealBounds, planMerchantTrades, quote } from "../../src/economy/pricing.ts";
 import { newcomerPrice, verifyDealUnit } from "../../src/economy/haggle.ts";
 import { closingNeed, shopperWant } from "../../src/economy/sim.ts";
@@ -153,6 +158,13 @@ export function decisionStore(cfg: Config): DecisionStore {
       setNx: async (k, v, ttl) => (await cmd(["SET", k, v, "NX", "EX", String(ttl)])) === "OK",
       set: async (k, v, ttl) => { await cmd(["SET", k, v, "EX", String(ttl)]); },
       del: async (k) => { await cmd(["DEL", k]); },
+      incr: async (k, ttl) => {
+        const r = await fetch(`${cfg.redisUrl}/pipeline`, { method: "POST", headers: { authorization: `Bearer ${cfg.redisToken}`, "content-type": "application/json" }, body: JSON.stringify([["INCR", k], ["EXPIRE", k, String(ttl)]]) });
+        if (!r.ok) throw new Error("decision store unavailable");
+        const n = Number(((await r.json()) as [{ result: unknown }])[0]?.result);
+        if (!Number.isFinite(n)) throw new Error("decision store gave no count");
+        return n;
+      },
     };
   }
   const live = (k: string): string | null => { const e = agentMemory.get(k); return e && e.until > Date.now() ? e.v : null; };
@@ -161,6 +173,7 @@ export function decisionStore(cfg: Config): DecisionStore {
     setNx: async (k, v, ttl) => { if (live(k) !== null) return false; agentMemory.set(k, { v, until: Date.now() + ttl * 1000 }); return true; },
     set: async (k, v, ttl) => { agentMemory.set(k, { v, until: Date.now() + ttl * 1000 }); },
     del: async (k) => { agentMemory.delete(k); },
+    incr: async (k, ttl) => { const n = Number(live(k) ?? 0) + 1; agentMemory.set(k, { v: String(n), until: Date.now() + ttl * 1000 }); return n; },
   };
 }
 
@@ -222,9 +235,14 @@ export function guestIdFor(publicKey: string, relayerId: string): string {
 
 // ---------- routes ----------
 
-async function status(cfg: Config): Promise<Response> {
+async function status(cfg: Config, env: RelayEnv): Promise<Response> {
   const last = await kv(cfg, ["GET", LAST_TICK]).catch(() => null);
+  const ops = opsConfig(env), store = decisionStore(cfg);
+  const enabled = [...agentConfig(env).enabled].filter((id) => (AGENTS as readonly string[]).includes(id));
   return json(200, {
+    // who moves the market and whether agents may use NEAR AI right now (no secrets, no limits beyond today's use)
+    driver: ops.driver,
+    agents: { enabled, halted: await agentsHalted(ops, store), usedToday: await usage(store) },
     lastTick: last ? (JSON.parse(last) as unknown) : null,
     configured: configured(cfg),
     network: "testnet",
@@ -764,7 +782,10 @@ async function releaseOnce(cfg: Config, key: string): Promise<void> {
 }
 
 /** Residents' day (see src/economy/residents.ts). Returns what they ate per `merchant:good`, so tourists buy less. */
-export async function residentTurn(cfg: Config, provider: JsonRpcProvider, relayer: Account, secret: string, day: number, log: string[], txs: string[], agentCfg: AgentConfig, agentStore: DecisionStore, mint = true): Promise<Record<string, number>> {
+/** How an agent may decide on this turn: replay only (browser-driven), with a paid-call budget, and with its memory. */
+interface AgentTurn { readonly replayOnly?: boolean; readonly budget?: () => Promise<boolean>; readonly memory?: Readonly<Record<string, readonly MemoryRow[]>> }
+
+export async function residentTurn(cfg: Config, provider: JsonRpcProvider, relayer: Account, secret: string, day: number, log: string[], txs: string[], agentCfg: AgentConfig, agentStore: DecisionStore, mint = true, turn: AgentTurn = {}): Promise<Record<string, number>> {
   const ate: Record<string, number> = {};
   for (const r of RESIDENTS) {
     const accountId = `${r.id}.${cfg.relayerId}`;
@@ -784,7 +805,7 @@ export async function residentTurn(cfg: Config, provider: JsonRpcProvider, relay
     const stalls = (await chainEconomy(provider, cfg)).merchants;
     const book = executableOffers(await view<Offer[]>(provider, cfg.contractId, "get_offers", {}), stalls); // closed stalls and unfillable orders are never offered
     // NEAR AI picks where this resident sells and eats (agent.ts), only among orders that exist; else exactly the rule's plan
-    const dec = await decideResident({ store: agentStore, cfg: agentCfg, res: r, offers: book, coin: held.coin ?? 0, holding: held[r.good] ?? 0, day, fetchImpl: fetch as never });
+    const dec = await decideResident({ store: agentStore, cfg: agentCfg, res: r, offers: book, coin: held.coin ?? 0, holding: held[r.good] ?? 0, day, fetchImpl: fetch as never, replayOnly: turn.replayOnly, budget: turn.budget, memory: turn.memory?.[r.id] });
     if (dec.skip) { log.push(`resident ${r.id} decision is held by another tick`); continue; }
     const plan = dec.plan;
     if (dec.decision) log.push(`resident ${r.id} ${dec.decision.source === "ai" ? "NEAR AI" : "rule"} plan: ${dec.decision.action}${dec.decision.fallbackReason ? ` (${dec.decision.fallbackReason})` : ""}`);
@@ -809,22 +830,43 @@ export async function residentTurn(cfg: Config, provider: JsonRpcProvider, relay
   return ate;
 }
 
-async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
+/** One market turn. `trusted` = called by the scheduler route with its secret: only such turns may ask NEAR AI (and
+ *  only within the daily budget); browser-driven turns replay a decision already made today, else use the rule. With
+ *  NEAR_MARKET_DRIVER=scheduler, browser requests do not move the market at all. */
+async function tick(cfg: Config, env: RelayEnv, trusted = false): Promise<Response> {
+  const ops = opsConfig(env);
+  if (ops.driver === "scheduler" && !trusted) return json(200, { status: "scheduled", message: "market turns run on the city's own schedule" });
   if (!(await claimTick(cfg))) return json(200, { status: "skipped", message: "the merchants moved less than a minute ago" });
   const secret = (env.NEAR_MERCHANT_SECRET ?? "").trim();
   if (!secret) throw new HttpError(503, "merchant keys not configured");
   const { provider, relayer } = account(cfg);
+  // ponytail: block, balances and stalls are three "final" reads moments apart; a trade landing between them can be
+  // counted in both the opening balance and the day's receipts. Read at one block_id if exact accounting matters.
+  const block = Number((await provider.viewBlock({ finality: "final" })).header.height);
   const st = await chainEconomy(provider, cfg);
   const posted = new Map((await view<OfferRow[]>(provider, cfg.contractId, "get_offers", {})).map((o) => [orderKey(o), o]));
-  const agentCfg = agentConfig(env);
   const agentStore = decisionStore(cfg);
+  const baseCfg = agentConfig(env);
+  const halted = await agentsHalted(ops, agentStore);
+  const agentCfg: AgentConfig = halted ? { ...baseCfg, enabled: new Set() } : baseCfg; // kill switch: every price is the rule's
+  const memory = agentCfg.enabled.size ? await memoriesFor(agentStore) : {};
+  const turn: AgentTurn = { replayOnly: !trusted, budget: () => spend(ops, agentStore, "decision"), memory };
+  // each agent's opening position for its economic memory, read before this turn changes anything
+  const snaps = new Map<string, Snapshot>();
+  const day = Math.floor(Date.now() / MARKET_DAY_MS);
+  for (const id of MERCHANTS) { const m = st.merchants[id]; snaps.set(id, { day, block, coin: m.cash, goods: { ...m.stock }, open: m.status === "open" }); }
+  for (const r of RESIDENTS) {
+    const rows = await view<[string, string][]>(provider, cfg.contractId, "get_balances", { account_id: `${r.id}.${cfg.relayerId}` }).catch(() => null);
+    if (!rows) continue;
+    const b = Object.fromEntries(rows.map(([t, v]) => [t, Number(v)]));
+    snaps.set(r.id, { day, block, coin: b.coin ?? 0, goods: { mango: b.mango ?? 0, lemon: b.lemon ?? 0, lassi: b.lassi ?? 0 }, open: true });
+  }
   const signerOf = (id: MerchantId): Account => new Account(`${id}.${cfg.relayerId}`, provider, new KeyPairSigner(merchantKey(id, secret)));
   const log: string[] = [];
   const txs: string[] = [];
 
   // 0. The Market Guild (contract methods guild_lend / guild_collect): coin only moves between the fund and the
   // stalls, every loan is recorded as debt, and repayment comes before dues. It never creates money after its seed.
-  const day = Math.floor(Date.now() / MARKET_DAY_MS);
   // Yesterday's dividends, once (settle_day is idempotent too). Its own transaction: 60 Tgas per stall.
   // The chain says which days already ran (rate-limit memory resets on a cold start; the contract's record does not).
   const unsettled = MERCHANTS.some((id) => Number(st.flags[`lastSettled.${id}`]) < day - 1);
@@ -873,7 +915,7 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
     const lever = LEVERS[id];
     let agent: Decision | null = null, skipLever = false, leverPrice: number | null = null;
     if (lever && agentCfg.enabled.has(id)) {
-      const out = await decideBid({ store: agentStore, cfg: agentCfg, st, id, offers: [...posted.values()], day, fetchImpl: fetch as never });
+      const out = await decideBid({ store: agentStore, cfg: agentCfg, st, id, offers: [...posted.values()], day, fetchImpl: fetch as never, replayOnly: turn.replayOnly, budget: turn.budget, memory: memory[id] });
       agent = out.decision;
       skipLever = out.skipBid; // another tick holds this day's decision and posts its order
       if (agent) leverPrice = out.price;
@@ -927,7 +969,7 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
 
   // 2b. Residents (WP6): once a market day each, a day's piece work is sold into the best bid and one meal is bought
   // from what they hold; the meal is eaten (burned). Same keys and contract calls WP0 proved on testnet.
-  const ate = await residentTurn(cfg, provider, relayer, secret, day, log, txs, agentCfg, agentStore);
+  const ate = await residentTurn(cfg, provider, relayer, secret, day, log, txs, agentCfg, agentStore, true, turn);
 
   // 3. Operator: tourists (street shoppers), the harbor contract, the tea kitchen.
   const op: ReturnType<typeof actions.functionCall>[] = [];
@@ -967,10 +1009,18 @@ async function tick(cfg: Config, env: RelayEnv): Promise<Response> {
     if (!r.ok) log.push(`operator FAILED: ${r.error}`);
   }
 
+  // 4. Agents' memory (read from chain, written by every driver) and signature checks of NEAR AI decisions (scheduler
+  // turns only: they call NEAR AI, within their own daily budget). Neither can change a balance.
+  const receiptsOf = (id: string): Promise<ChainReceipt[]> => view<ChainReceipt[]>(provider, cfg.contractId, "get_receipts", { account_id: `${id}.${cfg.relayerId}` });
+  await recordMemories(agentStore, day, snaps, receiptsOf, log);
+  if (trusted && !halted && baseCfg.key) {
+    await verifyPass(agentStore, day, (decisionId, ev) => verifyDecision(baseCfg.url, baseCfg.key!, decisionId, ev, fetch as never), () => spend(ops, agentStore, "verify"), log);
+  }
+
   // The proof screen shows when the city last moved (scheduled turns keep it moving with nobody playing).
-  const last = { at: Date.now(), day, txs: txs.length, failed: log.filter((l) => /FAILED/.test(l)).length };
+  const last = { at: Date.now(), day, txs: txs.length, failed: log.filter((l) => /FAILED/.test(l)).length, by: trusted ? "scheduler" : "players" };
   await kv(cfg, ["SET", LAST_TICK, JSON.stringify(last)]).catch(() => null);
-  return json(200, { status: "onchain", txHashes: txs, log });
+  return json(200, { status: "onchain", txHashes: txs, log, driver: trusted ? "scheduler" : "players", agents: { halted, enabled: [...agentCfg.enabled], replayOnly: !trusted } });
 }
 
 /** The Mango Orchard: ORCHARD_PICK mangoes to a registered player, once per account per market day (atomic day
@@ -996,18 +1046,41 @@ async function pick(cfg: Config, req: Request): Promise<Response> {
  *  NEAR AI phrases it when NEAR_AI_KEY and NEAR_AI_MODEL are set (server-side only), else the scripted line. */
 async function talk(cfg: Config, req: Request, env: RelayEnv): Promise<Response> {
   const b = await readJson(req);
-  const id = String(b.npc ?? "") as MerchantId;
-  if (!(MERCHANTS as readonly string[]).includes(id)) throw new HttpError(400, "unknown merchant");
+  const id = String(b.npc ?? "");
+  const resident = RESIDENTS.find((r) => r.id === id) ?? null;
+  if (!(MERCHANTS as readonly string[]).includes(id) && !resident) throw new HttpError(400, "unknown speaker");
   if (!(await hit(cfg, `talk:${clientIp(req)}`, LIMITS.talk.max, LIMITS.talk.windowSec))) throw new HttpError(429, "slow down");
+  const question = typeof b.question === "string" ? b.question.slice(0, MAX_QUESTION) : "";
+  // the player's own trades with this speaker come from the player's receipts (public chain data); any game account works
+  const player = typeof b.account === "string" && /^[gs][0-9a-f]{16}\./.test(b.account) && b.account.endsWith(`.${cfg.relayerId}`) ? b.account : null;
+  // conversation history lives on the server under an unguessable id it issued: the client cannot plant past lines
+  const conv = typeof b.conv === "string" && /^[0-9a-f]{32}$/.test(b.conv) ? b.conv : randomBytes(16).toString("hex");
+  const store = decisionStore(cfg), day = Math.floor(Date.now() / MARKET_DAY_MS), npcAccount = `${id}.${cfg.relayerId}`;
+  const histKey = `vivolith:talk:${conv}:${id}`;
   const { provider } = account(cfg);
-  const [st, offers, receipts] = await Promise.all([
-    chainEconomy(provider, cfg),
+  const [offers, receipts, decision, memory, history, playerReceipts] = await Promise.all([
     view<OfferRow[]>(provider, cfg.contractId, "get_offers", {}),
-    view<{ kind: string; token_id: string; qty: string; price: string; counterparty: string }[]>(provider, cfg.contractId, "get_receipts", { account_id: `${id}.${cfg.relayerId}` }).catch(() => []),
+    view<Receipt[]>(provider, cfg.contractId, "get_receipts", { account_id: npcAccount }).catch(() => []),
+    (async () => (await decisionFor(store, id, day)) ?? (await decisionFor(store, id, day - 1)))().catch(() => null),
+    readMemory(store, id).catch(() => []),
+    store.get(histKey).then((v) => (v ? (JSON.parse(v) as Exchange[]) : [])).catch(() => []),
+    player ? view<Receipt[]>(provider, cfg.contractId, "get_receipts", { account_id: player }).catch(() => []) : Promise.resolve([] as Receipt[]),
   ]);
-  const { facts, script } = factsFor(st, id, offers, receipts);
-  const ai = { key: (env.NEAR_AI_KEY ?? "").trim() || null, model: (env.NEAR_AI_MODEL ?? "").trim() || null };
-  return json(200, await answer(ai, id, facts, script, typeof b.question === "string" ? b.question : ""));
+  let built: { facts: string[]; script: string; topics: Record<string, string> };
+  if (resident) {
+    const held = Object.fromEntries((await view<[string, string][]>(provider, cfg.contractId, "get_balances", { account_id: npcAccount }).catch(() => [])).map(([t, v]) => [t, Number(v)]));
+    const st = await chainEconomy(provider, cfg);
+    const names = Object.fromEntries(MERCHANTS.map((m) => [m, st.merchants[m].name]));
+    built = residentFacts(resident, held, executableOffers(offers as unknown as Offer[], st.merchants), names, { decision, memory });
+  } else {
+    built = factsFor(await chainEconomy(provider, cfg), id as MerchantId, offers, receipts, { decision, memory, player: player ? playerFacts(playerReceipts, npcAccount) : [] });
+  }
+  const ops = opsConfig(env);
+  const ai = { key: (env.NEAR_AI_KEY ?? "").trim() || null, model: (env.NEAR_AI_CHAT_MODEL ?? env.NEAR_AI_MODEL ?? "").trim() || null };
+  const allowed = async (): Promise<boolean> => !(await agentsHalted(ops, store)) && (await spend(ops, store, "chat"));
+  const r = await answer({ ai, id, facts: built.facts, script: built.script, topics: built.topics, question, history: Array.isArray(history) ? history : [], allowed });
+  if (question) await store.set(histKey, JSON.stringify([...(Array.isArray(history) ? history : []), { q: question, a: r.line }].slice(-3)), 3600).catch(() => undefined);
+  return json(200, { ...r, conv });
 }
 
 /** Pays a player the whole coins of dividends they are owed (the contract can only ever pay what is owed). Players'
@@ -1043,7 +1116,24 @@ async function settle(cfg: Config): Promise<Response> {
 export async function handle(route: string, req: Request, env: RelayEnv): Promise<Response> {
   const cfg = readConfig(env);
   try {
-    if (route === "status" && req.method === "GET") return await status(cfg);
+    if (route === "status" && req.method === "GET") return await status(cfg, env);
+    // The city's own schedule: a scheduler (Vercel Cron sends GET with `Authorization: Bearer $CRON_SECRET`, or the
+    // operator script) runs a turn that may let agents decide with NEAR AI. Nobody else can call it.
+    if (route === "market-turn") {
+      if (!fromScheduler(opsConfig(env), req.headers.get("authorization"))) return json(401, { status: "error", message: "scheduler only" });
+      if (!configured(cfg)) return json(503, { status: "unconfigured", message: "NEAR relayer not configured" });
+      return await tick(cfg, env, true);
+    }
+    // read-only: an agent's recent NEAR AI / rule decisions (was unreachable behind the POST-only check below)
+    if (route === "decisions" && req.method === "GET") {
+      const who = new URL(req.url).searchParams.get("merchant") ?? "";
+      if (!(AGENTS as readonly string[]).includes(who)) return json(200, { decisions: [] });
+      const store = decisionStore(cfg), day = Math.floor(Date.now() / MARKET_DAY_MS);
+      const ds = await recentDecisions(store, who, day).catch(() => []);
+      // `live`: this decision is setting the price right now (confirmed, this market day, order still posted on chain)
+      const live = !configured(cfg) ? [] : await (async () => { try { return await livePrices(store, await view<OfferRow[]>(account(cfg).provider, cfg.contractId, "get_offers", {}), day); } catch { return []; } })();
+      return json(200, { decisions: ds.map((d) => ({ ...d, live: live.some((p) => p.id === d.merchant && d.day === day) })) });
+    }
     if (req.method !== "POST") return json(405, { status: "error", message: "method not allowed" });
     if (route === "voice") { // spoken lines work offline too: no NEAR needed
       const origin = req.headers.get("origin");
@@ -1061,15 +1151,6 @@ export async function handle(route: string, req: Request, env: RelayEnv): Promis
     if (route === "settle") return await settle(cfg);
     if (route === "deal") return await deal(cfg, req, env);
     if (route === "tick") return await tick(cfg, env);
-    if (route === "decisions" && req.method === "GET") { // read-only: the merchant's recent NEAR AI / rule decisions
-      const who = new URL(req.url).searchParams.get("merchant") ?? "";
-      if (!([...MERCHANTS, ...RESIDENTS.map((r) => r.id)] as string[]).includes(who)) return json(200, { decisions: [] });
-      const store = decisionStore(cfg), day = Math.floor(Date.now() / MARKET_DAY_MS);
-      const ds = await recentDecisions(store, who, day).catch(() => []);
-      // `live`: this decision is setting the price right now (confirmed, this market day, order still posted on chain)
-      const live = await (async () => { try { return await livePrices(store, await view<OfferRow[]>(account(cfg).provider, cfg.contractId, "get_offers", {}), day); } catch { return []; } })();
-      return json(200, { decisions: ds.map((d) => ({ ...d, live: live.some((p) => p.id === d.merchant && d.day === day) })) });
-    }
     if (route === "pick") return await pick(cfg, req);
     if (route === "talk") return await talk(cfg, req, env);
     if (route === "social") return await social(cfg, req, env);

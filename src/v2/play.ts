@@ -28,7 +28,7 @@ import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
 import {
   EXPLORER_ACCOUNT, EXPLORER_TX, agentDecision, finalHeight, type AgentDecision, type ChainReceipt, balances, buyPosted, sellPosted, connectGuest, haggleDeal, marketTick, merchantAccount, playerId, playerLabel, receipts as chainReceipts,
-  settleDay, claimDividends, lastMarketTurn, askMerchant, pickOrchard, marketDay, marketDayMs, isOffline, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
+  settleDay, claimDividends, lastMarketTurn, askMerchant, chainStatus, pickOrchard, marketDay, marketDayMs, isOffline, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
 } from "../near/chain";
 
 const GAME_MIN_PER_SEC = 2.4; // 09:00 -> 21:00 in five real minutes
@@ -657,16 +657,13 @@ export async function createPlay(game: Game): Promise<Play> {
         for (const r of reasonsOf(priceOf(state, id))) ul.append(el("li", "", r));
         if (!ul.children.length) ul.append(el("li", "", "A normal day: the usual price."));
         hud.panel.append(ul);
-        // The merchant says it in their own words, from facts read on NEAR (NEAR AI when available, else scripted).
-        const first = PERSONALITY[id].name.split(" ").pop();
+        // The merchant answers the player's own question in their own words, from facts read on NEAR, their decisions
+        // and their memory (NEAR AI phrases it when available, else a scripted line from the same facts).
         if (asked?.id === id) {
           hud.panel.append(el("div", "tp-say", `“${asked.line}”`));
           if (asked.ai) hud.panel.append(el("div", "tp-text tp-note", "Answered by NEAR AI from the stall's live numbers."));
-        } else if (playerId()) {
-          const ask = button(asking ? `${first} is thinking…` : `Ask ${first}`, "tp-why", () => { void askWhy(id); });
-          ask.disabled = asking;
-          hud.panel.append(ask);
         }
+        if (playerId()) hud.panel.append(askBox(id, PERSONALITY[id].name.split(" ").pop() ?? id, () => { if (mode.kind === "trade" && mode.id === id) renderTrade(); }));
       }
     }
     const total = unit * mode.qty;
@@ -730,21 +727,45 @@ export async function createPlay(game: Game): Promise<Play> {
     card.append(el("b", "", d.source === "ai" ? "NEAR AI decision: " : "Rule price: "), document.createTextNode(d.source === "ai" ? `${who} ${move}.` : `${who} ${move} (NEAR AI did not decide: ${d.fallbackReason ?? "off"}).`));
     if (d.source === "ai") {
       card.append(el("div", "", `Why: ${d.justification.join("; ")}.`));
-      card.append(el("div", "", `${d.model ?? "model"}${d.confidence !== null ? ` · confidence ${Math.round(d.confidence * 100)}%` : ""} · ${d.receipt.id ? `receipt ${d.receipt.id.slice(0, 12)} (${d.receipt.status})` : "no receipt"}`));
+      card.append(el("div", "", `${d.model ?? "model"}${d.confidence !== null ? ` · confidence ${Math.round(d.confidence * 100)}%` : ""}`));
+      // how far the proof got (server/near/verify.ts), in plain words; "signed" is the strongest this game claims
+      const PROOF: Record<string, string> = {
+        signed: "Signed by NEAR AI: the signature matches this exact decision",
+        pending: "Signature check pending",
+        unverified: "Not verifiable: NEAR AI gave no signature for it",
+        failed: "Signature check failed: treat this decision as unproven",
+      };
+      const proof = PROOF[d.receipt.status];
+      if (proof) card.append(el("span", `tp-proof ${d.receipt.status}`, proof));
     }
     if (d.txHash) { const a = el("a", "", "view transaction"); a.href = `${EXPLORER_TX}${d.txHash}`; a.target = "_blank"; a.rel = "noopener"; card.append(a); }
     else card.append(el("div", "", "No new transaction was needed."));
     return card;
   };
 
-  let asked: { id: MerchantId; line: string; ai: boolean } | null = null, asking = false;
-  const askWhy = async (id: MerchantId): Promise<void> => {
+  // Asking anyone in the market a question of your own: merchants (in the trade panel) and residents Lin and Dev (in the
+  // money trail). The draft survives a panel re-render; the answer is spoken once in the speaker's voice.
+  let asked: { id: string; line: string; ai: boolean } | null = null, asking = false, askDraft = "";
+  const askBox = (id: string, name: string, rerender: () => void): HTMLElement => {
+    const box = el("div", "tp-ask");
+    const field = document.createElement("input");
+    field.type = "text"; field.maxLength = 200; field.value = askDraft; field.placeholder = `Ask ${name} anything…`;
+    field.setAttribute("aria-label", `Ask ${name} a question`);
+    field.addEventListener("input", () => { askDraft = field.value; });
+    const go = button(asking ? "…" : "Ask", "", () => { void askWhy(id, field.value, rerender); });
+    go.disabled = asking;
+    field.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); go.click(); } });
+    box.append(field, go);
+    return box;
+  };
+  const askWhy = async (id: string, question: string, rerender: () => void): Promise<void> => {
     if (asking) return;
-    asking = true; renderTrade();
-    const r = await askMerchant(id);
-    asking = false;
-    asked = r ? { id, ...r } : { id, line: "Not now, I'm busy with customers.", ai: false };
-    if (mode.kind === "trade" && mode.id === id) { renderTrade(); void audio.line(id, asked.line); }
+    asking = true; rerender();
+    const r = await askMerchant(id, question.trim());
+    asking = false; askDraft = "";
+    asked = r ? { id, line: r.line, ai: r.ai } : { id, line: "Not now, I'm busy.", ai: false };
+    rerender();
+    void audio.line(id, asked.line);
   };
 
   /** Closed stall: how far its shelves are from reopening (stock is the only thing that reopens it). */
@@ -1205,9 +1226,24 @@ export async function createPlay(game: Game): Promise<Play> {
     ];
     accounts.forEach(([label, acct], i) => { const a = el("a", "", label); a.href = `${EXPLORER_ACCOUNT}${acct}`; a.target = "_blank"; a.rel = "noopener"; links.append(a, document.createTextNode(i < accounts.length - 1 ? " · " : "")); });
     sec.append(links);
-    // honest about autonomy: say whether the city has been trading on its own (a recent turn nobody here triggered)
-    sec.append(el("p", "tp-note", "Merchants and residents act in market turns. A turn runs while someone is playing; the 5-minute background schedule is not switched on yet."));
+    // honest about autonomy: who moves the market (server/near/ops.ts), as the relayer reports it
+    sec.append(el("p", "tp-note", (await chainStatus()).driver === "scheduler"
+      ? "Merchants and residents act in market turns on the city's own schedule, even when nobody is playing."
+      : "Merchants and residents act in market turns. A turn runs while someone is playing; the city's own schedule is not switched on yet."));
     hud.card.append(sec);
+    // Lin and Dev answer questions about their own day, from their purse, their plan and their memory on NEAR
+    const folk = el("section");
+    folk.append(el("h4", "", "Ask the residents"));
+    const renderFolk = (): void => {
+      folk.querySelectorAll(".tp-say, .tp-ask, .tp-note").forEach((n) => n.remove());
+      for (const r of RESIDENTS) {
+        if (asked?.id === r.id) folk.append(el("div", "tp-say", `${r.name}: “${asked.line}”`));
+        if (asked?.id === r.id && asked.ai) folk.append(el("div", "tp-note", "Answered by NEAR AI from their own numbers."));
+        folk.append(askBox(r.id, `${r.name} the ${r.job}`, () => { if (folk.isConnected) renderFolk(); }));
+      }
+    };
+    renderFolk();
+    hud.card.append(folk);
   };
   /** This session's own moves, each saying plainly whether NEAR has it. */
   const yourMoves = (): void => {

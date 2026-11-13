@@ -148,6 +148,14 @@ body.panel-open .hud-prompt, body.panel-open .hud-hint, body.panel-open .hud-acc
 .tp-stake i b { display:block; height:100%; background:var(--mint); transition:width .15s; } .tp-stake i b.mine { background:var(--mintd); }
 .tp-stake span { display:block; font-size:13px; color:var(--ink2); margin-top:6px; line-height:1.4; }
 .tp-note { font-size:12px; color:var(--mute); }
+/* asking a merchant or resident your own question: one field and one button, in the panel's own type */
+.tp-ask { display:flex; gap:8px; margin:0 18px 12px; }
+.tp-ask input { flex:1; min-width:0; height:36px; box-sizing:border-box; border:2px solid var(--line); border-radius:10px; padding:0 11px; background:#fff; color:var(--ink); font:500 14px "Inter Tight",system-ui,sans-serif; }
+.tp-ask input:focus { outline:none; border-color:var(--mint); }
+.hud .tp-ask button { flex:none; height:36px; padding:0 14px; font-size:14px; font-weight:600; }
+.tp-ask button:disabled { opacity:.5; cursor:default; }
+.tp-proof { display:block; margin-top:4px; font-weight:600; }
+.tp-proof.signed { color:var(--mintd); } .tp-proof.failed { color:var(--coral, #c0392b); }
 @media (max-width:520px) { .tp-sum { flex-basis:100%; margin-left:0; text-align:left; } .tp-qty .tp-sum b { text-align:left; } }
 .tp-acts { display:grid; gap:8px; padding:4px 18px 18px; grid-template-columns:1fr 1fr; }
 .tp-acts .primary { grid-column:1 / -1; text-align:center; font-size:16px; padding:13px; }

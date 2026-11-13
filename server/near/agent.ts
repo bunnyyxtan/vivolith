@@ -9,10 +9,14 @@
 // Jev returns no prose. Every number the model sees is read from chain state; the model can only pick one of the named
 // options, built from orders that really exist; each option maps to an action the economy already supports and is
 // validated before anything is sent. No key, timeout, refusal, bad option, low confidence or a down store all fall back to
-// the deterministic rule. Receipt verification (needs @nearai/inference-sdk) is not done here: receipts are "unverified".
+// the deterministic rule. Each agent also sees its own economic memory (memory.ts: what it decided on earlier days and
+// what then happened on chain). Paid calls are gated by a daily budget and a kill switch (ops.ts). The response bytes are
+// hashed so the decision can later be checked against NEAR AI's signature (verify.ts).
 import { agentPrice, agentPriceKey, bidFor, quote } from "../../src/economy/pricing.ts";
 import { planResident, type Offer as ResOffer, type Plan, type Resident } from "../../src/economy/residents.ts";
 import type { EconomyState, Good, MerchantId } from "../../src/economy/state.ts";
+import { memoryForModel, type MemoryRow } from "./memory.ts";
+import { MAX_ATTEMPTS, evidenceOf, type Evidence, type VerifyResult, type VerifyStatus } from "./verify.ts";
 
 export type Action = "raise" | "hold" | "lower";
 export const ACTIONS: readonly Action[] = ["raise", "hold", "lower"];
@@ -106,14 +110,40 @@ export function bandFor(st: EconomyState, id: MerchantId, offers: readonly BookO
   return { base, lower: base - STEP >= min ? base - STEP : null, raise: base + STEP <= max ? base + STEP : null, min, max };
 }
 
-/** Everything the model is shown about a merchant: facts read from chain state, nothing else. */
-export function stateFor(st: EconomyState, id: MerchantId, offers: readonly BookOffer[], band: Band, day: number): Record<string, unknown> {
+/** Facts only one merchant's strategy needs, all derived from chain state and the shared pricing rules. */
+function strategyFacts(st: EconomyState, id: MerchantId, offers: readonly BookOffer[], band: Band, day: number): Record<string, unknown> {
+  const m = st.merchants[id];
+  const dueIn = (m.rentEveryDays - (day % m.rentEveryDays)) % m.rentEveryDays;
+  if (id === "pema") return {
+    rent_due_in_market_days: dueIn,
+    coins_short_of_rent: Math.max(0, m.rent - Math.floor(m.cash)),
+    mangoes_short_of_normal_stock: Math.max(0, m.target.mango - m.stock.mango),
+  };
+  if (id === "tomas") return {
+    margin_per_mango_at_current_price_coins: band.base - m.baseCost.mango,
+    stock_vs_normal: m.target.mango ? Math.round((m.stock.mango / m.target.mango) * 100) / 100 : null,
+  };
+  if (id === "mira") {
+    const resale = m.sells.includes("mango") ? quote(st, id, "mango", false).price : null;
+    return { own_mango_resale_price_coins: resale, resale_spread_at_current_bid_coins: resale === null ? null : resale - band.base };
+  }
+  if (id === "arin") return {
+    lassi_glasses_in_stock: m.stock.lassi,
+    lassi_glasses_wanted: 8,
+    mangoes_needed_for_kitchen: Math.max(0, Math.ceil((8 - m.stock.lassi) / 4) - m.stock.mango),
+  };
+  void offers;
+  return {};
+}
+
+/** Everything the model is shown about a merchant: facts read from chain state and its own chain-derived memory. */
+export function stateFor(st: EconomyState, id: MerchantId, offers: readonly BookOffer[], band: Band, day: number, memory: readonly MemoryRow[] = []): Record<string, unknown> {
   const m = st.merchants[id];
   const l = LEVERS[id];
   const mine = offers.find((o) => o.merchant === id && o.side === (l.side === "bid" ? "bid" : "ask") && o.token_id === l.good);
   return {
     merchant: m.name, shop: m.shop, market_day: day,
-    role_goal: l.goal, lever: l.side === "bid" ? `your ${l.good}-buying bid` : `your ${l.good} selling price`,
+    role_goal: l.goal, strategy: STRATEGY[id]?.style ?? "", lever: l.side === "bid" ? `your ${l.good}-buying bid` : `your ${l.good} selling price`,
     mangoes_on_shelf: m.stock.mango, mangoes_normally_stocked: m.target.mango,
     till_coins: Math.floor(m.cash), rent_coins: m.rent, rent_every_market_days: m.rentEveryDays,
     rent_due_today: day % m.rentEveryDays === 0,
@@ -123,21 +153,52 @@ export function stateFor(st: EconomyState, id: MerchantId, offers: readonly Book
     cheapest_rival_mango_ask_coins: rivalAsk(offers, id, "mango"),
     allowed_bid_range_coins: { min: band.min, max: band.max },
     raise_would_be_coins: band.raise, lower_would_be_coins: band.lower,
+    ...strategyFacts(st, id, offers, band, day),
+    your_recent_days: memoryForModel(memory, l.good),
     recent_market_events: st.log.slice(-5).map((e) => e.text),
   };
 }
 
+/** Each merchant's own way of reading the same numbers: the criteria the model weighs its three options against. */
+export const STRATEGY: Readonly<Record<string, { style: string; raise: string; hold: string; lower: string }>> = {
+  pema: {
+    style: "Loyal and careful: protect the rent first, keep regulars supplied, never gamble the till.",
+    raise: "the shelf is well under normal stock and the till still covers the rent after buying, or rent is close and stock is what earns it",
+    hold: "stock is near normal or the till is close to the rent, and recent days show the current bid is filling",
+    lower: "the shelf is near full, or buying more would leave the till short of the rent that is coming",
+  },
+  tomas: {
+    style: "Greedy but not foolish: take the best margin the street will pay, never let harbor stock rot unsold.",
+    raise: "mangoes are scarce on the street (rivals ask more or have none) and recent days show your stock selling",
+    hold: "the margin is healthy and stock is moving at about the normal pace",
+    lower: "you hold far more than normal stock and recent days show few sales at this price",
+  },
+  mira: {
+    style: "Arbitrageur: buy only when the resale spread is worth it, move fast, keep the till liquid.",
+    raise: "your resale spread stays comfortably positive after the raise and recent days show you bought too little",
+    hold: "the spread is fair and purchases are arriving",
+    lower: "the spread is thin or negative, or the till is low, or recent days show stock piling up unsold",
+  },
+  arin: {
+    style: "Steady: keep the lassi kitchen supplied at a cost the tea house can carry; avoid swings.",
+    raise: "the kitchen needs mangoes for lassi and recent days show the bid is not filling",
+    hold: "the kitchen has what it needs or the bid is filling at this price",
+    lower: "mango stock already covers the kitchen and the till is under pressure",
+  },
+};
+
 export function questionsFor(id: MerchantId, band: Band): Record<string, unknown> {
   const l = LEVERS[id];
+  const s = STRATEGY[id];
   const what = l.side === "bid" ? `${l.good}-buying bid` : `${l.good} selling price`;
   return {
     bid_action: {
       type: "choice",
-      instructions: `You manage the ${what} of ${id}, a small market stall. ${l.goal} Decide what it should do today.`,
+      instructions: `You manage the ${what} of ${id}, a small market stall. ${l.goal} ${s?.style ?? ""} Use the numbers in the state, including your_recent_days (what happened after your earlier choices). Decide what it should do today.`,
       criteria: {
-        raise: `Raise the ${what} by ${STEP} coin${band.raise === null ? " (not permitted today)" : ""}: ${l.side === "bid" ? "stock is low or rent is near and the till can afford it." : "mangoes are scarce on the street and your stock is selling."}`,
-        hold: `Keep the current ${what}: stock, till and rent are in balance.`,
-        lower: `Lower the ${what} by ${STEP} coin${band.lower === null ? " (not permitted today)" : ""}: ${l.side === "bid" ? "the shelves are full or the till is thin." : "you hold more than the street wants and stock is not moving."}`,
+        raise: `Raise the ${what} by ${STEP} coin${band.raise === null ? " (not permitted today)" : ""}: ${s?.raise ?? "stock is low and the till can afford it"}.`,
+        hold: `Keep the current ${what}: ${s?.hold ?? "stock, till and rent are in balance"}.`,
+        lower: `Lower the ${what} by ${STEP} coin${band.lower === null ? " (not permitted today)" : ""}: ${s?.lower ?? "the shelves are full or the till is thin"}.`,
       },
     },
   };
@@ -151,6 +212,7 @@ export interface AiAnswer {
   readonly probabilities: Record<string, number> | null;
   readonly decisionId: string | null;
   readonly model: string | null;
+  readonly evidence?: Evidence | null;
 }
 
 export type AgentErrorKind = "no_key" | "timeout" | "network" | "http" | "malformed" | "refused" | "invalid_action";
@@ -160,7 +222,8 @@ export class AgentError extends Error {
   constructor(kind: AgentErrorKind, message: string, retryable = false) { super(message); this.kind = kind; this.retryable = retryable; }
 }
 
-export type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body: string; signal: AbortSignal }) => Promise<{ ok: boolean; status: number; headers: { get(k: string): string | null }; json(): Promise<unknown> }>;
+/** `text()` gives the exact response bytes (real fetch has it); without it the decision cannot be signature-checked. */
+export type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body: string; signal: AbortSignal }) => Promise<{ ok: boolean; status: number; headers: { get(k: string): string | null }; json(): Promise<unknown>; text?(): Promise<string> }>;
 
 export interface RawAnswer { readonly confidence: number | null; readonly probabilities: Record<string, number> | null; readonly choice: string }
 
@@ -179,30 +242,35 @@ export function parseChoice(a: unknown, valid: readonly string[]): RawAnswer {
 }
 
 /** Reads `answers.bid_action` (a merchant's price lever). */
-export function parseAnswer(json: unknown, decisionId: string | null, requested: string): AiAnswer {
+export function parseAnswer(json: unknown, decisionId: string | null, requested: string, evidence: Evidence | null = null): AiAnswer {
   const j = json as { model?: unknown; answers?: Record<string, unknown> } | null;
   const r = parseChoice(j && typeof j === "object" ? j.answers?.bid_action : undefined, ACTIONS);
-  return { action: r.choice as Action, confidence: r.confidence, probabilities: r.probabilities, decisionId: decisionId && decisionId.length <= 200 ? decisionId : null, model: typeof j?.model === "string" ? j.model : requested };
+  return { action: r.choice as Action, confidence: r.confidence, probabilities: r.probabilities, decisionId: decisionId && decisionId.length <= 200 ? decisionId : null, model: typeof j?.model === "string" ? j.model : requested, evidence };
 }
 
-export interface RawResponse { readonly json: unknown; readonly decisionId: string | null }
+export interface RawResponse { readonly json: unknown; readonly decisionId: string | null; readonly evidence: Evidence | null }
 
 /** One request to the decision model, with timeout and bounded retries on transient failures. */
 export async function askRaw(cfg: AgentConfig, body: { state: unknown; questions: unknown }, fetchImpl: FetchLike): Promise<RawResponse> {
   if (!cfg.key) throw new AgentError("no_key", "NEAR_AI_KEY is not set");
   let last: AgentError | null = null;
+  const sent = JSON.stringify({ model: cfg.model, state: body.state, questions: body.questions });
   for (let attempt = 0; attempt <= cfg.retries; attempt++) {
     try {
       const r = await fetchImpl(cfg.url, {
         method: "POST",
         headers: { authorization: `Bearer ${cfg.key}`, "content-type": "application/json" },
-        body: JSON.stringify({ model: cfg.model, state: body.state, questions: body.questions }),
+        body: sent,
         signal: AbortSignal.timeout(cfg.timeoutMs),
       });
       if (!r.ok) throw new AgentError("http", `model answered ${r.status}`, r.status >= 500 || r.status === 429);
-      const json = await r.json();
+      // keep the exact bytes: the signature check hashes what was really received, not a re-serialisation
+      const text = r.text ? await r.text() : null;
+      let json: unknown;
+      try { json = text !== null ? JSON.parse(text) : await r.json(); } catch { throw new AgentError("malformed", "response is not JSON"); }
       const bodyId = (json as { id?: unknown } | null)?.id;
-      return { json, decisionId: r.headers.get("x-generation-id") ?? (typeof bodyId === "string" ? bodyId : null) };
+      const model = typeof (json as { model?: unknown } | null)?.model === "string" ? String((json as { model: string }).model) : cfg.model;
+      return { json, decisionId: r.headers.get("x-generation-id") ?? (typeof bodyId === "string" ? bodyId : null), evidence: text !== null ? evidenceOf(sent, text, model) : null };
     } catch (e) {
       const err = e instanceof AgentError ? e
         : e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError") ? new AgentError("timeout", "model timed out", true)
@@ -216,12 +284,21 @@ export async function askRaw(cfg: AgentConfig, body: { state: unknown; questions
 
 export async function askModel(cfg: AgentConfig, body: { state: unknown; questions: unknown }, fetchImpl: FetchLike): Promise<AiAnswer> {
   const r = await askRaw(cfg, body, fetchImpl);
-  return parseAnswer(r.json, r.decisionId, cfg.model);
+  return parseAnswer(r.json, r.decisionId, cfg.model, r.evidence);
 }
 
 // ------------------------------------------------------------------ the decision record ----
 
-export interface Receipt { readonly id: string | null; readonly status: "unverified" | "none"; readonly note: string }
+/** The inference receipt: the decision id NEAR AI issued, the hashes of the exact bytes exchanged, and how far the
+ *  signature check got (verify.ts). "none" = the rule decided; nothing to verify. */
+export interface Receipt {
+  readonly id: string | null;
+  readonly status: VerifyStatus;
+  readonly note: string;
+  readonly evidence?: Evidence | null;
+  readonly attempts?: number;
+  readonly signer?: string | null;
+}
 
 /** One answered question of a resident plan: what was chosen, and whether the model or the rule chose it. */
 export interface ChoiceRecord { readonly question: string; readonly chosen: string; readonly source: "ai" | "fallback"; readonly confidence: number | null; readonly note: string | null }
@@ -252,9 +329,11 @@ export interface Decision {
   readonly at: number;
 }
 
-const receiptOf = (id: string | null): Receipt => id
-  ? { id, status: "unverified", note: "receipt id captured from the gateway; NEAR AI verification not run" }
-  : { id: null, status: "none", note: "no inference receipt" };
+const receiptOf = (id: string | null, evidence: Evidence | null = null): Receipt => !id
+  ? { id: null, status: "none", note: "no inference receipt", evidence: null, attempts: 0, signer: null }
+  : evidence
+    ? { id, status: "pending", note: "decision id and response hashes captured; signature check not run yet", evidence, attempts: 0, signer: null }
+    : { id, status: "unverified", note: "decision id captured but the exact response bytes were not, so it cannot be signature-checked", evidence: null, attempts: 0, signer: null };
 
 /** Plain facts that explain the price step, picked from the state the model saw. */
 export function justify(action: Action, s: Record<string, unknown>): string[] {
@@ -293,6 +372,8 @@ export interface DecisionStore {
   setNx(key: string, value: string, ttlSec: number): Promise<boolean>;
   set(key: string, value: string, ttlSec: number): Promise<void>;
   del(key: string): Promise<void>;
+  /** INCR key, setting its expiry; returns the new count (budgets, ops.ts). */
+  incr(key: string, ttlSec: number): Promise<number>;
 }
 
 const DAY_SEC = 600; // one market day (handlers.ts MARKET_DAY_MS = 10 min)
@@ -369,7 +450,17 @@ interface Common {
   /** Test hooks for the wait on a concurrent tick. */
   readonly sleep?: (ms: number) => Promise<void>;
   readonly waitSteps?: number;
+  /** Takes one paid call from today's budget (ops.ts spend); false = no model call, the rule decides. Absent = allowed. */
+  readonly budget?: () => Promise<boolean>;
+  /** The agent's own economic memory (memory.ts), shown to the model. */
+  readonly memory?: readonly MemoryRow[];
+  /** Never ask the model: use a decision already stored for today (made by a scheduler turn), else the rule. Browser-
+   *  driven turns run like this so public traffic can never trigger a paid call. */
+  readonly replayOnly?: boolean;
 }
+
+/** The fallback reason when the budget refuses a call. */
+const OVER_BUDGET = "budget: today's NEAR AI decision limit is reached";
 
 /** Runs `fresh` at most once per agent per market day across every instance (store lock), returning the stored
  *  decision otherwise. null means "no decision": off, or the store is down (no idempotency, so no model call). */
@@ -425,6 +516,12 @@ export async function decideBid(i: DecideInput): Promise<Outcome> {
   const rule = (): Outcome => ({ price: l ? (l.side === "bid" ? bidFor(st, id, l.good)?.price : quote(st, id, l.good, false).price) ?? 1 : 1, decision: null, duplicate: false, skipBid: false });
   const band = l && cfg.enabled.has(id) ? bandFor(st, id, offers) : null;
   if (!band) return rule();
+  if (i.replayOnly) {
+    // a stored decision still applies only while its price is inside today's band (the till or a rival may have moved)
+    const prior = await decisionFor(i.store, id, day).catch(() => null);
+    if (!prior || prior.kind !== "price" || prior.price < band.min || prior.price > band.max) return rule();
+    return { price: prior.price, decision: prior, duplicate: true, skipBid: false };
+  }
   const r = await once(i, id, () => decideFresh(i, band));
   if (!r.decision) return r.skip ? { price: band.base, decision: null, duplicate: true, skipBid: true } : rule();
   return { price: r.decision.price, decision: r.decision, duplicate: r.duplicate, skipBid: r.skip };
@@ -432,14 +529,15 @@ export async function decideBid(i: DecideInput): Promise<Outcome> {
 
 async function decideFresh(i: DecideInput, band: Band): Promise<Decision> {
   const { cfg, st, id, offers, day } = i;
-  const state = stateFor(st, id, offers, band, day);
+  const state = stateFor(st, id, offers, band, day, i.memory ?? []);
   const at = (i.now ?? Date.now)();
   const make = (action: Action, source: "ai" | "fallback", price: number, ai: AiAnswer | null, why: string | null): Decision => ({
     merchant: id, lever: leverName(id), kind: "price", day, source, model: ai?.model ?? null, action, basePrice: band.base, price,
     confidence: ai?.confidence ?? null, probabilities: ai?.probabilities ?? null, choices: null,
-    receipt: receiptOf(ai?.decisionId ?? null),
+    receipt: receiptOf(ai?.decisionId ?? null, ai?.evidence ?? null),
     justification: justify(action, state), line: lineFor(action, band.base, price, state, id), fallbackReason: why, txHash: null, at,
   });
+  if (i.budget && !(await i.budget().catch(() => false))) return make("hold", "fallback", band.base, null, OVER_BUDGET);
   let ai: AiAnswer;
   try {
     ai = await askModel(cfg, { state, questions: questionsFor(id, band) }, i.fetchImpl);
@@ -509,7 +607,9 @@ export async function decideResident(i: ResidentInput): Promise<ResidentOutcome>
   const bids = bestPerMerchant(offers, "bid", res.good), asks = bestPerMerchant(offers, "ask", res.food);
   if (!bids.size && !asks.size) return off; // nothing posted: nothing to decide
   const fb = { sell: rule.sell?.merchant ?? "hold", meal: rule.eat?.merchant ?? "skip" };
-  const r = await once(i, res.id, () => residentFresh(i, bids, asks, fb));
+  const r = i.replayOnly
+    ? { decision: await decisionFor(i.store, res.id, i.day).catch(() => null), duplicate: true, skip: false }
+    : await once(i, res.id, () => residentFresh(i, bids, asks, fb));
   if (!r.decision) return r.skip ? { ...off, duplicate: true, skip: true } : off;
   // rebuild the plan from the stored choices against today's orders; anything that no longer holds uses the rule's choice
   const pick = (q: string, fallback: string): string => r.decision!.choices?.find((c) => c.question === q)?.chosen ?? fallback;
@@ -528,6 +628,8 @@ async function residentFresh(i: ResidentInput, bids: Map<string, Cand>, asks: Ma
     goods_held: { [res.good]: holding }, coin, daily_output: res.perDay,
     stalls_buying_what_you_sell: [...bids.values()].map((c) => ({ stall: c.merchant, pays_coins_each: c.price, buys_up_to: c.qty })),
     stalls_selling_your_meal: [...asks.values()].map((c) => ({ stall: c.merchant, price_coins: c.price, in_stock: c.qty })),
+    // what earlier choices earned: holding goods back only pays if bids were better on later days
+    your_recent_days: memoryForModel(i.memory ?? [], res.good),
   };
   const questions = {
     sell_to: {
@@ -540,7 +642,7 @@ async function residentFresh(i: ResidentInput, bids: Map<string, Cand>, asks: Ma
     },
   };
   const rec = (question: string, chosen: string, source: "ai" | "fallback", confidence: number | null, note: string | null): ChoiceRecord => ({ question, chosen, source, confidence, note });
-  const wrap = (choices: ChoiceRecord[], model: string | null, receipt: string | null, why: string | null): Decision => {
+  const wrap = (choices: ChoiceRecord[], model: string | null, receipt: string | null, why: string | null, evidence: Evidence | null = null): Decision => {
     const sell = choices.find((c) => c.question === "sell_to")!.chosen, meal = choices.find((c) => c.question === "meal_from")!.chosen;
     const b = sell === "hold" ? null : bids.get(sell);
     const aiUsed = choices.some((c) => c.source === "ai");
@@ -548,13 +650,14 @@ async function residentFresh(i: ResidentInput, bids: Map<string, Cand>, asks: Ma
       merchant: res.id, lever: "plan", kind: "plan", day, source: aiUsed ? "ai" : "fallback", model: aiUsed ? model : null,
       action: `sell_to ${sell}; meal_from ${meal}`, basePrice: Math.max(0, ...[...bids.values()].map((c) => c.price)), price: b?.price ?? 0,
       confidence: choices.find((c) => c.source === "ai")?.confidence ?? null, probabilities: null, choices,
-      receipt: receiptOf(aiUsed ? receipt : null),
+      receipt: receiptOf(aiUsed ? receipt : null, aiUsed ? evidence : null),
       justification: [`${holding} ${res.good} held, ${coin} c in the purse`, ...[...bids.values()].map((c) => `${c.merchant} bids ${c.price} c`), ...[...asks.values()].map((c) => `${c.merchant} sells ${res.food} at ${c.price} c`)],
       line: sell === "hold" ? `${res.name}: keeping the ${res.good} today.` : `${res.name}: selling ${res.good} to ${sell}${meal === "skip" ? "" : `, then a ${res.food} from ${meal}`}.`,
       fallbackReason: why, txHash: null, at,
     };
   };
   let raw: RawResponse;
+  if (i.budget && !(await i.budget().catch(() => false))) return wrap([rec("sell_to", fb.sell, "fallback", null, OVER_BUDGET), rec("meal_from", fb.meal, "fallback", null, OVER_BUDGET)], null, null, OVER_BUDGET);
   try {
     raw = await askRaw(cfg, { state, questions }, i.fetchImpl);
   } catch (e) {
@@ -579,5 +682,21 @@ async function residentFresh(i: ResidentInput, bids: Map<string, Cand>, asks: Ma
     const alt = assemble(res, bids, asks, holding, coin, sell.chosen, fb.meal);
     meal = rec("meal_from", alt.mealOk ? fb.meal : "skip", "fallback", null, "invalid: the purse cannot pay that price");
   }
-  return wrap([sell, meal], model, raw.decisionId, null);
+  return wrap([sell, meal], model, raw.decisionId, null, raw.evidence);
+}
+
+// ------------------------------------------------------------------ verification ----
+
+/** Advances the signature check of a stored decision by one attempt (verify.ts). Only "pending" decisions are checked;
+ *  after MAX_ATTEMPTS without a signature the decision is "unverified". Returns the updated decision, or null when
+ *  nothing was due. `check` is verifyDecision bound to the key and fetch (injected so tests make no network call). */
+export async function verifyStored(store: DecisionStore, id: string, day: number, check: (decisionId: string, ev: Evidence) => Promise<VerifyResult>): Promise<Decision | null> {
+  const d = await decisionFor(store, id, day);
+  if (!d || d.receipt.status !== "pending" || !d.receipt.id || !d.receipt.evidence) return null;
+  const res = await check(d.receipt.id, d.receipt.evidence);
+  const attempts = (d.receipt.attempts ?? 0) + 1;
+  const status: VerifyStatus = res.status === "pending" && attempts >= MAX_ATTEMPTS ? "unverified" : res.status;
+  const next: Decision = { ...d, receipt: { ...d.receipt, status, attempts, note: status === "unverified" ? `no signature after ${attempts} attempts (${res.note})` : res.note, signer: res.signer } };
+  await store.set(keyOf(id, day), JSON.stringify(next), DECISION_TTL);
+  return next;
 }
