@@ -66,6 +66,16 @@ Dev relayer with real testnet keys, NEAR AI and ElevenLabs keys blanked (`near-w
 | Controlled live Pema run (authorized 2026-11-13; `scripts/near/pema-run.ts`, now `agent-run.ts --agent=pema`, agents-only turn, process memory, 1 paid decision max) | BLOCKED at preflight, nothing sent | `docs/evidence/phase2-pema-preflight.json`: Pema closed (till 1 c, Guild debt 163 c, no posted bid, reopens after 1 mango). The authorized one-mango player sale is impossible: her closed bid is 5 c, the relayer signs only 2-5 c, and 1 c cannot pay it. The Guild fund is 0 c, so a market turn could not lend to her either. Market state: Pema, Tomas, Mira closed; only Arin open (19 c); production's last turn 811 min earlier. 0 transactions, 0 NEAR AI requests, 0 credits |
 | Testnet economy stalled: three of four stalls closed with an empty Guild, so no player sale can reopen Pema, Tomas or Mira by price rules alone | FIXED in code (not deployed) | A closed stall now bids only what its till can pay for one mango (`bidForRule` in `src/economy/pricing.ts`): Pema with 1 c bids 1 c, so one delivery at 1 c reopens her; a till under 1 c posts no bid. All economy checks unchanged; live state still needs a deploy and a real delivery |
 
+### Economic recovery (2026-11-13, local only; details and numbers in [ECONOMY_RECOVERY.md](ECONOMY_RECOVERY.md))
+
+| Item | Status | Evidence |
+|---|---|---|
+| Diagnosis of the testnet deadlock: on-chain street shoppers bought no fruit (per-turn floor), the Guild could never collect dues once its loans went bad, repayment only above 80 c, no loan cap, reopened stalls met rent at once, residents never sold to closed stalls | VERIFIED (model) | `node src/economy/recovery.check.ts`: old rules, 6 healthy days: 0 fruit vs 183 lassi to shoppers; live state, 8 days: nobody reopens |
+| Recovery rules shared by the relayer and the model (`src/economy/recovery.ts`): carried shopper demand, affordable closed bids, residents may fill closed stalls' funded bids, capped repayment above rent + 10 c, loan cap 120 c, dues can rebuild a fund emptied by bad loans (they stay on the books), one rent grace per reopening | VERIFIED (model, offline) | Coin conserved in every run (now = start + shoppers − rent − freight); rent, residents and Guild once per market day however many turns run |
+| Player choice on the live deadlock: 1 mango to Pema at 1 c -> funded bid in 5 turns, all four open after 6 days, her debt 163 -> 142 c; selling to Arin instead leaves three stalls closed | VERIFIED (model) | Same check, scenario 7 |
+| Consignment | NOT BUILT: needs a contract upgrade (no operator path pays coin from a stall to a player) and the contract toolchain does not build here | Spec in ECONOMY_RECOVERY.md; the executable alternative is the affordable delivery plus investing |
+| Not live: none of these rules runs on testnet until the relayer is redeployed | NEEDS AUTHORIZATION | |
+
 ### Phase 2b: the economic butterfly effect (2026-11-13, local only)
 
 | Item | Status | Evidence |
