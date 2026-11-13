@@ -231,8 +231,12 @@ export function applyTactic(s: EconomyState, h: HaggleSession, t: Tactic): MoveR
   if (h.mode === "sell") unit = Math.min(unit, Math.floor(s.merchants[h.merchant].cash / qty));
   const patience = Math.max(0, h.patience - (success ? PATIENCE_HIT : PATIENCE_FAIL));
   const over = patience <= 0 ? "walked" : null;
+  // a tactic that "worked" against a price already at the merchant's limit moves nothing: say so, never "you win"
+  // (the session, patience included, is unchanged by this, so the relayer's replay of the haggle is too)
+  const atLimit = success && unit === h.unit && qty === h.qty;
+  if (atLimit) line = h.mode === "buy" ? "That's as low as I go." : "That's as high as I go.";
   if (over) line = h.mode === "buy" ? "Enough. Come back tomorrow." : "I have a kitchen to run. Tomorrow.";
-  return { session: { ...h, unit, qty, patience, used: { ...h.used, [t]: used + 1 }, history: [...h.history, t], moves: h.moves + 1, over }, success, line };
+  return { session: { ...h, unit, qty, patience, used: { ...h.used, [t]: used + 1 }, history: [...h.history, t], moves: h.moves + 1, over }, success: success && !atLimit, line };
 }
 
 /** Patience drains while you think. */

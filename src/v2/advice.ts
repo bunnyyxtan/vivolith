@@ -56,7 +56,7 @@ export function nextMove(s: EconomyState): Move {
       const n = Math.min(held, b.qty);
       return {
         title: `Sell your ${mangoes(held)} to ${NAMES[b.id]}`, target: b.id,
-        text: `${NAMES[b.id]} pays the most: ${b.price} c each, +${n * b.price} c${n < held ? ` for ${n} now (all the till can take)` : ""}. Press E at the stall.`,
+        text: `${NAMES[b.id]} pays the most: ${b.price} c each, +${n * b.price} c${n < held ? ` for ${n} now (all the till can take)` : ""}. Press F at the stall.`,
       };
     }
     return { title: `Hold your ${mangoes(held)}`, target: null, text: "No stall is buying mangoes this minute. Bids change through the day: check the stall boards as you pass." };

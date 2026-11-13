@@ -136,7 +136,7 @@ function arinNext(s: EconomyState): { text: string; target: Target | null } {
   const b = bidFor(s, "arin", "mango"), till = Math.floor(s.merchants.arin.cash);
   if (!b || till < b.price) return { text: `Arin isn't buying mangoes right now${b ? ` (his till holds ${till} c)` : ""}. Bids change through the day.`, target: null };
   const held = s.player.inventory.mango;
-  if (held > 0) return { text: `Arin pays ${b.price} c a mango and you carry ${held}. Press E at his tea house and sell.`, target: "arin" };
+  if (held > 0) return { text: `Arin pays ${b.price} c a mango and you carry ${held}. Press F at his tea house and sell.`, target: "arin" };
   const src = nextMove(s);
   if (src.target === "orchard") return { text: `First get mangoes: ${src.text} Arin pays ${b.price} c each.`, target: "orchard" };
   const sell = cheapestSeller(s);
@@ -148,7 +148,7 @@ function sharesNext(s: EconomyState): { text: string; target: Target | null } {
   const mine = owned(s);
   const pick = MERCHANT_IDS.filter((id) => !mine.includes(id)).sort((a, b) => SHARE_PACK[a].price - SHARE_PACK[b].price)[0];
   const { price, per } = SHARE_PACK[pick];
-  if (s.player.coins >= price) return { text: `At ${NAMES[pick]}'s stall, press E and open Invest: ${per} shares for ${price} c.`, target: pick };
+  if (s.player.coins >= price) return { text: `At ${NAMES[pick]}'s stall, press F and open Invest: ${per} shares for ${price} c.`, target: pick };
   const m = nextMove(s);
   return { text: `A pack at ${NAMES[pick]}'s costs ${price} c; you need ${price - s.player.coins} c more. ${m.text}`, target: m.target };
 }

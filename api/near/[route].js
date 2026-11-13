@@ -12875,7 +12875,7 @@ var lines_default = {
 		"700 52px Inter, system-ui, sans-serif",
 		"700 62px Inter Tight, Inter, system-ui, sans-serif",
 		"700 92px 'Inter Tight', system-ui, sans-serif",
-		":root { --paper:#fffaf1; --paper2:#f5eee2; --ink:#1d2433; --ink2:#4a5468; --mute:#808898; --line:#e8dfcf; --mint:#14b887; --mintd:#0a7f5d; --mints:#dcf6ec; --coral:#e2604a; --corals:#fde6e1; --gold:#f2b63c; --golds:#fff1cf; --shadow:0 8px 24px rgba(24,36,60,.16), 0 1px 3px rgba(24,36,60,.12); --r:14px; } .hud { position:fixed; font-family:\"Inter Tight\",system-ui,sans-serif; color:var(--ink); font-variant-numeric:tabular-nums; z-index:5; } .hud kbd { display:inline-flex; align-items:center; justify-content:center; min-width:20px; height:20px; padding:0 5px; margin-right:7px; border-radius:5px; font:700 11px \"Inter Tight\",system-ui,sans-serif; background:var(--ink); color:var(--paper); vertical-align:1px; box-sizing:border-box; } .hud button { font:600 15px \"Inter Tight\",system-ui,sans-serif; color:var(--ink); background:var(--paper2); border:0; border-radius:10px; padding:11px 14px; cursor:pointer; text-align:left; transition:transform .08s, background .15s, box-shadow .15s; } .hud button:hover { background:#efe6d6; } .hud button:active { transform:translateY(1px); } .hud button.primary { background:var(--mint); color:#fff; box-shadow:0 3px 0 var(--mintd); } .hud button.primary:hover { background:#11a87b; } .hud button.primary kbd { background:#fff; color:var(--mintd); } .hud button.ghost { background:transparent; color:var(--ink2); padding:8px 10px; } .hud button.ghost:hover { background:var(--paper2); } .hud button:disabled { opacity:.45; cursor:default; transform:none; } .hud button small { display:block; font-weight:500; font-size:12px; opacity:.8; margin-top:2px; } /* objective tracker */ /* mission card: accent rail, section + step, progress, title, copy, then the live economy panel */ .hud-obj { --acc:var(--mint); --accd:var(--mintd); left:20px; top:20px; width:min(330px, calc(100vw - 260px)); background:var(--paper); border-radius:var(--r); box-shadow:var(--shadow); padding:13px 16px 14px 19px; display:none; pointer-events:none; overflow:hidden; } .hud-obj::before { content:\"\"; position:absolute; left:0; top:0; bottom:0; width:4px; background:var(--acc); } .hud-obj.tone-urgent { --acc:var(--coral); --accd:#b8402c; } .hud-obj.tone-chance { --acc:var(--gold); --accd:#a8740f; } .hud-obj .oh { display:flex; align-items:baseline; justify-content:space-between; gap:12px; } .hud-obj .sec { font-size:10.5px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--accd); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } .hud-obj .step { font-size:11.5px; font-weight:700; color:var(--mute); } .hud-obj .prog { height:3px; border-radius:2px; background:var(--line); margin:7px 0 0; overflow:hidden; } .hud-obj .prog i { display:block; height:100%; background:var(--acc); border-radius:2px; } .hud-obj .title { font-size:17px; font-weight:700; line-height:1.25; margin-top:9px; letter-spacing:-.005em; } .hud-obj .desc { margin:5px 0 0; font-size:13.5px; line-height:1.45; color:var(--ink2); } .hud-obj .desc .nx { font-size:10.5px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--accd); margin-right:7px; } .hud-obj .stake { margin:11px -4px 0; padding:9px 11px 10px; border-radius:10px; background:var(--mints); } .hud-obj .stake.short { background:var(--corals); } .hud-obj .stake .sh { display:flex; justify-content:space-between; align-items:baseline; gap:10px; } .hud-obj .stake .k { font-size:10px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--mintd); } .hud-obj .stake.short .k { color:#b8402c; } .hud-obj .stake .when { font-size:11.5px; font-weight:600; color:var(--ink2); text-align:right; } .hud-obj .stake .meter { height:5px; border-radius:3px; background:rgba(29,36,51,.1); margin:7px 0 6px; overflow:hidden; } .hud-obj .stake .meter i { display:block; height:100%; border-radius:3px; background:var(--mint); } .hud-obj .stake.short .meter i { background:var(--coral); } .hud-obj .stake .nums { display:flex; align-items:baseline; font-size:12.5px; color:var(--ink2); } .hud-obj .stake .nums b { font-size:15px; color:var(--ink); } .hud-obj .stake .nums span { white-space:pre; } .hud-obj .stake .nums em { margin-left:auto; font-style:normal; font-weight:700; color:var(--mintd); } .hud-obj .stake.short .nums em { color:#b8402c; } .tp-compare b { font-weight:700; } .hud-obj.done { animation:pop .5s ease; } @keyframes pop { 30% { transform:scale(1.04); box-shadow:0 0 0 4px var(--mints), var(--shadow); } } /* wallet */ .hud-wallet { right:20px; top:20px; display:flex; flex-direction:column; align-items:flex-end; gap:6px; } .hud-wallet .row { display:flex; gap:8px; } .hud .hud-pill { background:var(--paper); border-radius:999px; box-shadow:var(--shadow); padding:7px 14px 7px 9px; display:flex; align-items:center; gap:8px; font-weight:700; font-size:16px; cursor:pointer; pointer-events:auto; border:0; } .hud .hud-pill:hover { background:#fff; } .hud-pill .ico { width:20px; height:20px; border-radius:50%; flex:none; } .ico.coin { background:radial-gradient(circle at 35% 35%, #ffe08a, var(--gold) 60%, #c98e1f); box-shadow:inset 0 -2px 0 #c98e1f; border-radius:50%; } .ico.mango { background:radial-gradient(circle at 35% 30%, #ffd36b, #f59a1e 65%, #d9741a); border-radius:55% 45% 55% 45%; } .ico.mango { position:relative; } .ico.mango::after { content:\"\"; position:absolute; width:9px; height:6px; right:-1px; top:-3px; background:#3f9a4e; border-radius:0 8px 0 8px; transform:rotate(-15deg); } .ico.lemon { background:radial-gradient(circle at 35% 30%, #fff59a, #f2d43c 65%, #c9a91c); border-radius:50% 40% 50% 40%; } .ico.lassi { background:linear-gradient(#fff, #ffe3b0); border:2px solid #e8c88a; border-radius:3px 3px 8px 8px; } .ico.share { background:var(--mint); border-radius:5px; } .hud-pill.bump { animation:bump .45s ease; } @keyframes bump { 40% { transform:scale(1.12); } } .hud-clock { background:var(--paper); border-radius:999px; box-shadow:var(--shadow); padding:6px 12px; font-size:13px; font-weight:600; color:var(--ink2); } .hud-clock em { font-style:normal; color:var(--coral); } .hud-near { font-size:12px; font-weight:600; color:var(--ink2); background:rgba(255,250,241,.94); border-radius:999px; padding:4px 10px; box-shadow:var(--shadow); opacity:0; transition:opacity .4s; pointer-events:none; } .hud-near.on { opacity:1; } .hud-near i { font-style:normal; color:var(--mintd); } .hud-near.bad i { color:var(--coral); } /* prompt and hint */ .hud-prompt { left:50%; bottom:28px; transform:translateX(-50%); background:var(--paper); border-radius:999px; box-shadow:var(--shadow); padding:9px 18px 9px 10px; font-size:15px; font-weight:600; display:none; pointer-events:none; white-space:nowrap; } .hud-prompt span + kbd { margin-left:14px; } .hud-hint { left:50%; bottom:76px; transform:translateX(-50%); background:rgba(29,36,51,.86); color:#fff; border-radius:10px; padding:8px 14px; font-size:14px; font-weight:500; display:none; pointer-events:none; white-space:nowrap; } .hud-hint kbd { background:#fff; color:var(--ink); } /* world marker */ .hud-mark { width:30px; height:30px; margin:-15px 0 0 -15px; display:none; pointer-events:none; z-index:4; } .hud-mark::before { content:\"\"; position:absolute; inset:5px; background:var(--gold); border:3px solid #fff; transform:rotate(45deg); border-radius:4px; box-shadow:0 2px 6px rgba(0,0,0,.25); animation:bob 1.2s ease-in-out infinite; } @keyframes bob { 50% { transform:translateY(-5px) rotate(45deg); } } .hud-mark span { position:absolute; left:50%; top:32px; transform:translateX(-50%); font-size:12px; font-weight:700; color:#fff; text-shadow:0 1px 3px rgba(0,0,0,.7); white-space:nowrap; } /* trade / talk panel.",
+		":root { --paper:#fffaf1; --paper2:#f5eee2; --ink:#1d2433; --ink2:#4a5468; --mute:#808898; --line:#e8dfcf; --mint:#14b887; --mintd:#0a7f5d; --mints:#dcf6ec; --coral:#e2604a; --corals:#fde6e1; --gold:#f2b63c; --golds:#fff1cf; --shadow:0 8px 24px rgba(24,36,60,.16), 0 1px 3px rgba(24,36,60,.12); --r:14px; } .hud { position:fixed; font-family:\"Inter Tight\",system-ui,sans-serif; color:var(--ink); font-variant-numeric:tabular-nums; z-index:5; } .hud kbd { display:inline-flex; align-items:center; justify-content:center; min-width:20px; height:20px; padding:0 5px; margin-right:7px; border-radius:5px; font:700 11px \"Inter Tight\",system-ui,sans-serif; background:var(--ink); color:var(--paper); vertical-align:1px; box-sizing:border-box; } .hud button { font:600 15px \"Inter Tight\",system-ui,sans-serif; color:var(--ink); background:var(--paper2); border:0; border-radius:10px; padding:11px 14px; cursor:pointer; text-align:left; transition:transform .08s, background .15s, box-shadow .15s; } .hud button:hover { background:#efe6d6; } .hud button:active { transform:translateY(1px); } .hud button.primary { background:var(--mint); color:#fff; box-shadow:0 3px 0 var(--mintd); } .hud button.primary:hover { background:#11a87b; } .hud button.primary kbd { background:#fff; color:var(--mintd); } .hud button.ghost { background:transparent; color:var(--ink2); padding:8px 10px; } .hud button.ghost:hover { background:var(--paper2); } .hud button:disabled { opacity:.45; cursor:default; transform:none; } .hud button small { display:block; font-weight:500; font-size:12px; opacity:.8; margin-top:2px; } /* objective tracker */ /* mission card: accent rail, section + step, progress, title, copy, then the live economy panel */ .hud-obj { --acc:var(--mint); --accd:var(--mintd); left:20px; top:20px; width:min(330px, calc(100vw - 260px)); background:var(--paper); border-radius:var(--r); box-shadow:var(--shadow); padding:13px 16px 14px 19px; display:none; pointer-events:none; overflow:hidden; } .hud-obj::before { content:\"\"; position:absolute; left:0; top:0; bottom:0; width:4px; background:var(--acc); } .hud-obj.tone-urgent { --acc:var(--coral); --accd:#b8402c; } .hud-obj.tone-chance { --acc:var(--gold); --accd:#a8740f; } .hud-obj .oh { display:flex; align-items:baseline; justify-content:space-between; gap:12px; } .hud-obj .sec { font-size:10.5px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--accd); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } .hud-obj .step { font-size:11.5px; font-weight:700; color:var(--mute); } .hud-obj .prog { height:3px; border-radius:2px; background:var(--line); margin:7px 0 0; overflow:hidden; } .hud-obj .prog i { display:block; height:100%; background:var(--acc); border-radius:2px; } .hud-obj .title { font-size:17px; font-weight:700; line-height:1.25; margin-top:9px; letter-spacing:-.005em; } .hud-obj .desc { margin:5px 0 0; font-size:13.5px; line-height:1.45; color:var(--ink2); } .hud-obj .desc .nx { font-size:10.5px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--accd); margin-right:7px; } .hud-obj .stake { margin:11px -4px 0; padding:9px 11px 10px; border-radius:10px; background:var(--mints); } .hud-obj .stake.short { background:var(--corals); } .hud-obj .stake .sh { display:flex; justify-content:space-between; align-items:baseline; gap:10px; } .hud-obj .stake .k { font-size:10px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--mintd); } .hud-obj .stake.short .k { color:#b8402c; } .hud-obj .stake .when { font-size:11.5px; font-weight:600; color:var(--ink2); text-align:right; } .hud-obj .stake .meter { height:5px; border-radius:3px; background:rgba(29,36,51,.1); margin:7px 0 6px; overflow:hidden; } .hud-obj .stake .meter i { display:block; height:100%; border-radius:3px; background:var(--mint); } .hud-obj .stake.short .meter i { background:var(--coral); } .hud-obj .stake .nums { display:flex; align-items:baseline; font-size:12.5px; color:var(--ink2); } .hud-obj .stake .nums b { font-size:15px; color:var(--ink); } .hud-obj .stake .nums span { white-space:pre; } .hud-obj .stake .nums em { margin-left:auto; font-style:normal; font-weight:700; color:var(--mintd); } .hud-obj .stake.short .nums em { color:#b8402c; } .hud-obj .stake .shelf { margin-top:4px; font-size:11.5px; color:var(--ink2); } .tp-compare b { font-weight:700; } .hud-obj.done { animation:pop .5s ease; } @keyframes pop { 30% { transform:scale(1.04); box-shadow:0 0 0 4px var(--mints), var(--shadow); } } /* wallet */ .hud-wallet { right:20px; top:20px; display:flex; flex-direction:column; align-items:flex-end; gap:6px; } .hud-wallet .row { display:flex; gap:8px; } .hud .hud-pill { background:var(--paper); border-radius:999px; box-shadow:var(--shadow); padding:7px 14px 7px 9px; display:flex; align-items:center; gap:8px; font-weight:700; font-size:16px; cursor:pointer; pointer-events:auto; border:0; } .hud .hud-pill:hover { background:#fff; } .hud-pill .ico { width:20px; height:20px; border-radius:50%; flex:none; } .ico.coin { background:radial-gradient(circle at 35% 35%, #ffe08a, var(--gold) 60%, #c98e1f); box-shadow:inset 0 -2px 0 #c98e1f; border-radius:50%; } .ico.mango { background:radial-gradient(circle at 35% 30%, #ffd36b, #f59a1e 65%, #d9741a); border-radius:55% 45% 55% 45%; } .ico.mango { position:relative; } .ico.mango::after { content:\"\"; position:absolute; width:9px; height:6px; right:-1px; top:-3px; background:#3f9a4e; border-radius:0 8px 0 8px; transform:rotate(-15deg); } .ico.lemon { background:radial-gradient(circle at 35% 30%, #fff59a, #f2d43c 65%, #c9a91c); border-radius:50% 40% 50% 40%; } .ico.lassi { background:linear-gradient(#fff, #ffe3b0); border:2px solid #e8c88a; border-radius:3px 3px 8px 8px; } .ico.share { background:var(--mint); border-radius:5px; } .hud-pill.bump { animation:bump .45s ease; } @keyframes bump { 40% { transform:scale(1.12); } } .hud-clock { background:var(--paper); border-radius:999px; box-shadow:var(--shadow); padding:6px 12px; font-size:13px; font-weight:600; color:var(--ink2); } .hud-clock em { font-style:normal; color:var(--coral); } .hud-near { font-size:12px; font-weight:600; color:var(--ink2); background:rgba(255,250,241,.94); border-radius:999px; padding:4px 10px; box-shadow:var(--shadow); opacity:0; transition:opacity .4s; pointer-events:none; } .hud-near.on { opacity:1; } .hud-near i { font-style:normal; color:var(--mintd); } .hud-near.bad i { color:var(--coral); } /* prompt and hint */ .hud-prompt { left:50%; bottom:28px; transform:translateX(-50%); background:var(--paper); border-radius:999px; box-shadow:var(--shadow); padding:9px 18px 9px 10px; font-size:15px; font-weight:600; display:none; pointer-events:none; white-space:nowrap; } .hud-prompt span + kbd { margin-left:14px; } .hud-hint { left:50%; bottom:76px; transform:translateX(-50%); background:rgba(29,36,51,.86); color:#fff; border-radius:10px; padding:8px 14px; font-size:14px; font-weight:500; display:none; pointer-events:none; white-space:nowrap; } .hud-hint kbd { background:#fff; color:var(--ink); } /* world marker */ .hud-mark { width:30px; height:30px; margin:-15px 0 0 -15px; display:none; pointer-events:none; z-index:4; } .hud-mark::before { content:\"\"; position:absolute; inset:5px; background:var(--gold); border:3px solid #fff; transform:rotate(45deg); border-radius:4px; box-shadow:0 2px 6px rgba(0,0,0,.25); animation:bob 1.2s ease-in-out infinite; } @keyframes bob { 50% { transform:translateY(-5px) rotate(45deg); } } .hud-mark span { position:absolute; left:50%; top:32px; transform:translateX(-50%); font-size:12px; font-weight:700; color:#fff; text-shadow:0 1px 3px rgba(0,0,0,.7); white-space:nowrap; } /* trade / talk panel.",
 		"<div class=\"cm-panel\"><canvas></canvas> <div class=\"cm-card cm-title\"><b>NEAR CITY</b><span>City map</span></div> <div class=\"cm-card cm-info\"><b></b><em></em><div class=\"cm-note\"></div><button type=\"button\">Clear waypoint</button></div> <div class=\"cm-card cm-legend\"><h4>LEGEND <button type=\"button\" aria-label=\"Show or hide legend\">hide</button></h4><ul></ul></div> <div class=\"cm-card cm-ctl\"><button type=\"button\" data-a=\"in\" aria-label=\"Zoom in\">+</button><button type=\"button\" data-a=\"out\" aria-label=\"Zoom out\">&minus;</button> <button type=\"button\" data-a=\"me\" aria-label=\"Centre on me\"><svg width=\"20\" height=\"20\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.4\"><circle cx=\"10\" cy=\"10\" r=\"4\"/><path d=\"M10 1v4M10 15v4M1 10h4M15 10h4\"/></svg></button> <button type=\"button\" data-a=\"fit\" aria-label=\"Fit whole city\"><svg width=\"20\" height=\"20\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.4\" stroke-linecap=\"round\"><path d=\"M2 7V2h5M13 2h5v5M18 13v5h-5M7 18H2v-5\"/></svg></button></div> <div class=\"cm-card cm-hint\">Click a place or street to set a waypoint &middot; drag to pan &middot; scroll to zoom &middot; M or Esc to close</div> <div class=\"cm-tip\"></div></div>",
 		"<div class=\"sheet\"> <p><b>Start the story over?</b> The city resets to Day 1.",
 		"<div class=\"sheet\"> <p><b>Trade with the four merchants.</b> Pema is loyal and never gouges.",
@@ -12985,6 +12985,7 @@ var lines_default = {
 		"Choose what happens to the guest game:",
 		"City",
 		"Closed",
+		"Closed · shelves stocked: reopens at 08:00",
 		"Closed.",
 		"Coins",
 		"Coins are interchangeable, so this follows payments, not one coin.",
@@ -13270,6 +13271,7 @@ var lines_default = {
 		"My mangoes have been sitting at the harbor since dawn and nobody will tell me why.",
 		"My patience runs out while you think.",
 		"My shelves are stocked for now, but rent is rent: every sale counts.",
+		"My shelves are stocked, so I open again at eight.",
 		"My shelves were full, so I opened again.",
 		"My shutters are down until rent is sorted.",
 		"N",
@@ -13435,9 +13437,9 @@ var lines_default = {
 		"Please.",
 		"Pleasure.",
 		"Press B to look.",
-		"Press E at his tea house and sell.",
-		"Press E at the stall.",
+		"Press F at his tea house and sell.",
 		"Press F at the Mango Orchard crate, 06:00 to 11:00: 3 free mangoes a day.",
+		"Press F at the stall.",
 		"Press T for a forecast: a week of the city in a minute, run from today's real market.",
 		"Press T to fast-forward a week",
 		"Press T to run a week and see who misses rent.",
@@ -13579,6 +13581,8 @@ var lines_default = {
 		"That's all I have left, and rent is due tonight.",
 		"That's all, Auntie.",
 		"That's alright.",
+		"That's as high as I go.",
+		"That's as low as I go.",
 		"That's enough stock",
 		"That's enough stock to open again.",
 		"That's it.",
@@ -13617,6 +13621,7 @@ var lines_default = {
 		"The orchard gate is stuck: nothing was picked.",
 		"The pickers have finished for today.",
 		"The shipment already landed.",
+		"The shutters are down tonight.",
 		"The shutters are down.",
 		"The shutters are down: I couldn't make rent.",
 		"The shutters are going up!",
@@ -14267,6 +14272,7 @@ var lines_default = {
 		"rent_risk",
 		"reopen",
 		"reopened",
+		"report.from",
 		"resident",
 		"resize",
 		"result",
@@ -14322,6 +14328,7 @@ var lines_default = {
 		"shares",
 		"shares_sold",
 		"she earns nothing on them",
+		"shelf",
 		"shipment",
 		"shop",
 		"shop_corner",
@@ -14752,9 +14759,13 @@ var lines_default = {
 		"\\d{1,6}(?:[.,:]\\d{1,3})? m by street · \\d{1,6}(?:[.,:]\\d{1,3})? m straight",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? m straight · no walking route found",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? mango",
+		"\\d{1,6}(?:[.,:]\\d{1,3})? mango in your bag\\.",
+		"\\d{1,6}(?:[.,:]\\d{1,3})? mango on her shelf: coins only once shoppers buy them",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? mangoes",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? mangoes in the kitchen",
+		"\\d{1,6}(?:[.,:]\\d{1,3})? mangoes in your bag\\.",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? mangoes left",
+		"\\d{1,6}(?:[.,:]\\d{1,3})? mangoes on her shelf: coins only once shoppers buy them",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? mangoes on the shelf",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? merchant stalls",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? min",
@@ -15300,6 +15311,8 @@ function applyTactic(s, h, t) {
 	if (h.mode === "sell") unit = Math.min(unit, Math.floor(s.merchants[h.merchant].cash / qty));
 	const patience = Math.max(0, h.patience - (success ? PATIENCE_HIT : PATIENCE_FAIL));
 	const over = patience <= 0 ? "walked" : null;
+	const atLimit = success && unit === h.unit && qty === h.qty;
+	if (atLimit) line = h.mode === "buy" ? "That's as low as I go." : "That's as high as I go.";
 	if (over) line = h.mode === "buy" ? "Enough. Come back tomorrow." : "I have a kitchen to run. Tomorrow.";
 	return {
 		session: {
@@ -15315,7 +15328,7 @@ function applyTactic(s, h, t) {
 			moves: h.moves + 1,
 			over
 		},
-		success,
+		success: success && !atLimit,
 		line
 	};
 }
@@ -16680,8 +16693,36 @@ function opsConfig(env) {
 		schedulerSecret: (env.NEAR_SCHEDULER_SECRET ?? env.CRON_SECRET ?? "").trim() || null,
 		dailyDecisions: int(env.NEAR_AI_DAILY_DECISIONS, 200),
 		dailyChats: int(env.NEAR_AI_DAILY_CHATS, 300),
-		dailyVerifies: int(env.NEAR_AI_DAILY_VERIFIES, 200)
+		dailyVerifies: int(env.NEAR_AI_DAILY_VERIFIES, 200),
+		testTurns: (env.NEAR_TEST_TURNS ?? "").trim() ? int(env.NEAR_TEST_TURNS, 0) : null,
+		testRun: (env.NEAR_TEST_RUN ?? "").trim().replace(/[^a-z0-9-]/gi, "").slice(0, 40) || "playtest"
 	};
+}
+const testTurnKey = (run) => `vivolith:test:turns:${run}`;
+/** Takes one market turn from the playtest cap. Called after the turn lock is held and before anything is read or
+*  signed. Counted in the shared store (atomic INCR, kept 7 days), so every instance and every browser share one cap;
+*  a store that cannot count refuses the turn. No cap configured: always allowed. */
+async function takeTestTurn(ops, store) {
+	if (ops.testTurns === null) return {
+		ok: true,
+		used: null
+	};
+	if (ops.testTurns <= 0) return {
+		ok: false,
+		used: null
+	};
+	try {
+		const used = await store.incr(testTurnKey(ops.testRun), 604800);
+		return {
+			ok: used <= ops.testTurns,
+			used
+		};
+	} catch {
+		return {
+			ok: false,
+			used: null
+		};
+	}
 }
 /** Runtime kill switch in the shared store (set by scripts/near/agents.ts): stops every agent without a redeploy. */
 const KILL_KEY = "vivolith:agents:off";
@@ -17304,6 +17345,11 @@ async function status(cfg, env) {
 			enabled,
 			halted: await agentsHalted(ops, store),
 			usedToday: await usage(store)
+		},
+		testTurns: ops.testTurns === null ? null : {
+			run: ops.testRun,
+			limit: ops.testTurns,
+			used: Number(await store.get(testTurnKey(ops.testRun)).catch(() => null) ?? 0)
 		},
 		lastTick: last ? JSON.parse(last) : null,
 		configured: configured(cfg),
@@ -18256,6 +18302,14 @@ async function tick(cfg, env, trusted = false, scope = "market") {
 	if (!await claimTick(cfg)) return json(200, {
 		status: "skipped",
 		message: "the merchants moved less than a minute ago"
+	});
+	const cap = await takeTestTurn(ops, decisionStore(cfg));
+	if (!cap.ok) return json(200, {
+		status: "capped",
+		message: "the playtest's market turns are used up",
+		run: ops.testRun,
+		limit: ops.testTurns,
+		used: cap.used
 	});
 	const secret = (env.NEAR_MERCHANT_SECRET ?? "").trim();
 	if (!secret) throw new HttpError(503, "merchant keys not configured");

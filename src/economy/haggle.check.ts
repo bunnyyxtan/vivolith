@@ -34,6 +34,16 @@ assert.equal(h.over, "walked");
 assert.equal(closeDeal(a, h).ok, false);
 assert.ok("error" in openHaggle(a, "pema"), "Pema is locked for the day after walking out");
 
+// At the merchant's limit a tactic that would have worked moves nothing and is not reported as a win.
+{
+  const e = initialEconomy();
+  const lim = { ...open(e, "tomas"), unit: open(e, "tomas").limit };
+  const r = applyTactic(e, lim, "flatter");
+  assert.equal(r.session.unit, lim.unit);
+  assert.equal(r.success, false, "no 'you win' when the price cannot move");
+  assert.match(r.line, /as low as I go/);
+}
+
 // A deal moves stock, coins and cash, and selling to Arin pays the player.
 const c = initialEconomy();
 const d = applyTactic(c, open(c, "tomas"), "fair").session;

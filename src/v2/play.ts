@@ -8,7 +8,7 @@ import { createHud, el, type Hud } from "./hud";
 import { createGuide, NEWCOMER_FLOOR, GOALS, inTutorial, investTarget, STEPS, stepIndex, titleOf, tutorSeller, unlocked, type Target } from "./guide";
 import { loadGame, saveGame, clearSave } from "../economy/save";
 import { calibrateSoles } from "./soles";
-import { adjustRep, advance, shopperWant, invest, MAX_PACKS, payReleaseFee, recordRestock, REOPEN_SHARE, reopenGap, sellShares, SHARE_PACK, shareCost, shareRefund, shareSupply, tryReopen, UPGRADE_AT } from "../economy/sim";
+import { adjustRep, advance, chainLive, shopperWant, invest, MAX_PACKS, payReleaseFee, recordRestock, REOPEN_SHARE, reopenGap, sellShares, SHARE_PACK, shareCost, shareRefund, shareSupply, tryReopen, UPGRADE_AT } from "../economy/sim";
 import { bidFor, quote, lassiPrice, stallPull, ORCHARD_PICK, ORCHARD_HOURS, HAGGLE_FLOOR, DIVIDEND_BPS, type Quote } from "../economy/pricing";
 import { clockOf, dayOf, MERCHANT_IDS, MINUTES_PER_DAY, STARTER_COINS, type EconomyState, type Good, type MerchantId, type Receipt } from "../economy/state";
 import { RESIDENTS } from "../economy/residents";
@@ -591,7 +591,8 @@ export async function createPlay(game: Game): Promise<Play> {
     const newcomer = tab === "buy" && buyUnit(id) < priceOf(state, id).price;
     const say = id === "pema" && stepIndex(state) === 3 && sellPrice(id) !== null ? `Are those for me? ${sellPrice(id)} coins each, what I can pay and still sell them on.`
       : newcomer ? `New in town? ${buyUnit(id)} c a mango, just this once. The board says ${priceOf(state, id).price}.`
-      : closed ? VOICES[id].lines.closed : WHO[id].hello;
+      // offline, stocked shelves reopen the stall at 08:00: asking for stock then was a request for nothing
+      : closed ? (!chainLive(state) && reopenGap(state, id) === 0 ? "The shutters are down tonight. My shelves are stocked, so I open again at eight." : VOICES[id].lines.closed) : WHO[id].hello;
     mode = { kind: "trade", npc, id, tab, qty: q, say, tone: closed ? "bad" : "", why: false, h: null, done: 0 };
     speak(id, say);
     renderTrade();
@@ -859,7 +860,8 @@ export async function createPlay(game: Game): Promise<Play> {
     // connected: the contract's own count of mangoes delivered since it closed; offline: the shelves' value
     const need = typeof total === "number" ? total : Math.ceil((m.rent * REOPEN_SHARE) / Math.max(1, m.baseCost.mango)), have = Math.max(0, need - gap);
     const d = el("div", "tp-pat");
-    d.append(el("span", "", typeof total === "number" ? `Closed · ${have} of ${need} mangoes delivered: ${gap} more reopens the stall` : `Closed · restock to reopen: ${have} of ${need} mangoes' worth on the shelves`));
+    d.append(el("span", "", typeof total === "number" ? `Closed · ${have} of ${need} mangoes delivered: ${gap} more reopens the stall`
+      : gap === 0 ? "Closed · shelves stocked: reopens at 08:00" : `Closed · restock to reopen: ${have} of ${need} mangoes' worth on the shelves`));
     const bar = el("i"), fill = el("b");
     fill.style.width = `${Math.round((have / need) * 100)}%`;
     bar.append(fill); d.append(bar);
@@ -1171,6 +1173,7 @@ export async function createPlay(game: Game): Promise<Play> {
   /** Runs once if the open card is closed any other way than its own buttons (Esc): a choice card counts it as cancel. */
   let onCardDismiss: (() => void) | null = null;
   const closeOverlay = (): void => {
+    delete state.flags["report.from"]; // an evening report that was open is closed now (see enterWorld)
     const dismissed = onCardDismiss;
     onCardDismiss = null;
     dismissed?.();
@@ -1460,7 +1463,9 @@ export async function createPlay(game: Game): Promise<Play> {
     const purse = el("section"); purse.append(el("h4", "", "Your purse"));
     const d = state.player.coins - from.coins, div = divsOf(state) - from.divs;
     purse.append(el("div", `big ${d >= 0 ? "pos" : "neg"}`, `${d >= 0 ? "+" : ""}${d} c`));
-    purse.append(el("p", "", `From ${from.coins} c to ${state.player.coins} c${div > 0 ? `, including ${div} c in dividends from your shares` : ""}.`));
+    // coins alone read as a loss when they became goods: say what the bag holds now
+    const bag = state.player.inventory.mango;
+    purse.append(el("p", "", `From ${from.coins} c to ${state.player.coins} c${div > 0 ? `, including ${div} c in dividends from your shares` : ""}.${bag > 0 ? ` ${bag} ${bag === 1 ? "mango" : "mangoes"} in your bag.` : ""}`));
     // the week ran on this device; the wallet is the chain's, which only pays for real market days
     const real = week && playerId() ? el("p", "why", "A forecast: this week ran on your device from today's real market. Checking your real purse…") : null;
     if (real) purse.append(real);
@@ -1490,6 +1495,7 @@ export async function createPlay(game: Game): Promise<Play> {
     }
     footer(card, week ? "Back to the city" : "Next morning", () => closeReport(week, from));
     if (week) state.flags.weekSeen = true; // seeing the week is the step; a reload with the report open keeps it
+    else state.flags["report.from"] = JSON.stringify(from); // reopened as it was if the game is saved while it is up
     save();
   });
   const closeReport = (week: boolean, from: Snapshot): void => {
@@ -2129,8 +2135,12 @@ export async function createPlay(game: Game): Promise<Play> {
         entered = true;
         state.flags.played = true;
         save();
-        // saved during an evening report: show it again so the night ends with "Next morning", not a dark walk
-        if (unlocked(state, "rent") && state.minute % MINUTES_PER_DAY >= RENT_MINUTE && mode.kind === "walk") showReport(`Evening, Day ${dayOf(state.minute)}`, mark, false);
+        // saved during an evening report: show that report again (same start, same content) so the night ends with
+        // "Next morning"; a report already dismissed is not repeated (it came back empty: "A quiet stretch", +0 c)
+        const open = state.flags["report.from"];
+        if (typeof open === "string" && mode.kind === "walk") {
+          try { showReport(`Evening, Day ${dayOf(state.minute)}`, JSON.parse(open) as Snapshot, false); } catch { delete state.flags["report.from"]; }
+        }
       }
       play.paused = false;
       player.frozen = mode.kind !== "walk";
@@ -2164,7 +2174,9 @@ export async function createPlay(game: Game): Promise<Play> {
       const id = mode.id, opener = (line: "haggle_ok" | "haggle_no" | "refuse"): string => VOICES[id].lines[line];
       // a recorded opener starts the subtitle and plays at once; the live line with the numbers is voiced after it
       const line = r.success || t === "fair" ? "haggle_ok" : "haggle_no";
-      mode = { ...mode, h: r.session, say: `${opener(line)} ${r.line}`, tone: t === "fair" ? "good" : r.success ? "good" : "bad" };
+      // Arin's recorded "no" ("I can't go that low.") is a seller's line: when he is the buyer it said the opposite
+      const lead = line === "haggle_no" && mode.h.mode === "sell" && /\blow\b/.test(opener(line)) ? "" : `${opener(line)} `;
+      mode = { ...mode, h: r.session, say: `${lead}${r.line}`, tone: t === "fair" ? "good" : r.success ? "good" : "bad" };
       // a face to read in the world, not only on the panel: the merchant's reaction over their head
       if (t !== "fair") market.say(id, r.session.over === "walked" ? "That's it. We're done." : r.success ? (r.session.patience < 35 ? "Hm. Fine. Don't push it." : "Hm... alright.") : "Hmph.", 1.6);
       if (r.session.over === "deal") { void audio.line(id, mode.say); settleDeal(r.session); }
