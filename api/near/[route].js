@@ -16695,8 +16695,45 @@ function opsConfig(env) {
 		dailyChats: int(env.NEAR_AI_DAILY_CHATS, 300),
 		dailyVerifies: int(env.NEAR_AI_DAILY_VERIFIES, 200),
 		testTurns: (env.NEAR_TEST_TURNS ?? "").trim() ? int(env.NEAR_TEST_TURNS, 0) : null,
-		testRun: (env.NEAR_TEST_RUN ?? "").trim().replace(/[^a-z0-9-]/gi, "").slice(0, 40) || "playtest"
+		testRun: (env.NEAR_TEST_RUN ?? "").trim().replace(/[^a-z0-9-]/gi, "").slice(0, 40) || "playtest",
+		testTxs: (env.NEAR_TEST_TXS ?? "").trim() ? int(env.NEAR_TEST_TXS, 0) : null
 	};
+}
+const testTxKey = (run) => `vivolith:test:txs:${run}`;
+const TEST_TTL = 604800;
+/** Reserves a turn's worst-case transaction count from the run's budget before it signs anything, so the run's total
+*  can never pass NEAR_TEST_TXS and no turn stops half-way. Over budget, or a store that cannot count: refused. */
+async function reserveTestTxs(ops, store, worst) {
+	if (ops.testTxs === null) return {
+		ok: true,
+		used: null
+	};
+	if (ops.testTxs <= 0) return {
+		ok: false,
+		used: null
+	};
+	try {
+		const used = await store.incr(testTxKey(ops.testRun), TEST_TTL, worst);
+		if (used <= ops.testTxs) return {
+			ok: true,
+			used
+		};
+		await store.incr(testTxKey(ops.testRun), TEST_TTL, -worst).catch(() => void 0);
+		return {
+			ok: false,
+			used: used - worst
+		};
+	} catch {
+		return {
+			ok: false,
+			used: null
+		};
+	}
+}
+/** Returns the part of a reservation the turn did not sign. A failed refund leaves the budget over-counted (safe). */
+async function refundTestTxs(ops, store, unused) {
+	if (ops.testTxs === null || unused <= 0) return;
+	await store.incr(testTxKey(ops.testRun), TEST_TTL, -unused).catch(() => void 0);
 }
 const testTurnKey = (run) => `vivolith:test:turns:${run}`;
 /** Takes one market turn from the playtest cap. Called after the turn lock is held and before anything is read or
@@ -17226,14 +17263,18 @@ function decisionStore(cfg) {
 			del: async (k) => {
 				await cmd(["DEL", k]);
 			},
-			incr: async (k, ttl) => {
+			incr: async (k, ttl, by = 1) => {
 				const r = await fetch(`${cfg.redisUrl}/pipeline`, {
 					method: "POST",
 					headers: {
 						authorization: `Bearer ${cfg.redisToken}`,
 						"content-type": "application/json"
 					},
-					body: JSON.stringify([["INCR", k], [
+					body: JSON.stringify([[
+						"INCRBY",
+						k,
+						String(by)
+					], [
 						"EXPIRE",
 						k,
 						String(ttl)
@@ -17269,8 +17310,8 @@ function decisionStore(cfg) {
 		del: async (k) => {
 			agentMemory.delete(k);
 		},
-		incr: async (k, ttl) => {
-			const n = Number(live(k) ?? 0) + 1;
+		incr: async (k, ttl, by = 1) => {
+			const n = Number(live(k) ?? 0) + by;
 			agentMemory.set(k, {
 				v: String(n),
 				until: Date.now() + ttl * 1e3
@@ -17350,6 +17391,12 @@ async function status(cfg, env) {
 			run: ops.testRun,
 			limit: ops.testTurns,
 			used: Number(await store.get(testTurnKey(ops.testRun)).catch(() => null) ?? 0)
+		},
+		testTxs: ops.testTxs === null ? null : {
+			run: ops.testRun,
+			limit: ops.testTxs,
+			used: Number(await store.get(testTxKey(ops.testRun)).catch(() => null) ?? 0),
+			worstPerTurn: maxTxPerTurn()
 		},
 		lastTick: last ? JSON.parse(last) : null,
 		configured: configured(cfg),
@@ -18287,6 +18334,12 @@ async function residentTurn(cfg, provider, relayer, secret, day, log, txs, agent
 	}
 	return ate;
 }
+/** The most transactions one market turn can sign: settle, rent and Guild (1 each); one per changed order (every ask
+*  and the mango and lemon bids of each stall); one per merchant-to-merchant buy (a bid per buyer and fruit); a
+*  resident's mint, sale, meal and burn; one operator batch. Checked against every turn in turn.check.ts. */
+function maxTxPerTurn() {
+	return 3 + MERCHANTS.reduce((n, id) => n + initialEconomy().merchants[id].sells.length + 2, 0) + MERCHANTS.length * 2 + RESIDENTS.length * 4 + 1;
+}
 /** One market turn. `trusted` = called by the scheduler route with its secret: only such turns may ask NEAR AI (and
 *  only within the daily budget); browser-driven turns replay a decision already made today, else use the rule. With
 *  NEAR_MARKET_DRIVER=scheduler, browser requests do not move the market at all. */
@@ -18310,6 +18363,16 @@ async function tick(cfg, env, trusted = false, scope = "market") {
 		run: ops.testRun,
 		limit: ops.testTurns,
 		used: cap.used
+	});
+	const worst = maxTxPerTurn();
+	const txCap = await reserveTestTxs(ops, decisionStore(cfg), worst);
+	if (!txCap.ok) return json(200, {
+		status: "capped",
+		message: "the playtest's transaction budget cannot cover another turn",
+		run: ops.testRun,
+		txLimit: ops.testTxs,
+		txUsed: txCap.used,
+		worst
 	});
 	const secret = (env.NEAR_MERCHANT_SECRET ?? "").trim();
 	if (!secret) throw new HttpError(503, "merchant keys not configured");
@@ -18736,6 +18799,7 @@ async function tick(cfg, env, trusted = false, scope = "market") {
 	const receiptsOf = (id) => view(provider, cfg.contractId, "get_receipts", { account_id: `${id}.${cfg.relayerId}` });
 	await recordMemories(agentStore, day, snaps, receiptsOf, log);
 	if (trusted && !halted && baseCfg.key) await verifyPass(agentStore, day, (decisionId, ev) => verifyDecision(baseCfg.url, baseCfg.key, decisionId, ev, fetch), () => spend(ops, agentStore, "verify"), log);
+	await refundTestTxs(ops, agentStore, worst - txs.length);
 	const last = {
 		at: Date.now(),
 		day,
