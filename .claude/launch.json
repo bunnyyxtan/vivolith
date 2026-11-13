@@ -2,6 +2,16 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "near-world-inspect",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:VIVOLITH_READ_ONLY='1'; $env:ELEVENLABS_API_KEY=' '; $env:NEAR_AI_KEY=' '; $env:NEAR_AGENT_MERCHANTS=' '; npm.cmd run dev -- --port 5180 --strictPort"
+      ],
+      "port": 5180
+    },
+    {
       "name": "near-world",
       "runtimeExecutable": "npm",
       "runtimeArgs": [

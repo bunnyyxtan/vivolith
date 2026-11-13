@@ -168,6 +168,38 @@ the chain had charged every open stall (`lastRent.<id>` >= day). It now moves to
 are charged, and the "short" figure only counts stalls not yet charged for that day. Typecheck, checks and build pass;
 offline HUD unchanged (Day 10: "Tomas's rent tomorrow 21:00 · 15 c short"). Connected wording still not checked live.
 
+Silent dialogue and read-only inspection (2026-11-14, local, no deploy):
+- Pema's greeting: its only recording was keyed to the exact text "3 mangoes" (and was never generated), while the
+  greeting reads her real shelf, which on the shared connected market is rarely 3; so it was always a server line and
+  silent when the voice service is off. Its fixed opening "Oh, a new face! I'm Pema." is now a static line of its own and
+  `audio.ts` `opener()` also matches static lines, so once recorded it plays at any stock and only the figures go to the
+  server. A missing opener file now falls back to the server voice (it was skipped before). Rent Night was already a
+  recorded opener ("Lights on!", "I'm in trouble.", "Shutters down.") plus live figures. Needs paid generation (not
+  done): `audio/voice/pema/sdc716855.mp3` "Oh, a new face! I'm Pema." (25 characters) and, optional,
+  `sa43fc250.mp3`, the 3-mango whole greeting (93), about 60 credits for both at the 1459-credits-per-36-takes rate.
+  Verified (mock voice, port 5175): 7-mango greeting = opener file, server opener, server rest, 19 words lit in order,
+  7.9 s; 3-mango = one server line; "Lights on! Rent paid today. 15 c left." = rent_ok.mp3 + server rest, 4.0 s; stop()
+  at 0.6 s: voice off, no further request. Voice refused: greeting subtitle shown whole at once, silent, no blips; Rent
+  Night "Lights on!" still plays and the figures stay as a silent subtitle.
+- Read-only inspection: opening the site creates a guest account (2 txs) and every 60 s posts `tick` (a market turn),
+  `claim` and syncs. `?inspect=<account>` (src/near/inspect.ts) refuses every non-GET request to /api/ in the page
+  (guest, register, relay, deal, tick, settle, claim, pick, talk, social, save, load, voice), never loads a key, watches
+  the account by view calls only and never writes the save. A local QA relay started with `VIVOLITH_READ_ONLY=1`
+  (launch config `near-world-inspect`, port 5180) also refuses every write server side. Production is unchanged unless
+  the URL carries `?inspect`. `node src/near/inspect.check.ts` checks both layers.
+- Incident while building this: two page loads of the connected dev server without `?inspect` (the preview opens the
+  bare URL), plus one probe of mine sent before the server switch worked, created three testnet guests and registered
+  them (6 relayer-paid txs, 21:07-21:10 UTC: `gbdfce3ccd82e21e5`, `g944afb4b25a29549`, `g7027e8ff7fe38755`). No market
+  turn, trade or settlement. Cause: vite.config.ts passed only NEAR_/ELEVENLABS_/VIVOLITH_VOICE_ variables to the relay,
+  so VIVOLITH_READ_ONLY never arrived; fixed and asserted in `inspect.check`.
+- Connected rent HUD, read-only on the real chain (`?inspect=g3bb4d6aaa31fd20f...`, AI and voice keys blank), clock and
+  tills set in the page: odd day, Mira 9 c short "Mira's rent in about 5 min · 9 c short"; even day unpaid "Mira's rent
+  due now · 9 c short"; even day all charged "Mira's rent in about 17 min · 18 c short"; Mira charged, Pema not "Pema's
+  rent due now · 5 c short"; Tomas closed "Tomas's stall is closed: missed rent"; all able "Stall rent in about 1 min ·
+  every stall can pay"; real state "Stall rent in about 6 min · every stall can pay". 0 relayer txs over the 8-minute
+  session (nearblocks). Layout: rent line at 1280x720 x 1020-1260 y 128-155, at 1920x1080 x 1699-1900 y 128-155,
+  inside the wallet column, not clipped, no overlap with the mission card (x 20-385) or account chip.
+
 Verified offline in the browser: open stocked stall (Tomas), closed stall with stock (Pema, no goods outside, Closed card), vacant stall, reopening at 08:00 (shutter up, goods back), resident delivery to an open stall and to a shut stall (state injected to close her: labelled), trade and haggle panels with the mission visible, panel open at 20:58 (clock holds while trading), 1280x720 and 1920x1080, day and night. Not verified: a live resident delivery to a closed stall on testnet; sold-out display (no stall reached 0 stock in play). 13/13 checks, voice check, typecheck, build.
 
 ## Phase 6: live production acceptance (2026-11-14, authorized)

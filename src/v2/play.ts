@@ -19,6 +19,7 @@ import { MOODS, VOICES, type LineId, type Mood } from "./audio-manifest";
 import { factsFor, goodsOf, moodOf as voiceMood, scriptFor, sentencesOf } from "../../server/near/talk";
 import { createOrchardBasket, type OrchardBasket } from "./orchard";
 import { night, startNight, updateNight, type Clock, type NightOutcome } from "./story";
+import { READ_ONLY } from "../near/inspect";
 
 /** Metres per footstep sound, and how close to the stalls the market music and murmur take over. */
 const ORCHARD_REACH_M = 4;
@@ -235,7 +236,7 @@ export async function createPlay(game: Game): Promise<Play> {
   /** Saves the market and, once the player is in the world, where Kavi stands and faces. */
   let resetting = false; // New Game: the reload's pagehide must not write the cleared save back
   const save = (): void => {
-    if (resetting) return;
+    if (resetting || READ_ONLY) return; // an inspection shows the chain's state, never overwrites this browser's story
     if (entered) {
       const b = player.body; // the physics body is authoritative; the visual root lags a frame behind it
       Object.assign(state.flags, { px: Math.round(b.x * 100) / 100, py: Math.round(b.y * 100) / 100, pz: Math.round(b.z * 100) / 100, ph: Math.round(player.heading * 1000) / 1000 });
@@ -2140,6 +2141,7 @@ export async function createPlay(game: Game): Promise<Play> {
     return null;
   }).then(async (redirected) => {
     const id = await connectGuest();
+    if (READ_ONLY) hud.toast(`Read-only inspection${id ? ` of ${id}` : ""}: nothing is signed, sent or saved.`);
     renderAcct();
     if (!id) return;
     void syncMerchants();

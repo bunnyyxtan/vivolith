@@ -6,6 +6,7 @@
 // player's NEAR Auth MPC key, with a game session key for moves, so play continues with no further popups.
 import { Auth0Client } from "@auth0/auth0-spa-js";
 import type { ChronicleEvent } from "../economy/chronicle";
+import { INSPECT_ACCOUNT, READ_ONLY } from "./inspect";
 import { Account, JsonRpcProvider, KeyPair, KeyPairSigner, actions, encodeSignedDelegate, teraToGas, type KeyPairString } from "near-api-js";
 
 export const EXPLORER_TX = "https://testnet.nearblocks.io/txns/";
@@ -50,6 +51,8 @@ export interface ChainReceipt {
 const provider = new JsonRpcProvider({ url: RPC });
 let status: ChainStatus | null = null;
 let player: Account | null = null;
+/** The account a read-only inspection shows (no signer); null otherwise. */
+let watched: string | null = null;
 
 const store = {
   get: (k: string): string | null => { try { return localStorage.getItem(k); } catch { return null; } },
@@ -145,7 +148,7 @@ export const marketDay = (): number | null => (status?.marketDayMs ? Math.floor(
 export const marketDayMs = (): number | null => status?.marketDayMs ?? null;
 
 export const merchantAccount = (id: string): string => `${id}.${status?.relayer ?? ""}`;
-export const playerId = (): string | null => player?.accountId ?? null;
+export const playerId = (): string | null => player?.accountId ?? watched;
 /** True when Google/email sign-in is available (the relayer has our Auth0 tenant configured). */
 export const socialAvailable = (): boolean => Boolean(status?.auth);
 /** Email or name of a signed-in player; null for guests. Never empty while signed in (finishSignIn falls back to the
@@ -251,6 +254,8 @@ export async function signOutSocial(): Promise<string | null> {
 export async function connectGuest(): Promise<string | null> {
   const s = await chainStatus();
   if (!s.configured) return null;
+  // read-only inspection: watch an account by name, never load a key or create or register one (inspect.ts)
+  if (READ_ONLY) { watched = INSPECT_ACCOUNT ?? store.get(ACCOUNT_STORE); return watched; }
   let secret = store.get(KEY_STORE) as KeyPairString | null;
   if (!secret) {
     secret = KeyPair.fromRandom("ed25519").toString() as KeyPairString;

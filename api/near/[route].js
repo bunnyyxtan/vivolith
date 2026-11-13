@@ -12647,6 +12647,7 @@ const spokenText = (text) => text.replace(/\b(\d+)\s?c\b/g, (_, n) => `${n} ${n 
 /** Fixed one-off lines spoken in the economy flow (the rest of that flow is live figures, voiced by an opener plus the server). */
 const EVENT_LINES = {
 	pema: [
+		"Oh, a new face! I'm Pema.",
 		"Oh, a new face! I'm Pema. Don't look at my shelves, dear: 3 mangoes left, and rent is coming.",
 		"You saved my morning, Kavi!",
 		"A partner! I've paid the harbor. My crates are coming!"
@@ -12787,6 +12788,7 @@ var lines_default = {
 		"../economy/state",
 		"../economy/state.ts",
 		"../near/chain",
+		"../near/inspect",
 		"../physics/collision",
 		"../quests/dialogue",
 		"../quests/mango",
@@ -12803,6 +12805,7 @@ var lines_default = {
 		"./guide",
 		"./hud",
 		"./input",
+		"./inspect",
 		"./labs.ts",
 		"./landmarks",
 		"./look",
@@ -12851,6 +12854,7 @@ var lines_default = {
 		".tp-say, .tp-ask, .tp-note, .tp-who",
 		".tp-say.live",
 		".where",
+		"/api/",
 		"/api/near/chronicle",
 		"/api/near/status",
 		"/api/near/voice",
@@ -13077,6 +13081,7 @@ var lines_default = {
 		"Full shelves, dear, but shelves don't pay rent",
 		"Full shelves, dear, but shelves don't pay rent, and rent is coming.",
 		"Funny how a ledger remembers.",
+		"GET",
 		"Go and see her",
 		"Go and see her.",
 		"Goal",
@@ -13087,6 +13092,7 @@ var lines_default = {
 		"Greedy",
 		"Groceries · open 24/7",
 		"Guest",
+		"HEAD",
 		"HOLD",
 		"HOLD · 30 crates mango · consignee Pema's Fruit.",
 		"Ha!",
@@ -13438,6 +13444,7 @@ var lines_default = {
 		"Rare.",
 		"Reach 100 coins",
 		"Read live from the market contract on NEAR testnet.",
+		"Read-only inspection: nothing is signed, sent or saved.",
 		"Refused by NEAR, nothing moved",
 		"Regular, gets the family price",
 		"Reload to try again",
@@ -14006,6 +14013,7 @@ var lines_default = {
 		"high-performance",
 		"hold",
 		"how",
+		"http://local",
 		"https://cloud-api.near.ai/v1/chat/completions",
 		"https://rpc.testnet.fastnear.com",
 		"https://testnet.nearblocks.io/address/",
@@ -14038,6 +14046,7 @@ var lines_default = {
 		"ines",
 		"input",
 		"insight",
+		"inspect",
 		"intents_exchange",
 		"intro",
 		"inverse",
@@ -14232,6 +14241,7 @@ var lines_default = {
 		"raise",
 		"raised",
 		"raising the N Spire",
+		"read-only inspection",
 		"recorded",
 		"recorded, no transaction needed",
 		"recovering",
@@ -14451,6 +14461,7 @@ var lines_default = {
 		"ui_open",
 		"ul",
 		"unconfirmed",
+		"undefined",
 		"under a minute",
 		"uniform float paintHue;",
 		"uniform sampler2D tDiffuse; uniform float sat, con; varying vec2 vUv; void main(){ vec3 c = texture2D(tDiffuse, vUv).rgb; float l = dot(c, vec3(.2126,.7152,.0722)); c = mix(vec3(l), c, sat); c = (c - .5) * con + .5; gl_FragColor = vec4(clamp(c,0.,1.), 1.); }",
@@ -18970,6 +18981,14 @@ const goodsText = (good, n) => `${n} ${n === 1 ? good : good === "mango" ? "mang
 /** Entry point for both runtimes. `route` is the last path segment under /api/near/. */
 async function handle(route, req, env) {
 	const cfg = readConfig(env);
+	if (env.VIVOLITH_READ_ONLY?.trim() === "1" && !(req.method === "GET" && [
+		"status",
+		"chronicle",
+		"decisions"
+	].includes(route))) return json(403, {
+		status: "failed",
+		message: "read-only inspection"
+	});
 	try {
 		if (route === "status" && req.method === "GET") return await status(cfg, env);
 		if (route === "market-turn") {

@@ -1,7 +1,9 @@
 import { createGame } from "./game";
 import { createPlay } from "./play";
 import { createBoot, createMenu } from "./menu";
+import { installInspectGuard } from "../near/inspect";
 
+installInspectGuard(); // ?inspect: read-only, before the game makes any request (src/near/inspect.ts)
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 const loader = createBoot();
 

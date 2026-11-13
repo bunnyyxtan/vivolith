@@ -1285,6 +1285,11 @@ const goodsText = (good: string, n: number): string => `${n} ${n === 1 ? good : 
 /** Entry point for both runtimes. `route` is the last path segment under /api/near/. */
 export async function handle(route: string, req: Request, env: RelayEnv): Promise<Response> {
   const cfg = readConfig(env);
+  // local read-only QA server (VIVOLITH_READ_ONLY=1, .claude/launch.json "near-world-inspect"): only the three reads
+  // answer, so no page it serves can create an account, sign, run a turn or spend AI or voice credits
+  if ((env as Record<string, string | undefined>).VIVOLITH_READ_ONLY?.trim() === "1" && !(req.method === "GET" && ["status", "chronicle", "decisions"].includes(route))) {
+    return json(403, { status: "failed", message: "read-only inspection" });
+  }
   try {
     if (route === "status" && req.method === "GET") return await status(cfg, env);
     // The city's own schedule: a scheduler (Vercel Cron sends GET with `Authorization: Bearer $CRON_SECRET`, or the
