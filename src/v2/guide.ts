@@ -71,7 +71,12 @@ export const STEPS: readonly Step[] = [
   },
   {
     id: "deliver", title: "Sell your mangoes: Pema needs them", target: "pema",
-    detail: (s) => { const b = bidFor(s, "pema", "mango")?.price; return `${b ? `Pema bids ${b} c a mango` : "Pema isn't bidding this minute"} and needs stock to sell before rent. Other stalls post their own bids: the trade panel compares them. Your call.`; },
+    detail: (s) => {
+      const b = bidFor(s, "pema", "mango")?.price;
+      if (b) return `Pema bids ${b} c a mango and needs stock to sell before rent. Other stalls post their own bids: the trade panel compares them. Your call.`;
+      // her shelves are full and her till is what's short (seen live): selling her stock cannot help; coins can
+      return `Pema's shelves are full and she isn't buying: what she lacks is coins. Sell your mangoes where they pay, or buy from her to fill her till.`;
+    },
     done: (s) => f(s, "deliveredPema") || f(s, "soldElsewhere"),
     reward: "",
   },
@@ -109,7 +114,7 @@ export const STEPS: readonly Step[] = [
   {
     id: "week", title: "Fast-forward a week", target: null,
     detail: (s) => chainLive(s)
-      ? "Press T for a forecast: a week of the city in a minute, run from today's real market. See what your shares could earn."
+      ? "Press T for a forecast: a week of the city in a minute. See what your shares could earn."
       : "Press T. Stalls pay rent every second evening. Watch the city trade and see what your shares earn.",
     done: (s) => f(s, "weekSeen"), reward: "",
   },
@@ -226,7 +231,7 @@ function nightObjective(s: EconomyState, c: Clock): Objective | null {
   if (n.phase === "kept" || n.phase === "closed") {
     if (f(s, "night.heard")) return null;
     return { title: n.phase === "kept" ? "Pema made rent. Go and see her" : "Pema's stall closed. Go and see her", target: "pema", label: "The night Pema almost closed",
-      detail: (n.phase === "kept" ? (n.connected ? "Her rent was charged on NEAR and her till covered it." : "Her till covered the rent.") : (n.connected ? "NEAR charged her rent and her till came up short." : "Her till came up short at 21:00."))
+      detail: (n.phase === "kept" ? "Her till covered the rent." : (n.connected ? "Rent was charged and her till came up short." : "Her till came up short at 21:00."))
         + (n.phase === "kept" && s.merchants.pema.status !== "open" ? " A later rent has closed her since." : "") };
   }
   const short = n.rent - n.till;
@@ -260,7 +265,7 @@ function renderCardInto(card: HTMLElement, c: Objective): void {
   const short = n.rent - n.till;
   const panel = el("div", `stake${short > 0 ? " short" : ""}`);
   const top = el("div", "sh");
-  top.append(el("span", "k", "Live · Pema's rent"), el("span", "when", `${n.connected ? "NEAR charges it" : "Charged"} ${n.when}`));
+  top.append(el("span", "k", "Live · Pema's rent"), el("span", "when", `Charged ${n.when}`));
   const meter = el("div", "meter"), fill = el("i");
   fill.style.width = `${Math.max(2, Math.min(100, (n.till / Math.max(1, n.rent)) * 100))}%`;
   meter.append(fill);
@@ -280,6 +285,10 @@ export function createGuide(hud: Hud, clock: () => Clock): Guide {
   const current: Guide["current"] = (s) => {
     const i = stepIndex(s);
     if (i < STEPS.length) {
+      // connected, the real rent can land before step 7: its result comes first, so the player sees what happened
+      const result = nightObjective(s, clock());
+      const nightAt = STEPS.findIndex((x) => x.id === "night");
+      if (result && result.stake === undefined && i < nightAt) return { ...result, label: "First day", progress: [nightAt + 1, STEPS.length] };
       const st = STEPS[i];
       const target = typeof st.target === "function" ? st.target(s) : st.target;
       return { title: titleOf(st, s), detail: st.detail(s), target, label: "First day", progress: [i + 1, STEPS.length], stake: live(night(s, clock())) };

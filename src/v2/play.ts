@@ -12,7 +12,7 @@ import { adjustRep, advance, chainLive, shopperWant, invest, MAX_PACKS, payRelea
 import { bidFor, quote, lassiPrice, stallPull, ORCHARD_PICK, ORCHARD_HOURS, HAGGLE_FLOOR, DIVIDEND_BPS, type Quote } from "../economy/pricing";
 import { clockOf, dayOf, MERCHANT_IDS, MINUTES_PER_DAY, STARTER_COINS, type EconomyState, type Good, type MerchantId, type Receipt } from "../economy/state";
 import { RESIDENTS } from "../economy/residents";
-import { gossipLine, provenance, type ChronicleEvent, type ChronicleKind } from "../economy/chronicle";
+import { gossipLine, type ChronicleEvent, type ChronicleKind } from "../economy/chronicle";
 import { audio } from "./audio";
 import { createCityMap } from "./map";
 import { MOODS, VOICES, type LineId, type Mood } from "./audio-manifest";
@@ -54,12 +54,12 @@ const refusal = (msg = "", side: "buy" | "sell" = "buy"): string =>
     : /sold out|only \d+ on offer/i.test(msg) ? "They don't have that many left."
     : /not buying/i.test(msg) ? "They're fully stocked and not buying right now."
     : /doesn't sell/i.test(msg) ? "They don't sell that."
-    : /won't go below|won't pay more/i.test(msg) ? `They won't take that price (${msg}).`
-    : /price moved/i.test(msg) ? `The price just moved (${msg.replace(/^.*price moved: ?/i, "")}). Look again and re-offer.`
+    : /won't go below|won't pay more/i.test(msg) ? "They won't take that price."
+    : /price moved/i.test(msg) ? "The price just changed. Look again and re-offer."
     : /slow down|429/i.test(msg) ? "Too many trades at once. Wait a moment."
     : /expired/i.test(msg) ? "The handshake took too long. Try again."
     : /unreachable|offline|could not sign/i.test(msg) ? "Couldn't reach the market. Check your connection and try again."
-    : `The trade didn't go through${msg ? `: ${msg}` : "."}`;
+    : "The trade didn't go through. Nothing changed hands.";
 const MAX_QTY = 10;
 
 const TACTIC_LABEL: Record<"buy" | "sell", Record<Tactic, [string, string]>> = {
@@ -176,7 +176,8 @@ const pemaEpilogue = (s: EconomyState, outcome: NightOutcome, connected: boolean
     ? `Rent's paid${connected ? ", it's on the market ledger" : ""}. ${Math.floor(s.merchants.pema.cash)} c left in the till.`
     : `I made rent that night. But a later rent caught me short, and the shutters are down again.${gap > 0 ? ` ${gap} more ${gap === 1 ? "mango" : "mangoes"} and I reopen.` : ""}`;
   const shut = s.merchants.pema.status === "open"
-    ? `${connected ? "The market charged the rent and" : "At nine,"} my till came up short, and the shutters came down. My shelves were full, so I opened again.`
+    // who reopened her: the player's own mangoes after the closure (same test as the street bubble), else her shelves
+    ? `${connected ? "The market charged the rent and" : "At nine,"} my till came up short, and the shutters came down. ${Number(s.flags["help.pema.sold"] ?? 0) > Number(s.flags["night.soldAtClose"] ?? 0) ? "Then you brought me mangoes, and I opened again." : "My shelves were full, so I opened again."}`
     : `The shutters are down. ${connected ? "The market charged the rent and" : "At nine,"} my till came up short.${gap > 0 ? ` ${gap} more ${gap === 1 ? "mango" : "mangoes"} on my shelves and I open again. I'll pay for every one.` : ""}`;
   const why = helped ? `${playerName(s)}, ${thanks}.` : elsewhere ? `You sold your mangoes to ${elsewhere[0].toUpperCase()}${elsewhere.slice(1)}. Fair is fair: it was your trade to make.` : "You were busy elsewhere. I noticed.";
   return {
@@ -197,6 +198,8 @@ const pemaEpilogue = (s: EconomyState, outcome: NightOutcome, connected: boolean
 };
 
 export async function createPlay(game: Game): Promise<Play> {
+  // the ledger (balances, transactions, decision evidence) is for judges and demos only: ?ledger in the URL
+  const LEDGER = new URLSearchParams(location.search).has("ledger");
   const { state, restored } = loadGame();
   const market = await createMarket(game.look.scene, game.colliders);
   // a character's mouth and talking gesture follow their own voice: on when it starts, off when it ends or is cut
@@ -345,7 +348,7 @@ export async function createPlay(game: Game): Promise<Play> {
       n.board.draw({
         title: id === "arin" ? "Lassi" : `${m.name.split(" ")[id === "pema" ? 1 : 0]}'s mangoes`,
         price: `${aiPrice(id, "ask") ?? priceOf(state, id).price} c`,
-        sub: b ? `We buy mangoes · ${aiPrice(id, "bid") ?? b.price} c${aiPrice(id, "bid") !== null ? " · NEAR AI" : ""}` : id === "arin" ? `${m.stock.lassi} glasses` : `${m.stock.mango} in stock${aiPrice(id, "ask") !== null ? " · NEAR AI price" : ""}`,
+        sub: b ? `We buy mangoes · ${aiPrice(id, "bid") ?? b.price} c` : id === "arin" ? `${m.stock.lassi} glasses` : `${m.stock.mango} in stock`,
         closed: m.status !== "open",
         // the stall's real till against its real rent: green when it can pay, red when it is at risk of closing
         rent: m.status === "open" ? { ok: m.cash >= m.rent, text: m.cash >= m.rent ? `Rent ${m.rent} c · covered` : `Rent ${m.rent} c · till only ${m.cash} c` } : undefined,
@@ -426,7 +429,7 @@ export async function createPlay(game: Game): Promise<Play> {
     state.receipts.push(r);
     inFlight++;
     ledgerEpoch++;
-    nearNote((n) => n.append(document.createTextNode("Saving the trade…")));
+    // in-world: a trade needs no status line while it settles (the panel shows the merchant shaking on it)
     void tx.then((o) => {
       inFlight--;
       ledgerEpoch++;
@@ -434,13 +437,13 @@ export async function createPlay(game: Game): Promise<Play> {
       if (o.status === "onchain" || o.status === "local") confirmed();
       if (o.status === "failed") {
         refused(o.message ?? "");
-        nearNote((n) => n.append(el("i", "", "Not saved · nothing was charged")), true);
+        nearNote((n) => n.append(el("i", "", "The deal fell through · nothing changed hands")), true);
       } else if (o.status === "unknown") {
         refused(null);
-        nearNote((n) => n.append(el("i", "", "Not confirmed yet · your purse was re-checked")), true);
+        nearNote((n) => n.append(el("i", "", "Still settling · your purse was counted again")), true);
       } else if (o.status === "onchain") {
         nearNote((n) => {
-          n.append(el("i", "", "✓ "), document.createTextNode("Saved · see N for the record")); // the transaction link lives on the proof screen
+          n.append(document.createTextNode("Deal done"));
         });
       }
       const id = playerId();
@@ -680,7 +683,12 @@ export async function createPlay(game: Game): Promise<Play> {
     if (mode.done > 0 && moved?.id === id) hud.panel.append(el("div", "tp-text tp-note", moved.text));
     else if (good === "mango") { const c = compareLine(id, tab, unit); if (c) hud.panel.append(c); }
     void refreshDecision(id);
-    { const d = aiDecisions.get(id); if (d) hud.panel.append(decisionCard(d)); }
+    { // only where it applies and while it is true: a bid decision on the Sell tab of its good, an ask on the Buy tab,
+      // and only while that order is still posted today (an old mango-bid card sat on Arin's lassi tab)
+      const d = aiDecisions.get(id);
+      const [side, dGood] = d ? d.lever.split(":") : [];
+      if (d && d.live && dGood === good && (side === "bid" ? tab === "sell" : tab === "buy")) hud.panel.append(decisionCard(d));
+    }
     if (tab === "buy") {
       const why = button(mode.why ? "Hide the reasons" : `Why ${unit} c?`, "tp-why", () => { if (mode.kind === "trade") { mode = { ...mode, why: !mode.why }; renderTrade(); } });
       hud.panel.append(why);
@@ -694,7 +702,6 @@ export async function createPlay(game: Game): Promise<Play> {
         if (asking === id) hud.panel.append(thinking());
         else if (asked?.id === id) {
           hud.panel.append(subtitle(asked.line));
-          if (asked.ai) hud.panel.append(el("div", "tp-text tp-note", "Answered by NEAR AI from the stall's live numbers."));
         }
         const here = (): boolean => mode.kind === "trade" && mode.id === id;
         hud.panel.append(askBox(id, PERSONALITY[id].name.split(" ").pop() ?? id, () => { if (here()) renderTrade(); }, here));
@@ -752,30 +759,8 @@ export async function createPlay(game: Game): Promise<Play> {
     const key = `${id}:${d.day}:${d.txHash}`;
     if (d.source === "ai" && d.txHash && !spokenDecisions.has(key)) { spokenDecisions.add(key); void audio.line(id, d.line); }
   };
-  const decisionCard = (d: AgentDecision): HTMLElement => {
-    const card = el("div", "tp-text tp-note");
-    const who = PERSONALITY[d.merchant as MerchantId]?.name.replace(/^Auntie /, "").split(" ")[0] ?? d.merchant;
-    const [side, good] = d.lever.split(":");
-    const what = side === "ask" ? `${good} price` : `${good} bid`;
-    const move = d.action === "hold" ? `kept the ${what} at ${d.price} c` : `${d.action === "raise" ? "raised" : "lowered"} the ${what} from ${d.basePrice} to ${d.price} c`;
-    card.append(el("b", "", d.source === "ai" ? "NEAR AI decision: " : "Rule price: "), document.createTextNode(d.source === "ai" ? `${who} ${move}.` : `${who} ${move} (NEAR AI did not decide: ${d.fallbackReason ?? "off"}).`));
-    if (d.source === "ai") {
-      card.append(el("div", "", `Why: ${d.justification.join("; ")}.`));
-      card.append(el("div", "", `${d.model ?? "model"}${d.confidence !== null ? ` · confidence ${Math.round(d.confidence * 100)}%` : ""}`));
-      // how far the proof got (server/near/verify.ts), in plain words; "signed" is the strongest this game claims
-      const PROOF: Record<string, string> = {
-        signed: "Signed by NEAR AI: the signature matches this exact decision",
-        pending: "Signature check pending",
-        unverified: "Not verifiable: NEAR AI gave no signature for it",
-        failed: "Signature check failed: treat this decision as unproven",
-      };
-      const proof = PROOF[d.receipt.status];
-      if (proof) card.append(el("span", `tp-proof ${d.receipt.status}`, proof));
-    }
-    if (d.txHash) { const a = el("a", "", "view transaction"); a.href = `${EXPLORER_TX}${d.txHash}`; a.target = "_blank"; a.rel = "noopener"; card.append(a); }
-    else card.append(el("div", "", "No new transaction was needed."));
-    return card;
-  };
+  // the merchant's own sentence about today's price; how it was decided stays off the player's screen (?ledger)
+  const decisionCard = (d: AgentDecision): HTMLElement => el("div", "tp-text tp-note", d.line);
 
   // ---------------------------------------------------------------- speech ----
   // One place voices a character's line, paces its subtitle to the voice and lets the player skip or replay it (click
@@ -908,7 +893,7 @@ export async function createPlay(game: Game): Promise<Play> {
     // what ownership has really paid: NEAR's dividend receipts from this stall (connected), the local ledger offline
     const me = playerId(), paidOut = me ? divPaid.get(id) : Number(state.flags[`div.${id}`] ?? 0);
     if (me) void refreshDivs(me);
-    if (own > 0) fact(me ? "Paid to you · confirmed on NEAR" : "Paid to you", paidOut === undefined ? "checking…" : `${paidOut} c`);
+    if (own > 0) fact("Paid to you", paidOut === undefined ? "checking…" : `${paidOut} c`);
     if (own > 0 && me) fact("Earned, paid next market turn", divOwed.has(id) ? `${divOwed.get(id)} c` : "checking…");
     const f = forecastPerShare(id) * per;
     fact("Forecast per pack", m.status !== "open" ? "0 c while closed" : `about ${f < 1 ? f.toFixed(1) : Math.round(f)} c a day`);
@@ -1022,7 +1007,7 @@ export async function createPlay(game: Game): Promise<Play> {
     if (!preview.ok) { mode = { ...mode, h: null, say: preview.message, tone: "bad", done: RESULT_HOLD }; renderTrade(); return; }
     const unit = dealUnit(h), total = preview.total; // whole coins per unit: exactly what the contract settles
     const name = PERSONALITY[h.merchant].name, npc = mode.npc;
-    mode = { ...mode, h: null, say: `Shaking on it: ${total} c. Recording the deal…`, tone: "", done: AWAITING };
+    mode = { ...mode, h: null, say: `Shaking on it: ${total} c.`, tone: "", done: AWAITING };
     renderTrade();
     record("trade", `${h.mode === "buy" ? "Bought" : "Sold"} ${goodName(h.good, h.qty)} ${h.mode === "buy" ? "from" : "to"} ${name} for ${total} c`,
       haggleDeal(h.merchant, h.mode, h.good, h.qty, unit, aiPrice(h.merchant, h.mode === "buy" ? "ask" : "bid") ?? 0, h.history, state.player.rep[h.merchant]), () => applyDeal(h, npc), refusedAt(h.merchant, h.mode));
@@ -1193,34 +1178,18 @@ export async function createPlay(game: Game): Promise<Play> {
   const openNotebook = (tab: NoteTab): void => openCard((card) => {
     card.append(el("h2", "", "Notebook"));
     const tabs = el("div", "nb-tabs");
-    for (const [t, label] of [["goals", "Goals"], ["bag", "Bag"], ["town", "Town"], ["near", "On NEAR"], ["help", "How to play"]] as const) tabs.append(button(label, t === tab ? "on" : "", () => openNotebook(t)));
+    for (const [t, label] of [["goals", "Goals"], ["bag", "Bag"], ["town", "Town"], ...(LEDGER ? [["near", "Ledger"]] as const : []), ["help", "How to play"]] as const) tabs.append(button(label, t === tab ? "on" : "", () => openNotebook(t)));
     card.append(tabs);
     const sec = el("section");
     if (tab === "town") {
-      // The Town Chronicle: what happened, who acted, and how sure it is; the evidence stays folded until asked for
+      // Town news: what happened in the market, newest first; how each thing was recorded stays in the ledger (?ledger)
       const online = !isOffline() && townEvents.length > 0;
       const list = online ? townEvents : localEvents();
-      sec.append(el("p", "why", online ? "What happened in the market, newest first. Open Evidence for the facts a decision saw and its transaction." : "This session is offline: these are the local simulation's events, not NEAR."));
-      const byId = new Map(list.map((e) => [e.id, e]));
       const ul = el("ul", "chron");
-      for (const e of [...list].reverse().slice(0, 25)) {
-        const li = el("li");
-        li.append(el("b", "", e.text), el("span", `prov${e.decision?.source === "ai" ? " ai" : ""}${e.status === "failed" ? " failed" : ""}`, `${whenOf(e, online)} · ${provenance(e)}`));
-        const facts = [
-          ...(e.decision?.inputs ?? []).map((x) => `Saw: ${x}`),
-          ...e.since.map((id) => byId.get(id)).filter((x): x is ChronicleEvent => !!x).map((x) => `Changed since its last decision: ${x.text}`),
-          ...(e.decision?.decisionId ? [`Decision id ${e.decision.decisionId}${e.decision.verification !== "none" ? ` · signature ${e.decision.verification}` : ""}`] : []),
-        ];
-        if (facts.length || e.txHash) {
-          const d = el("details"); d.append(el("summary", "", "Evidence"));
-          if (facts.length) { const fl = el("ul"); for (const f of facts) fl.append(el("li", "", f)); d.append(fl); }
-          if (e.txHash) { const a = el("a", "", "view transaction"); a.href = `${EXPLORER_TX}${e.txHash}`; a.target = "_blank"; a.rel = "noopener"; d.append(a); }
-          li.append(d);
-        }
-        ul.append(li);
-      }
-      if (!list.length) sec.append(el("p", "", "Nothing recorded yet. Trades, price decisions and rent nights appear here as they happen."));
+      for (const e of [...list].reverse().slice(0, 25)) { const li = el("li"); li.append(el("b", "", e.text), el("span", "prov", whenOf(e, online))); ul.append(li); }
+      if (!list.length) sec.append(el("p", "", "Quiet so far. Trades, price changes and rent nights show up here as they happen."));
       sec.append(ul);
+      if (playerId()) residentsInto(sec);
     } else if (tab === "goals") {
       const i = stepIndex(state);
       sec.append(el("h4", "", "First day"));
@@ -1260,7 +1229,7 @@ export async function createPlay(game: Game): Promise<Play> {
       if (id) { const b = button("Check my account live on NEAR", "", () => { void showProof(); }); b.style.marginTop = "12px"; sec.append(b); }
     } else {
       const t = el("table");
-      for (const [k, v] of [["W A S D", "walk (Shift to run, Space to jump)"], ["Mouse", "look around (click the game first)"], ["F", "talk or trade with the person in front of you"], ["B · J · C · N · H", "bag · goals · town chronicle · NEAR · this help"], ["T", "fast-forward a week (after the first day)"], ["Esc", "close a window, or open the menu"]]) {
+      for (const [k, v] of [["W A S D", "walk (Shift to run, Space to jump)"], ["Mouse", "look around (click the game first)"], ["F", "talk or trade with the person in front of you"], ["B · J · C · H", "bag · goals · town news · this help"], ["T", "fast-forward a week (after the first day)"], ["Esc", "close a window, or open the menu"]]) {
         const row = t.insertRow(); const a = row.insertCell(); a.append(el("kbd", "", k)); const b = row.insertCell(); b.textContent = v;
       }
       sec.append(t);
@@ -1357,7 +1326,10 @@ export async function createPlay(game: Game): Promise<Play> {
       ? "Merchants and residents act in market turns on the city's own schedule, even when nobody is playing."
       : "Merchants and residents act in market turns. A turn runs while someone is playing; the city's own schedule is not switched on yet."));
     hud.card.append(sec);
-    // Lin and Dev answer questions about their own day, from their purse, their plan and their memory on NEAR
+    residentsInto(hud.card);
+  };
+  /** Lin and Dev answer questions about their own day (their purse, their plan, their memory). Connected only. */
+  const residentsInto = (parent: HTMLElement): void => {
     const folk = el("section");
     folk.append(el("h4", "", "Ask the residents"));
     const renderFolk = (): void => {
@@ -1366,12 +1338,11 @@ export async function createPlay(game: Game): Promise<Play> {
         if (asking === r.id || asked?.id === r.id) folk.append(el("div", "tp-who", r.name));
         if (asking === r.id) folk.append(thinking());
         else if (asked?.id === r.id) folk.append(subtitle(asked.line));
-        if (asked?.id === r.id && asked.ai) folk.append(el("div", "tp-note", "Answered by NEAR AI from their own numbers."));
         folk.append(askBox(r.id, `${r.name} the ${r.job}`, () => { if (folk.isConnected) renderFolk(); }, () => folk.isConnected));
       }
     };
     renderFolk();
-    hud.card.append(folk);
+    parent.append(folk);
   };
   /** This session's own moves, each saying plainly whether NEAR has it. */
   const yourMoves = (): void => {
@@ -1467,7 +1438,7 @@ export async function createPlay(game: Game): Promise<Play> {
     const bag = state.player.inventory.mango;
     purse.append(el("p", "", `From ${from.coins} c to ${state.player.coins} c${div > 0 ? `, including ${div} c in dividends from your shares` : ""}.${bag > 0 ? ` ${bag} ${bag === 1 ? "mango" : "mangoes"} in your bag.` : ""}`));
     // the week ran on this device; the wallet is the chain's, which only pays for real market days
-    const real = week && playerId() ? el("p", "why", "A forecast: this week ran on your device from today's real market. Checking your real purse…") : null;
+    const real = week && playerId() ? el("p", "why", "A forecast of the week ahead from today's market. Counting your purse…") : null;
     if (real) purse.append(real);
     card.append(purse);
     // details
@@ -1487,10 +1458,10 @@ export async function createPlay(game: Game): Promise<Play> {
       void settleDay().then(async (r) => {
         if (playerId()) await claimDividends(playerId()!);
         const got = (await chainReceipts(playerId()!).catch(() => [])).filter((x) => x.kind === "dividend").reduce((n, x) => n + Number(x.qty), 0);
-        line.textContent = r.status === "onchain" ? `Dividends are paid sale by sale, and today's books are closed for all four stalls. Paid to you so far: ${got} c. ` : `Dividends: ${String(r.message ?? "not available right now")}`;
+        line.textContent = r.status === "onchain" ? `Paid to you from your shares so far: ${got} c.` : "Dividends will be paid at the next market turn.";
         const id = playerId();
         if (id) await syncPlayer(id);
-        if (real) real.textContent = `A forecast: this week ran on your device from today's real market. Your purse holds ${state.player.coins} c right now; real dividends land there with every sale the stall makes (claimed each market turn).`;
+        if (real) real.textContent = `A forecast of the week ahead from today's market. Your purse holds ${state.player.coins} c right now; real dividends arrive with every sale the stall makes.`;
       });
     }
     footer(card, week ? "Back to the city" : "Next morning", () => closeReport(week, from));
@@ -1562,18 +1533,19 @@ export async function createPlay(game: Game): Promise<Play> {
     const m = state.merchants[id], v = VOICES[id].lines;
     if (m.status !== "open") { // closed by unpaid rent; deliveries reopen it (the contract's rule)
       const need = Number(state.flags[`reopenNeed.${id}`] ?? 0);
-      return { line: "rent_closed", text: `${v.rent_closed} Rent went unpaid.${need > 0 ? ` ${need} more mangoes and I can reopen.` : ""}` };
+      // the recorded opener + a template of game words only (a template with a lookup slot is not an approved line: 403)
+      return { line: "rent_closed", text: `${v.rent_closed} ` + (need > 0 ? `Rent went unpaid. ${need} more ${need === 1 ? "mango" : "mangoes"} and I can reopen.` : "Rent went unpaid.") };
     }
     // connected, rent is the contract's: say "paid" only once NEAR recorded today's charge, else it is a forecast
     const day = playerId() ? marketDay() : null;
-    if (day !== null && Number(state.flags[`lastRent.${id}`] ?? -1) >= day) return { line: "rent_ok", text: `${v.rent_ok} Rent paid on the market ledger today. ${m.cash} c left.` };
+    if (day !== null && Number(state.flags[`lastRent.${id}`] ?? -1) >= day) return { line: "rent_ok", text: `${v.rent_ok} ` + `Rent paid today. ${Math.floor(m.cash)} c left.` };
     // offline the 21:00 charge has already run when the evening is told: say what it did, never "due tonight"
     const paid = day === null && state.log.some((e) => e.kind === "rent" && e.text.startsWith(`${m.name} paid`) && dayOf(e.minute) === dayOf(state.minute));
-    if (paid) return { line: "rent_ok", text: `${v.rent_ok} Rent paid tonight. ${Math.floor(m.cash)} c left.${m.cash < m.rent ? " Next rent will be close." : ""}` };
-    const when = day !== null ? "when the market charges it" : "tonight";
+    if (paid) return { line: "rent_ok", text: `${v.rent_ok} ` + (m.cash < m.rent ? `Rent paid tonight. ${Math.floor(m.cash)} c left. Next rent will be close.` : `Rent paid tonight. ${Math.floor(m.cash)} c left.`) };
+    const when: "when the market charges it" | "tonight" = day !== null ? "when the market charges it" : "tonight";
     return m.cash >= m.rent
-      ? { line: "rent_ok", text: `${v.rent_ok} ${m.cash} c in the till, enough for the ${m.rent} c rent ${when}.` }
-      : { line: "rent_risk", text: `${v.rent_risk} Only ${m.cash} c in the till and rent is ${m.rent} c, due ${when}.` };
+      ? { line: "rent_ok", text: `${v.rent_ok} ` + `${Math.floor(m.cash)} c in the till, enough for the ${m.rent} c rent ${when}.` }
+      : { line: "rent_risk", text: `${v.rent_risk} ` + `Only ${Math.floor(m.cash)} c in the till and rent is ${m.rent} c, due ${when}.` };
   };
   const rentNight = (done: () => void): void => {
     drawBoards();
@@ -1800,7 +1772,7 @@ export async function createPlay(game: Game): Promise<Play> {
     if (mode.kind === "walk" && !ff) {
       if (input.consumePress("KeyB")) openNotebook("bag");
       else if (input.consumePress("KeyJ")) openNotebook("goals");
-      else if (input.consumePress("KeyN")) openNotebook("near");
+      else if (input.consumePress("KeyN") && LEDGER) openNotebook("near");
       else if (input.consumePress("KeyC")) openNotebook("town");
       else if (input.consumePress("KeyH")) openNotebook("help");
       else if (input.consumePress("KeyL") && !playerLabel() && socialAvailable()) void signIn();
@@ -1850,7 +1822,7 @@ export async function createPlay(game: Game): Promise<Play> {
    *  with her, and an unresolved problem said plainly (a till under the next rent). Openers are her recorded takes. */
   const nightLine = (out: NightOutcome): string => {
     const pema = state.merchants.pema, till = Math.floor(pema.cash);
-    if (out !== "kept") return `${VOICES.pema.lines.rent_closed} Rent came up short.`;
+    if (out !== "kept") return `${VOICES.pema.lines.rent_closed} ` + "Rent came up short.";
     const helped = Number(state.flags["help.pema.sold"] ?? 0) > 0 || Number(state.flags["help.pema.paid"] ?? 0) > 0;
     return `Rent paid. ${till} c left!${helped ? ` Thank you, ${playerName(state)}.` : ""}${till < pema.rent ? " Next rent will be close." : ""}`;
   };
@@ -1885,7 +1857,7 @@ export async function createPlay(game: Game): Promise<Play> {
     if (!r.ok) { hud.toast(r.message); return; }
     const m = state.merchants[id];
     const cost = shareCost(id, n);
-    if (mode.kind === "trade") { mode = { ...mode, say: `Buying ${n} ${n === 1 ? "share" : "shares"} for ${cost} c. Recording it…`, tone: "", done: AWAITING }; renderTrade(); }
+    if (mode.kind === "trade") { mode = { ...mode, say: `Buying ${n} ${n === 1 ? "share" : "shares"} for ${cost} c.`, tone: "", done: AWAITING }; renderTrade(); }
     record("invest", `Bought ${n} ${n === 1 ? "share" : "shares"} of ${m.shop} for ${cost} c`, buyPosted(id, `share:${id}`, n, cost), () => applyInvest(id, n), refusedAt(id));
   };
   /** Sells shares back to the stall: its reserve pays exactly the backing. Coins and shares move once NEAR confirms. */
@@ -1893,7 +1865,7 @@ export async function createPlay(game: Game): Promise<Play> {
     if (mode.kind === "trade" && mode.done > 0) return;
     if (n <= 0 || n > sharesToSell(id)) { hud.toast("You don't own that many shares."); return; }
     const m = state.merchants[id], pay = shareRefund(id, n);
-    if (mode.kind === "trade") { mode = { ...mode, say: `Selling ${n} shares back for ${pay} c. Recording it…`, tone: "", done: AWAITING }; renderTrade(); }
+    if (mode.kind === "trade") { mode = { ...mode, say: `Selling ${n} shares back for ${pay} c.`, tone: "", done: AWAITING }; renderTrade(); }
     record("invest", `Sold ${n} shares of ${m.shop} back for ${pay} c`, sellPosted(id, `share:${id}`, n, pay), () => {
       sellShares(state, id, n);
       const bye = VOICES[id].lines.shares_sold;
@@ -1988,7 +1960,7 @@ export async function createPlay(game: Game): Promise<Play> {
       const plan = await agentDecision(r.id); // persisted (Redis) Jev decision, or null
       const chose = (x: ChainReceipt): string => {
         const a = age(x);
-        return plan && plan.source === "ai" && plan.txHash && a !== null && Math.abs((Date.now() - plan.at) / 1000 - a) < 180 ? " NEAR AI chose this." : "";
+        return plan && plan.source === "ai" && plan.txHash && a !== null && Math.abs((Date.now() - plan.at) / 1000 - a) < 180 ? "" : "";
       };
       for (const x of recent) {
         if (first) { past.push(`${r.name}, ${ago(age(x) ?? 0)}: ${tradeText(x)}.${chose(x)}`); continue; }
@@ -2158,7 +2130,7 @@ export async function createPlay(game: Game): Promise<Play> {
       if (!npc) return;
       if (npc.id === "pema" && stepIndex(state) <= 1) { state.flags.nearPema = true; openTalk(npc, PEMA_INTRO); return; }
       const nightOut = state.flags["night.outcome"] as NightOutcome | undefined;
-      if (npc.id === "pema" && nightOut && !state.flags["night.heard"] && (!inTutorial(state) || STEPS[stepIndex(state)].id === "night")) {
+      if (npc.id === "pema" && nightOut && !state.flags["night.heard"] && (!inTutorial(state) || stepIndex(state) <= STEPS.findIndex((x) => x.id === "night"))) { // connected rent can land early
         openTalk(npc, pemaEpilogue(state, nightOut, state.flags["night.mode"] === "chain", reopenGap(state, "pema"))); return;
       }
       if (!TRADERS.includes(npc.id as MerchantId)) { openTalk(npc); return; }

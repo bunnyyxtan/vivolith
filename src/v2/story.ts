@@ -104,5 +104,5 @@ export function night(s: EconomyState, c: Clock): Night {
 export function stakeLine(n: Night): string {
   if (n.phase !== "waiting" && n.phase !== "charging") return "";
   const short = n.rent - n.till;
-  return `Pema's till ${n.till} c · rent ${n.rent} c${short > 0 ? ` (${short} c short)` : ""} · ${n.connected ? "NEAR charges it" : "charged"} ${n.when}`;
+  return `Pema's till ${n.till} c · rent ${n.rent} c${short > 0 ? ` (${short} c short)` : ""} · charged ${n.when}`;
 }

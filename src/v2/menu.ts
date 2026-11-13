@@ -205,11 +205,11 @@ export function createMenu(game: Game, play: Play): { open(): void } {
         <tr><td><kbd>WASD</kbd>move</td><td><kbd>Shift</kbd>run</td></tr>
         <tr><td><kbd>F</kbd>talk or trade</td><td><kbd>B</kbd>your bag</td></tr>
         <tr><td><kbd>J</kbd>goals</td><td><kbd>H</kbd>help</td></tr>
-        <tr><td><kbd>N</kbd>your NEAR account</td><td><kbd>Esc</kbd>this menu</td></tr>
+        <tr><td><kbd>C</kbd>town news</td><td><kbd>Esc</kbd>this menu</td></tr>
       </table>
-      <p>Look at a chalkboard to see why a price is what it is. Every deal and share is recorded on NEAR testnet, with no wallet popups.</p></div>`;
+      <p>Look at a chalkboard to see why a price is what it is.</p></div>`;
     if (sheet === "signout") return `<div class="sheet">
-      <p><b>Sign out of ${esc(play.account().label ?? "")}?</b> Your coins, goods and shares stay in that NEAR account; sign in again on any device to get them back. This browser goes back to its guest game.</p>
+      <p><b>Sign out of ${esc(play.account().label ?? "")}?</b> Your coins, goods and shares stay with that account; sign in again on any device to get them back. This browser goes back to its guest game.</p>
       <p class="confirm"><button data-act="signout"><kbd>Y</kbd>Sign out</button><button data-act="keep"><kbd>Esc</kbd>Stay signed in</button></p></div>`;
     if (sheet === "new") return `<div class="sheet">
       <p><b>Start the story over?</b> The city resets to Day 1. You stay ${play.account().label ? `signed in as ${esc(play.account().label ?? "")}` : "on this browser's account"}, and the coins, goods and shares you hold on NEAR stay in it.</p>

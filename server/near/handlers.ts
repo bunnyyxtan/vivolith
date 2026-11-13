@@ -1003,7 +1003,7 @@ async function tick(cfg: Config, env: RelayEnv, trusted = false, scope: "market"
       rentEvents.push({ id: eventId(at, "rent"), at, day, kind: "rent", actors: [id], player: null, text: `${name} paid ${m.rent} c rent.`, changes: [{ who: id, good: "coin", delta: -m.rent }], status: "pending", txHash: null, decision: null, since: [] });
       m.cash -= m.rent; log.push(`${id} paid ${m.rent} c rent`);
     } else {
-      rentEvents.push({ id: eventId(at, "closed"), at, day, kind: "closed", actors: [id], player: null, text: `${name} could not pay ${m.rent} c rent with ${Math.floor(m.cash)} c in the till and closed; it reopens after ${Math.max(1, need)} mangoes are delivered.`, changes: [], status: "pending", txHash: null, decision: null, since: [] });
+      rentEvents.push({ id: eventId(at, "closed"), at, day, kind: "closed", actors: [id], player: null, text: `${name} could not pay ${m.rent} c rent with ${Math.floor(m.cash)} c in the till and closed; it reopens after ${Math.max(1, need)} ${Math.max(1, need) === 1 ? "mango is" : "mangoes are"} delivered.`, changes: [], status: "pending", txHash: null, decision: null, since: [] });
       m.status = "closed"; st.flags[`reopenNeed.${id}`] = Math.max(1, need); log.push(`${id} could not pay ${m.rent} c rent and closed (reopens after ${Math.max(1, need)} mangoes)`);
     }
   }
