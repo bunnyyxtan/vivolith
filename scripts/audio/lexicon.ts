@@ -32,6 +32,6 @@ export function lexicon(): string[] {
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
   const next = JSON.stringify(lexicon()) + "\n";
   const now = fs.existsSync(OUT) ? fs.readFileSync(OUT, "utf8") : "";
-  if (process.argv.includes("--check")) { if (now !== next) { console.error(`${OUT} is stale: node scripts/audio/lexicon.ts`); process.exit(1); } }
+  if (process.argv.includes("--check")) { if (now.trim() !== next.trim()) { console.error(`${OUT} is stale: node scripts/audio/lexicon.ts`); process.exit(1); } }
   else { fs.writeFileSync(OUT, next); console.log(`${OUT}: ${JSON.parse(next).length} words`); }
 }
