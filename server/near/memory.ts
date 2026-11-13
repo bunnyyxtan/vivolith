@@ -3,7 +3,16 @@
 // nothing is written from model output or player claims, so the memory can only repeat what the chain recorded.
 // Stored as one capped JSON list per agent in the same Redis store as the decision guard (bounded: MAX_DAYS rows,
 // expiring after MEMORY_TTL). Only the market turn writes it, under the global tick lock, so read-modify-write is safe.
-import type { DecisionStore } from "./agent.ts";
+/** The shared key-value store (Upstash Redis REST in production, memory in checks): decisions, memory, budgets. */
+export interface DecisionStore {
+  get(key: string): Promise<string | null>;
+  /** SET key value NX EX ttl: true only for the one caller that created it. */
+  setNx(key: string, value: string, ttlSec: number): Promise<boolean>;
+  set(key: string, value: string, ttlSec: number): Promise<void>;
+  del(key: string): Promise<void>;
+  /** INCR key, setting its expiry; returns the new count (budgets, ops.ts). */
+  incr(key: string, ttlSec: number): Promise<number>;
+}
 
 /** Rows kept per agent: enough for a week of market days (10 real minutes each) and a compact model prompt. */
 export const MAX_DAYS = 12;

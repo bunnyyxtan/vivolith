@@ -4,20 +4,45 @@
     {
       "name": "near-world",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--", "--port", "5173", "--strictPort"],
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5173",
+        "--strictPort"
+      ],
       "port": 5173
     },
     {
       "name": "near-world-offline",
       "runtimeExecutable": "powershell",
-      "runtimeArgs": ["-NoProfile", "-Command", "$env:NEAR_ACCOUNT_ID=' '; $env:NEAR_RELAYER_KEY=' '; $env:ELEVENLABS_API_KEY='off'; $env:NEAR_AI_KEY='off'; npm.cmd run dev -- --port 5174 --strictPort"],
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:NEAR_ACCOUNT_ID=' '; $env:NEAR_RELAYER_KEY=' '; $env:ELEVENLABS_API_KEY='off'; $env:NEAR_AI_KEY='off'; npm.cmd run dev -- --port 5174 --strictPort"
+      ],
       "port": 5174
     },
     {
       "name": "near-world-live-noai",
       "runtimeExecutable": "powershell",
-      "runtimeArgs": ["-NoProfile", "-Command", "$env:ELEVENLABS_API_KEY=' '; $env:NEAR_AI_KEY=' '; $env:NEAR_AGENT_MERCHANTS=' '; npm.cmd run dev -- --port 5176 --strictPort"],
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:ELEVENLABS_API_KEY=' '; $env:NEAR_AI_KEY=' '; $env:NEAR_AGENT_MERCHANTS=' '; npm.cmd run dev -- --port 5176 --strictPort"
+      ],
       "port": 5176
+    },
+    {
+      "name": "near-world-voice-mock",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:NEAR_ACCOUNT_ID=' '; $env:NEAR_RELAYER_KEY=' '; $env:ELEVENLABS_API_KEY='off'; $env:NEAR_AI_KEY='off'; $env:VIVOLITH_VOICE_MOCK='1'; npm.cmd run dev -- --port 5175 --strictPort"
+      ],
+      "port": 5175
     }
   ]
 }

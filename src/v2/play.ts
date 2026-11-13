@@ -15,7 +15,8 @@ import { RESIDENTS } from "../economy/residents";
 import { gossipLine, provenance, type ChronicleEvent, type ChronicleKind } from "../economy/chronicle";
 import { audio } from "./audio";
 import { createCityMap } from "./map";
-import { VOICES, type LineId } from "./audio-manifest";
+import { MOODS, VOICES, type LineId, type Mood } from "./audio-manifest";
+import { factsFor, goodsOf, moodOf as voiceMood, scriptFor, sentencesOf } from "../../server/near/talk";
 import { createOrchardBasket, type OrchardBasket } from "./orchard";
 import { startNight, updateNight, type Clock, type NightOutcome } from "./story";
 
@@ -182,10 +183,11 @@ const pemaEpilogue = (s: EconomyState, outcome: NightOutcome, connected: boolean
     npcId: "pema", name: "Auntie Pema", role: "Fruit seller", accent: "#f39a2c",
     entry: () => "result",
     nodes: {
-      result: { speaker: "Auntie Pema", text: () => (outcome === "kept" ? kept : shut), next: "why" },
+      result: { speaker: "Auntie Pema", text: () => (outcome === "kept" ? kept : shut), mood: () => (outcome === "kept" && s.merchants.pema.status === "open" ? "relieved" : "down"), next: "why" },
       why: {
         speaker: "Auntie Pema",
         text: () => (outcome === "kept" ? `${why} ${helped ? "I won't forget it." : "Street trade carried me this time. Next rent comes in two market days."}` : `${why} ${helped ? "It wasn't enough this time, but it was something." : ""}`.trim()),
+        mood: () => (helped ? "grateful" : outcome === "kept" ? "neutral" : "down"),
         choices: [
           { label: s.merchants.pema.status === "open" ? "Let's keep it that way." : "I'll help you reopen.", next: null, effect: (ctx) => { ctx.econ.flags["night.heard"] = true; if (helped) adjustRep(ctx.econ, "pema", 4); } },
         ],
@@ -197,6 +199,8 @@ const pemaEpilogue = (s: EconomyState, outcome: NightOutcome, connected: boolean
 export async function createPlay(game: Game): Promise<Play> {
   const { state, restored } = loadGame();
   const market = await createMarket(game.look.scene, game.colliders);
+  // a character's mouth and talking gesture follow their own voice: on when it starts, off when it ends or is cut
+  audio.onVoice((speaker, on) => { const n = market.npcs.find((x) => x.id === speaker); if (n) n.talking = on; });
   const hud = createHud();
   /** The market clock Pema's night is measured on: NEAR's market days when connected, the game clock offline. */
   const storyClock = (): Clock => ({ day: playerId() ? marketDay() : null, dayMs: marketDayMs(), now: Date.now() });
@@ -686,11 +690,13 @@ export async function createPlay(game: Game): Promise<Play> {
         hud.panel.append(ul);
         // The merchant answers the player's own question in their own words, from facts read on NEAR, their decisions
         // and their memory (NEAR AI phrases it when available, else a scripted line from the same facts).
-        if (asked?.id === id) {
-          hud.panel.append(el("div", "tp-say", `“${asked.line}”`));
+        if (asking === id) hud.panel.append(thinking());
+        else if (asked?.id === id) {
+          hud.panel.append(subtitle(asked.line));
           if (asked.ai) hud.panel.append(el("div", "tp-text tp-note", "Answered by NEAR AI from the stall's live numbers."));
         }
-        if (playerId()) hud.panel.append(askBox(id, PERSONALITY[id].name.split(" ").pop() ?? id, () => { if (mode.kind === "trade" && mode.id === id) renderTrade(); }));
+        const here = (): boolean => mode.kind === "trade" && mode.id === id;
+        hud.panel.append(askBox(id, PERSONALITY[id].name.split(" ").pop() ?? id, () => { if (here()) renderTrade(); }, here));
       }
     }
     const total = unit * mode.qty;
@@ -770,29 +776,81 @@ export async function createPlay(game: Game): Promise<Play> {
     return card;
   };
 
-  // Asking anyone in the market a question of your own: merchants (in the trade panel) and residents Lin and Dev (in the
-  // money trail). The draft survives a panel re-render; the answer is spoken once in the speaker's voice.
-  let asked: { id: string; line: string; ai: boolean } | null = null, asking = false, askDraft = "";
-  const askBox = (id: string, name: string, rerender: () => void): HTMLElement => {
+  // ---------------------------------------------------------------- speech ----
+  // One place voices a character's line, paces its subtitle to the voice and lets the player skip or replay it (click
+  // the line). The subtitle and the voice are the same text: nothing is spoken that is not shown.
+  let live: { speaker: string; line: string; sentences: readonly string[]; mood: Mood; words: number; total: number } | null = null;
+  const wordsOf = (t: string): string[] => t.split(/\s+/).filter(Boolean);
+  const spokenSoFar = (line: string): number => (live && live.line === line ? live.words : Number.MAX_SAFE_INTEGER);
+  const paint = (): void => {
+    for (const box of document.querySelectorAll<HTMLElement>(".tp-say.live")) {
+      const n = spokenSoFar(box.dataset.line ?? "");
+      box.querySelectorAll("span").forEach((w, i) => w.classList.toggle("on", i < n));
+    }
+  };
+  const voice = (speaker: string, sentences: readonly string[], mood: Mood = "neutral"): void => {
+    const line = sentences.join(" ");
+    const me = { speaker, line, sentences, mood, words: 0, total: wordsOf(line).length };
+    live = me;
+    paint();
+    void audio.reply(speaker, sentences, { mood, onWords: (n) => { if (live === me) { me.words = Math.min(n, me.total); paint(); } } });
+  };
+  /** The spoken line as a subtitle: words light up as they are said (dimmed ahead, never hidden: reading ahead is fine). */
+  const subtitle = (line: string): HTMLDivElement => {
+    const box = el("div", "tp-say live");
+    box.dataset.line = line;
+    const n = spokenSoFar(line);
+    wordsOf(line).forEach((w, i) => box.append(el("span", i < n ? "on" : "", `${w} `)));
+    box.addEventListener("click", () => {
+      if (!live || live.line !== line) return;
+      if (live.words < live.total) { audio.stop(); live = { ...live, words: live.total }; paint(); } // skip
+      else voice(live.speaker, live.sentences, live.mood); // hear it again (cached: no new request)
+    });
+    return box;
+  };
+  const toMood = (m: string): Mood => ((MOODS as readonly string[]).includes(m) ? (m as Mood) : "neutral");
+
+  // Asking anyone in the market a question of your own: merchants (in conversation and the trade panel) and residents
+  // Lin and Dev (in the money trail). Connected, the relayer answers from NEAR facts (NEAR AI phrases it, checked
+  // against the facts, else a scripted line); offline, or when it cannot answer, the same scripted rules run on this
+  // game's own market. The validated sentences are exactly what is voiced. The draft survives a panel re-render.
+  let asked: { id: string; line: string; ai: boolean; sentences: readonly string[]; mood: Mood } | null = null, asking: string | null = null, askDraft = "";
+  const localAnswer = (id: string, question: string): { line: string; sentences: string[]; mood: Mood } => {
+    if ((MERCHANT_IDS as readonly string[]).includes(id)) {
+      const f = factsFor(state, id as MerchantId, [], []);
+      const line = scriptFor(question, f.script, f.topics);
+      return { line, sentences: sentencesOf(line), mood: voiceMood(state, id as MerchantId) };
+    }
+    const r = RESIDENTS.find((x) => x.id === id);
+    const line = r ? `I gather ${goodsOf(r.good, r.perDay)} a day from ${r.reason}, and I sell to whoever pays best.` : "Not now, I'm busy.";
+    return { line, sentences: sentencesOf(line), mood: "neutral" };
+  };
+  const askBox = (id: string, name: string, rerender: () => void, still: () => boolean): HTMLElement => {
     const box = el("div", "tp-ask");
     const field = document.createElement("input");
     field.type = "text"; field.maxLength = 200; field.value = askDraft; field.placeholder = `Ask ${name} anything…`;
     field.setAttribute("aria-label", `Ask ${name} a question`);
     field.addEventListener("input", () => { askDraft = field.value; });
-    const go = button(asking ? "…" : "Ask", "", () => { void askWhy(id, field.value, rerender); });
-    go.disabled = asking;
+    const go = button(asking ? "…" : "Ask", "", () => { void askWhy(id, field.value, rerender, still); });
+    go.disabled = asking !== null;
     field.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); go.click(); } });
     box.append(field, go);
     return box;
   };
-  const askWhy = async (id: string, question: string, rerender: () => void): Promise<void> => {
+  /** While the answer is on its way: the speaker is thinking (a quiet ellipsis where their line will be). */
+  const thinking = (): HTMLDivElement => el("div", "tp-say thinking", "…");
+  const askWhy = async (id: string, question: string, rerender: () => void, still: () => boolean): Promise<void> => {
     if (asking) return;
-    asking = true; rerender();
-    const r = await askMerchant(id, question.trim());
-    asking = false; askDraft = "";
-    asked = r ? { id, line: r.line, ai: r.ai } : { id, line: "Not now, I'm busy.", ai: false };
+    const q = question.trim();
+    asking = id; asked = null;
+    audio.stop(); live = null;
     rerender();
-    void audio.line(id, asked.line);
+    const r = isOffline() ? null : await askMerchant(id, q);
+    if (asking !== id || !still()) return; // closed, or someone else addressed, while it was coming: say nothing
+    asking = null; askDraft = "";
+    asked = r ? { id, line: r.line, ai: r.ai, sentences: r.sentences, mood: toMood(r.mood) } : { id, ai: false, ...localAnswer(id, q) };
+    rerender();
+    voice(id, asked.sentences, asked.mood);
   };
 
   /** Closed stall: how far its shelves are from reopening (stock is the only thing that reopens it). */
@@ -1043,12 +1101,21 @@ export async function createPlay(game: Game): Promise<Play> {
     hud.panel.innerHTML = "";
     hud.panel.append(head(node.speaker, convo.role, convo.accent || "#5f7280"));
     const said = node.text(state);
-    hud.panel.append(el("div", "tp-say", said));
-    if (said !== lastTalk) { lastTalk = said; void audio.line(mode.npc.id, said); } // each new line once, never on re-render
+    const who = mode.npc.id;
+    const trader = (MERCHANT_IDS as readonly string[]).includes(who);
+    // the player's own question replaces the scripted line while its answer is pending or showing
+    if (asking === who) hud.panel.append(thinking());
+    else hud.panel.append(subtitle(asked?.id === who ? asked.line : said));
+    if (said !== lastTalk) { lastTalk = said; voice(who, [said], node.mood?.(state) ?? (trader ? voiceMood(state, who as MerchantId) : "neutral")); } // each new line once, never on re-render
+    if (trader) {
+      const here = (): boolean => mode.kind === "talk" && mode.npc.id === who;
+      hud.panel.append(askBox(who, PERSONALITY[who as MerchantId].name.split(" ").pop() ?? who, () => { if (here()) renderTalk(); }, here));
+    }
     const acts = el("div", "tp-acts");
     const go = (next: string | null): void => {
       if (mode.kind !== "talk") return;
       if (next === null) { endPanel(); return; }
+      asked = null;
       mode = { ...mode, node: next };
       convo.nodes[next].onEnter?.(ctx);
       drawBoards();
@@ -1065,7 +1132,7 @@ export async function createPlay(game: Game): Promise<Play> {
     const dx = npc.root.position.x - player.root.position.x, dz = npc.root.position.z - player.root.position.z;
     player.heading = Math.atan2(dx, dz);
     player.frozen = true;
-    npc.talking = true;
+    npc.talking = false; // listening: the mouth moves only while their voice plays (audio.onVoice)
   };
   const openTalk = (npc: Npc, convo?: Conversation): void => {
     const c = convo ?? CONVERSATIONS[npc.id];
@@ -1075,7 +1142,10 @@ export async function createPlay(game: Game): Promise<Play> {
     renderTalk();
     showPanel("talk");
   };
+  /** Conversation over (closed, or another character addressed): no stale voice, no pending answer. */
+  const hush = (): void => { audio.stop(); live = null; asking = null; asked = null; lastTalk = ""; };
   const endPanel = (): void => {
+    hush();
     if (mode.kind === "trade" || mode.kind === "talk") mode.npc.talking = false;
     mode = { kind: "walk" };
     player.frozen = false;
@@ -1087,7 +1157,7 @@ export async function createPlay(game: Game): Promise<Play> {
 
   // ---------------------------------------------------------------- overlays: notebook and reports ----
   const openCard = (build: (card: HTMLDivElement) => void): void => {
-    if (mode.kind === "trade" || mode.kind === "talk") { mode.npc.talking = false; hidePanel(); }
+    if (mode.kind === "trade" || mode.kind === "talk") { hush(); mode.npc.talking = false; hidePanel(); }
     mode = { kind: "card" };
     player.frozen = true;
     hud.card.innerHTML = "";
@@ -1287,11 +1357,13 @@ export async function createPlay(game: Game): Promise<Play> {
     const folk = el("section");
     folk.append(el("h4", "", "Ask the residents"));
     const renderFolk = (): void => {
-      folk.querySelectorAll(".tp-say, .tp-ask, .tp-note").forEach((n) => n.remove());
+      folk.querySelectorAll(".tp-say, .tp-ask, .tp-note, .tp-who").forEach((n) => n.remove());
       for (const r of RESIDENTS) {
-        if (asked?.id === r.id) folk.append(el("div", "tp-say", `${r.name}: “${asked.line}”`));
+        if (asking === r.id || asked?.id === r.id) folk.append(el("div", "tp-who", r.name));
+        if (asking === r.id) folk.append(thinking());
+        else if (asked?.id === r.id) folk.append(subtitle(asked.line));
         if (asked?.id === r.id && asked.ai) folk.append(el("div", "tp-note", "Answered by NEAR AI from their own numbers."));
-        folk.append(askBox(r.id, `${r.name} the ${r.job}`, () => { if (folk.isConnected) renderFolk(); }));
+        folk.append(askBox(r.id, `${r.name} the ${r.job}`, () => { if (folk.isConnected) renderFolk(); }, () => folk.isConnected));
       }
     };
     renderFolk();
@@ -1488,6 +1560,9 @@ export async function createPlay(game: Game): Promise<Play> {
     // connected, rent is the contract's: say "paid" only once NEAR recorded today's charge, else it is a forecast
     const day = playerId() ? marketDay() : null;
     if (day !== null && Number(state.flags[`lastRent.${id}`] ?? -1) >= day) return { line: "rent_ok", text: `${v.rent_ok} Rent paid on the market ledger today. ${m.cash} c left.` };
+    // offline the 21:00 charge has already run when the evening is told: say what it did, never "due tonight"
+    const paid = day === null && state.log.some((e) => e.kind === "rent" && e.text.startsWith(`${m.name} paid`) && dayOf(e.minute) === dayOf(state.minute));
+    if (paid) return { line: "rent_ok", text: `${v.rent_ok} Rent paid tonight. ${Math.floor(m.cash)} c left.${m.cash < m.rent ? " Next rent will be close." : ""}` };
     const when = day !== null ? "when the market charges it" : "tonight";
     return m.cash >= m.rent
       ? { line: "rent_ok", text: `${v.rent_ok} ${m.cash} c in the till, enough for the ${m.rent} c rent ${when}.` }
@@ -1498,7 +1573,8 @@ export async function createPlay(game: Game): Promise<Play> {
     rentHold = RENT_HOLD_SEC; rentDone = done;
     player.frozen = true;
     const lines = TRADERS.map((id) => ({ id, ...rentLine(id) }));
-    for (const l of lines) market.say(l.id, l.text, RENT_HOLD_SEC);
+    const MOOD: Record<string, Mood> = { rent_closed: "down", rent_risk: "worried", rent_ok: "neutral" };
+    for (const l of lines) market.say(l.id, l.text, RENT_HOLD_SEC, l.text.includes("Rent paid") ? "relieved" : MOOD[l.line] ?? "neutral");
     // every merchant speaks their bubble in turn (market.say queues them), after the bell
     void audio.sfx("rent_bell");
   };
@@ -1764,6 +1840,14 @@ export async function createPlay(game: Game): Promise<Play> {
 
   // ---------------------------------------------------------------- the night Pema almost closed ----
   let nightIn = 0;
+  /** Pema's words the moment the rent result is known: the real till, the player named only for a confirmed trade
+   *  with her, and an unresolved problem said plainly (a till under the next rent). Openers are her recorded takes. */
+  const nightLine = (out: NightOutcome): string => {
+    const pema = state.merchants.pema, till = Math.floor(pema.cash);
+    if (out !== "kept") return `${VOICES.pema.lines.rent_closed} Rent came up short.`;
+    const helped = Number(state.flags["help.pema.sold"] ?? 0) > 0 || Number(state.flags["help.pema.paid"] ?? 0) > 0;
+    return `Rent paid. ${till} c left!${helped ? ` Thank you, ${playerName(state)}.` : ""}${till < pema.rent ? " Next rent will be close." : ""}`;
+  };
   /** Starts the arc once Pema has told her story and the connection is known, then reports its result the moment the
    *  chain (or the offline market) has one: a reaction at her stall, never earlier. */
   const storyBeat = (): void => {
@@ -1772,13 +1856,18 @@ export async function createPlay(game: Game): Promise<Play> {
     const wasRecovered = state.flags["night.recovered"] === true;
     const out = updateNight(state, storyClock());
     if (out) {
-      const pema = state.merchants.pema;
-      market.say("pema", out === "kept" ? `Rent paid. ${Math.floor(pema.cash)} c left!` : "The shutters... rent came up short.", 5);
+      market.say("pema", nightLine(out), 5, out === "kept" ? "relieved" : "down");
+      if (out === "closed") state.flags["night.soldAtClose"] = Number(state.flags["help.pema.sold"] ?? 0);
       hud.toast(out === "kept" ? "Pema made rent. Her stall stays open." : "Pema couldn't make rent. Her stall closed.", out === "kept");
       void audio.sfx(out === "kept" ? "step_done" : "closed");
       townHour(lastHour); drawBoards(); afterProgress(); save();
     }
-    if (!wasRecovered && state.flags["night.recovered"] === true) { market.say("pema", "Open again! Thank you, all of you.", 5); townHour(lastHour); save(); }
+    if (!wasRecovered && state.flags["night.recovered"] === true) {
+      // "thanks to you" only when this player's own confirmed mangoes came after the closure (the recorded take)
+      const mine = Number(state.flags["help.pema.sold"] ?? 0) > Number(state.flags["night.soldAtClose"] ?? 0);
+      market.say("pema", mine ? VOICES.pema.lines.reopen : "Open again! Thank you, all of you.", 5, "grateful");
+      townHour(lastHour); save();
+    }
   };
 
   // ---------------------------------------------------------------- invest ----

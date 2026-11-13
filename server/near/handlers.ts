@@ -13,7 +13,7 @@ import { Account, JsonRpcProvider, KeyPairSigner, PublicKey, SCHEMA, actions, ne
 import { MERCHANTS, keyPairFromSeed, merchantKey, residentKey, type MerchantId } from "./keys.ts";
 import { RESIDENTS, executableOffers, planResident, type Offer } from "../../src/economy/residents.ts";
 import { synthesize } from "./voice.ts";
-import { MAX_QUESTION, answer, factsFor, playerFacts, residentFacts, type Exchange, type Ledger, type Receipt } from "./talk.ts";
+import { MAX_QUESTION, answer, factsFor, moodOf, playerFacts, residentFacts, type Exchange, type Ledger, type Receipt } from "./talk.ts";
 import { readMemory } from "./memory.ts";
 import { LEVERS, agentConfig, applyLivePrices, attachTx, claimBidSend, decideBid, decideResident, decisionFor, livePrices, priceMoved, recentDecisions, releaseBidSend, type AgentConfig, type Decision, type DecisionStore } from "./agent.ts";
 import { agentsHalted, fromScheduler, opsConfig, spend, usage } from "./ops.ts";
@@ -74,6 +74,7 @@ const LIMITS = {
   save: { max: 20, windowSec: 60 }, // per account: cloud save reads and writes
   talk: { max: 10, windowSec: 60 }, // per IP: "Ask why" (each may be one NEAR AI call)
   voice: { max: 30, windowSec: 60 }, // per IP: spoken lines without a recorded file (cached; daily budget in voice.ts)
+  voiceDay: { max: 1500, windowSec: 24 * 3600 }, // global: voice requests a day across instances (counted before the cache)
   pick: { max: 6, windowSec: 3600 }, // per IP: orchard picks (each account also once per market day)
 } as const;
 
@@ -1200,6 +1201,7 @@ async function talk(cfg: Config, req: Request, env: RelayEnv): Promise<Response>
   // the speaker's recent confirmed market events from the Chronicle (reopening, rent, trades), as facts it may mention
   const town = (await readChronicle(store).catch(() => [])).filter((e) => e.actors.includes(id) && (e.status === "confirmed" || e.status === "recorded")).slice(-3).map((e) => `Recently in the market: ${e.text}`);
   let built: { facts: string[]; script: string; topics: Record<string, string>; ledger: Ledger };
+  let mood: string = "neutral";
   if (resident) {
     const held = Object.fromEntries((await view<[string, string][]>(provider, cfg.contractId, "get_balances", { account_id: npcAccount }).catch(() => [])).map(([t, v]) => [t, Number(v)]));
     const st = await chainEconomy(provider, cfg);
@@ -1207,7 +1209,9 @@ async function talk(cfg: Config, req: Request, env: RelayEnv): Promise<Response>
     built = residentFacts(resident, held, executableOffers(offers as unknown as Offer[], st.merchants), names, { decision, memory });
     built.facts.push(...town);
   } else {
-    built = factsFor(await chainEconomy(provider, cfg), id as MerchantId, offers, receipts, { decision, memory, player: player ? [...playerFacts(playerReceipts, npcAccount), ...recalled] : [] });
+    const st = await chainEconomy(provider, cfg);
+    mood = moodOf(st, id as MerchantId);
+    built = factsFor(st, id as MerchantId, offers, receipts, { decision, memory, player: player ? [...playerFacts(playerReceipts, npcAccount), ...recalled] : [] });
     built.facts.push(...town);
     const reopened = town.find((f) => /reopened|open again/.test(f));
     if (reopened && !built.topics.past) built.topics.past = reopened.replace(/^Recently in the market: /, "Recently, ").replace(/Pema's stall/, "my stall");
@@ -1219,7 +1223,7 @@ async function talk(cfg: Config, req: Request, env: RelayEnv): Promise<Response>
   const allowed = async (): Promise<boolean> => !(await agentsHalted(ops, store)) && (await spend(ops, store, "chat"));
   const r = await answer({ ai, id, facts: built.facts, script: built.script, topics: built.topics, ledger: built.ledger, question, history: Array.isArray(history) ? history : [], allowed });
   if (question) await store.set(histKey, JSON.stringify([...(Array.isArray(history) ? history : []), { q: question, a: r.line }].slice(-3)), 3600).catch(() => undefined);
-  return json(200, { ...r, conv });
+  return json(200, { ...r, conv, mood });
 }
 
 /** Pays a player the whole coins of dividends they are owed (the contract can only ever pay what is owed). Players'
@@ -1280,8 +1284,13 @@ export async function handle(route: string, req: Request, env: RelayEnv): Promis
       const origin = req.headers.get("origin");
       if (origin && new URL(origin).host !== new URL(req.url).host) return json(403, { status: "error", message: "cross-origin requests not allowed" });
       if (!(await hit(cfg, `voice:${clientIp(req)}`, LIMITS.voice.max, LIMITS.voice.windowSec))) return json(429, { status: "error", message: "slow down" });
+      const e = env as Record<string, string | undefined>;
+      // placeholder voice for local play without credits; refused on a production deployment
+      const mock = e.VIVOLITH_VOICE_MOCK?.trim() === "1" && e.VERCEL_ENV !== "production";
+      // every instance together: at most this many voice requests a day (cached answers count too: a conservative cap)
+      if (!mock && !(await hit(cfg, "voice:day", LIMITS.voiceDay.max, LIMITS.voiceDay.windowSec))) return json(429, { status: "budget", message: "voice budget used for today" });
       const b = await readJson(req);
-      const r = await synthesize(String(b.speaker ?? ""), String(b.text ?? ""), (env as Record<string, string | undefined>).ELEVENLABS_API_KEY?.trim());
+      const r = await synthesize(String(b.speaker ?? ""), String(b.text ?? ""), e.ELEVENLABS_API_KEY?.trim(), { mood: typeof b.mood === "string" ? b.mood : undefined, mock });
       return json(r.status, r.body);
     }
     if (!configured(cfg)) return json(503, { status: "unconfigured", message: "NEAR relayer not configured (see docs/DEPLOY.md)" });

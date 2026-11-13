@@ -10,7 +10,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
-import { AMBIENCE, CAST_BUMP, SPEAKERS, FOLK_VOICES, MUSIC, MUSIC_STYLE, SFX, SFX_STYLE, VOICES, type LineId } from "../../src/v2/audio-manifest.ts";
+import { AMBIENCE, CAST_BUMP, SPEAKERS, STATIC_LINES, staticUrl, FOLK_VOICES, MUSIC, MUSIC_STYLE, SFX, SFX_STYLE, VOICES, type LineId } from "../../src/v2/audio-manifest.ts";
 
 const OUT = path.resolve("public");
 const TTS_MODEL = "eleven_v4", SFX_MODEL = "eleven_text_to_sound_v3", MUSIC_MODEL = "music_v2_5";
@@ -36,6 +36,13 @@ for (const [id, lines] of Object.entries(CAST_BUMP)) lines.forEach((text, k) => 
   kind: "voice", file: `audio/voice/${id}/bump_${k}.mp3`, detail: `${id}: "${text}"`, chars: text.length,
   make: (c) => c.textToSpeech.convert(SPEAKERS[id].voiceId, { text: `${SPEAKERS[id].tag} ${text}`, modelId: TTS_MODEL, outputFormat: "mp3_44100_128" }),
 }));
+for (const [id, lines] of Object.entries(STATIC_LINES)) for (const text of lines) {
+  const file = staticUrl(id, text).replace(/^\//, "");
+  jobs.push({
+    kind: "voice", file, detail: `${id}: "${text}"`, chars: text.length,
+    make: (c) => c.textToSpeech.convert(SPEAKERS[id].voiceId, { text: `${SPEAKERS[id].tag} ${text}`, modelId: TTS_MODEL, outputFormat: "mp3_44100_128" }),
+  });
+}
 for (const [id, s] of Object.entries(SFX)) {
   jobs.push({ kind: "sfx", file: `audio/sfx/${id}.mp3`, detail: s.prompt, seconds: s.seconds, make: (c) => c.textToSoundEffects.convert({ text: `${s.prompt}. ${SFX_STYLE}`, modelId: SFX_MODEL, durationSeconds: s.seconds, promptInfluence: 0.6 }) });
 }

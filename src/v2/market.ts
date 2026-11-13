@@ -11,6 +11,7 @@ import { applyToon, setGlowBase, trackGlow } from "./toon";
 import { installProps } from "./props";
 import { createLife, type FolkChar, type Life } from "./npc";
 import { audio } from "./audio";
+import type { Mood } from "./audio-manifest";
 import { createFloor, type FloorHeight } from "./floor";
 import type { Body } from "../physics/collision";
 
@@ -72,8 +73,8 @@ export interface Market {
   readonly cast: readonly AnimatedCharacter[];
   /** Shows a stall's economic state in the world: crate pile = stock, closed shutter, upgrade, shopper pull. */
   setStall(id: string, s: StallState): void;
-  /** A merchant says a line (speech bubble above their head). */
-  say(id: string, text: string, sec?: number): void;
+  /** A bubble over a character's head, spoken in their voice (mood: delivery chosen from real events). */
+  say(id: string, text: string, sec?: number, mood?: Mood): void;
   /** Townsfolk rhythm, gossip and harbor deliveries (see npc.ts Life). */
   readonly life: Pick<Life, "setHour" | "setGossip" | "deliver" | "errand">;
 }
@@ -396,14 +397,13 @@ export async function createMarket(scene: THREE.Scene, colliders: Box[]): Promis
     boards: npcs.flatMap((n) => (n.board ? [n.board.mesh] : [])),
     bind: (body, camera) => life.bind(body, camera),
     setStall(id, st) { dressing.get(id)?.(st); life.setPull(id, st.pull); },
-    say(id, text, sec) {
+    say(id, text, sec, mood) {
       const n = npcs.find((x) => x.id === id);
       if (!n) return;
       life.say(n.head, text, sec);
-      // the bubble is spoken too, in turn (several merchants at Rent Night queue up), mouth moving while it plays
-      const was = n.talking;
-      void audio.line(id, text, { at: n.head, queue: true }).then(() => { if (!was) n.talking = false; });
-      n.talking = true;
+      // the bubble is spoken too, in turn (several merchants at Rent Night queue up); the mouth moves while the voice
+      // actually plays (play.ts listens to audio.onVoice)
+      void audio.line(id, text, { at: n.head, queue: true, mood });
     },
     life,
     nearest(p) {

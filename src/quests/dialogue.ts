@@ -27,6 +27,9 @@ export interface DialogueNode {
   /** For nodes without choices: where "Continue" goes (null ends). */
   readonly next?: string | null;
   readonly onEnter?: (ctx: DialogueContext) => void;
+  /** How the line is delivered when the server voices it, chosen from what actually happened (worried, relieved,
+   *  down, grateful). Without it the speaker's stall decides (src/v2/play.ts). */
+  readonly mood?: (s: EconomyState) => "neutral" | "worried" | "relieved" | "down" | "grateful";
 }
 
 export interface Conversation {

@@ -15,7 +15,9 @@
 import { agentPrice, agentPriceKey, bidFor, quote } from "../../src/economy/pricing.ts";
 import { planResident, type Offer as ResOffer, type Plan, type Resident } from "../../src/economy/residents.ts";
 import type { EconomyState, Good, MerchantId } from "../../src/economy/state.ts";
-import { memoryForModel, type MemoryRow } from "./memory.ts";
+import { memoryForModel, type DecisionStore, type MemoryRow } from "./memory.ts";
+// DecisionStore lives in memory.ts (no Node types there), so dialogue helpers can be shared with the browser.
+export type { DecisionStore };
 import { MAX_ATTEMPTS, evidenceOf, type Evidence, type VerifyResult, type VerifyStatus } from "./verify.ts";
 
 export type Action = "raise" | "hold" | "lower";
@@ -367,15 +369,6 @@ export function lineFor(action: Action, from: number, to: number, s: Record<stri
 // ------------------------------------------------------------------ persistence ----
 
 /** Persistent key-value store the guard lives in: Upstash Redis in production (handlers.ts), a Map in dev and tests. */
-export interface DecisionStore {
-  get(key: string): Promise<string | null>;
-  /** SET key value NX EX ttl: true only for the one caller that created it. */
-  setNx(key: string, value: string, ttlSec: number): Promise<boolean>;
-  set(key: string, value: string, ttlSec: number): Promise<void>;
-  del(key: string): Promise<void>;
-  /** INCR key, setting its expiry; returns the new count (budgets, ops.ts). */
-  incr(key: string, ttlSec: number): Promise<number>;
-}
 
 const DAY_SEC = 600; // one market day (handlers.ts MARKET_DAY_MS = 10 min)
 const DECISION_TTL = DAY_SEC * 3; // kept past the day so the board can still show it

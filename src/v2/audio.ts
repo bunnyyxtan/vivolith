@@ -2,8 +2,12 @@
 // The context starts on the first click or key (browser autoplay rules). Files are fetched lazily and cached; a
 // missing or broken file is silent, so the game never depends on audio. UI clicks, coins and footsteps are
 // synthesised (tiny, no files). One voice at a time; music and ambience duck while someone speaks.
+// Speech is hybrid: a recorded file when one exists for exactly the line (or its opening phrase), else the server
+// voice (ElevenLabs with the same voices, server/near/voice.ts). A reply of several sentences plays as one: the next
+// sentence is requested when the previous one starts, so the first is heard as soon as it is ready and an abandoned
+// reply never generates more than one sentence ahead.
 import type { MerchantId } from "../economy/state";
-import { VOICES, loopUrl, recordedUrl, sfxUrl, type AmbienceId, type LineId, type MusicId, type SfxFile } from "./audio-manifest";
+import { VOICES, loopUrl, recordedUrl, sfxUrl, spokenText, type AmbienceId, type LineId, type Mood, type MusicId, type SfxFile } from "./audio-manifest";
 
 export interface Levels { music: number; voice: number; sfx: number; muted: boolean }
 type Synth = "click" | "coin" | "pay" | "error" | "step";
@@ -14,6 +18,8 @@ const STEPS: readonly SfxFile[] = ["step_1", "step_2", "step_3"];
 const AMB_GAIN = 3.5;
 const SFX_GAIN: Partial<Record<SfxFile, number>> = { car_pass: 4, rent_bell: 2.5, harbor_horn: 2.5, ui_close: 2, closed: 1.8, reopen: 1.8 };
 const FADE_SEC = 2.5, DUCK = 0.35, MAX_SFX = 6;
+/** A short breath between sentences of one reply, so joined clips sound like one person talking. */
+const SENTENCE_GAP_SEC = 0.12;
 /** Each merchant's pitch for the fallback "voice blips" when no recorded line exists. */
 const BLIP: Record<MerchantId, number> = { pema: 330, tomas: 180, mira: 420, arin: 240 };
 
@@ -101,20 +107,30 @@ function synth(id: Synth): void {
   }
 }
 
-/** Server-voiced line (server/near/voice.ts): cached per speaker and text; null when the voice is unavailable. */
-const tts = new Map<string, Promise<AudioBuffer | null>>();
-function ttsBuffer(speaker: string, text: string): Promise<AudioBuffer | null> {
-  const k = `${speaker}|${text}`;
+/** A piece of speech: its audio and, when the voice service aligned it, when each of its words starts (s). */
+interface Clip { buf: AudioBuffer; words?: number[] }
+/** Server-voiced text (server/near/voice.ts), cached per speaker, mood and text; null when the voice is unavailable.
+ *  The request carries the spoken form ("15 coins" for "15 c"), word for word the subtitle. An aborted request is
+ *  dropped from the cache, so a replay asks again (the server's own cache answers without a second paid call). */
+const tts = new Map<string, Promise<Clip | null>>();
+function ttsClip(speaker: string, text: string, mood: Mood = "neutral", signal?: AbortSignal): Promise<Clip | null> {
+  const k = `${speaker}|${mood}|${text}`;
   let p = tts.get(k);
   if (!p) {
-    p = fetch("/api/near/voice", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ speaker, text }) })
-      .then((r) => (r.ok ? (r.json() as Promise<{ audio?: string }>) : null))
-      .then((j) => (j?.audio && ctx ? ctx.decodeAudioData(Uint8Array.from(atob(j.audio), (c) => c.charCodeAt(0)).buffer) : null))
-      .catch(() => null);
+    p = fetch("/api/near/voice", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ speaker, text: spokenText(text), mood }), signal })
+      .then((r) => (r.ok ? (r.json() as Promise<{ audio?: string; words?: unknown }>) : null))
+      .then(async (j) => {
+        if (!j?.audio || !ctx) return null;
+        const buf = await ctx.decodeAudioData(Uint8Array.from(atob(j.audio), (c) => c.charCodeAt(0)).buffer);
+        const words = Array.isArray(j.words) && j.words.every((w) => typeof w === "number") ? (j.words as number[]) : undefined;
+        return { buf, words };
+      })
+      .catch(() => { tts.delete(k); return null; });
     tts.set(k, p);
   }
   return p;
 }
+const fileClip = (url: string): Promise<Clip | null> => fetchBuffer(url).then((buf) => (buf ? { buf } : null));
 
 /** The longest recorded line of this merchant that the text starts with (an opener such as "Ha! Not a chance."). */
 function opener(speaker: string, text: string): string | null {
@@ -132,52 +148,99 @@ export interface LineOptions {
   queue?: boolean;
   /** Speak only the recorded opener; the rest of the subtitle is interface detail (figures), not speech. */
   openerOnly?: boolean;
+  /** Delivery chosen by the game from real events (server voice only; recorded lines keep their take). */
+  mood?: Mood;
+  /** Subtitle pacing: how many words of the text have been spoken so far (provider timings when known, else spread
+   *  evenly over the clip, which is pacing only). Called with the full count at the end or on failure. */
+  onWords?: (spoken: number) => void;
+  /** True when the voice starts, false when it stops (finished, cut or cancelled): mouth and gesture follow it. */
+  onSpeaking?: (on: boolean) => void;
 }
-let lineSeq = 0, chain: Promise<unknown> = Promise.resolve(), ambientUntil = 0;
+let lineSeq = 0, epoch = 0, chain: Promise<unknown> = Promise.resolve(), ambientUntil = 0;
+let current: AbortController | null = null;
+/** One listener for every dialogue voice starting and stopping (the game moves that character's mouth). */
+let voiceHook: ((speaker: string, on: boolean) => void) | null = null;
 const AMBIENT_GAP_SEC = 6;
 
-function playBuffer(buf: AudioBuffer, at?: LineOptions["at"]): Promise<void> {
+/** Plays one clip; resolves when it ends or is cut. Reports spoken words (offset by the words before this clip). */
+function playClip(c: Clip, words: number, before: number, my: number, o: LineOptions): Promise<void> {
   const s = ctx!.createBufferSource();
-  s.buffer = buf;
-  if (at) {
+  s.buffer = c.buf;
+  if (o.at) {
     const p = ctx!.createPanner();
     p.panningModel = "equalpower"; p.distanceModel = "inverse"; p.refDistance = 2.5; p.rolloffFactor = 1.1; p.maxDistance = 40;
-    p.positionX.value = at.x; p.positionY.value = at.y; p.positionZ.value = at.z;
+    p.positionX.value = o.at.x; p.positionY.value = o.at.y; p.positionZ.value = o.at.z;
     s.connect(p).connect(voiceBus);
   } else s.connect(voiceBus);
-  return new Promise((done) => { s.onended = () => done(); s.start(); speaking = s; });
+  const marks = c.words && c.words.length === words ? c.words : Array.from({ length: words }, (_, i) => (c.buf.duration * i) / Math.max(1, words));
+  const t0 = ctx!.currentTime;
+  let shown = -1, raf = 0;
+  const tick = (): void => {
+    if (my !== lineSeq || !ctx) return;
+    const t = ctx.currentTime - t0;
+    let n = 0;
+    while (n < marks.length && marks[n] <= t + 0.02) n++;
+    if (n !== shown) { shown = n; o.onWords?.(before + n); }
+    raf = requestAnimationFrame(tick);
+  };
+  if (o.onWords) tick();
+  return new Promise((done) => { s.onended = () => { cancelAnimationFrame(raf); done(); }; s.start(); speaking = s; });
 }
 
-/** Speak one character's line: the recorded file when it exists, else a recorded opener plus the server voice for the
- *  rest, else (voice unavailable) a few pitched blips. Resolves when the speech ends, with its length in seconds. */
-async function speakLine(speaker: string, text: string, o: LineOptions): Promise<number> {
-  if (!ctx || !text) return 0;
+/** Speak one character's text (one or several sentences, played as one reply). Per sentence: the recorded file when
+ *  it exists, else a recorded opener plus the server voice for the rest, else the server voice; voice unavailable =
+ *  a few pitched blips, so the subtitle never appears in silence. Resolves when the speech ends, with its length. */
+async function speakLine(speaker: string, parts: readonly string[], o: LineOptions): Promise<number> {
+  const all = parts.join(" ").trim();
+  if (!ctx || !all) { o.onWords?.(Number.MAX_SAFE_INTEGER); return 0; }
   const my = ++lineSeq;
+  current?.abort();
+  const ac = new AbortController();
+  current = ac;
   if (speaking) { try { speaking.stop(); } catch { /* already ended */ } speaking = null; }
-  const whole = recordedUrl(speaker, text);
-  const op = whole ? null : opener(speaker, text);
-  const parts: Promise<AudioBuffer | null>[] = [];
-  if (whole) parts.push(fetchBuffer(whole));
-  else if (op) {
-    parts.push(fetchBuffer(recordedUrl(speaker, op)!));
-    if (!o.openerOnly) parts.push(ttsBuffer(speaker, text.slice(op.length).trim()));
-  } else if (!o.openerOnly) parts.push(ttsBuffer(speaker, text));
-  let total = 0;
-  for (const p of parts) { // all fetched at once; played in order, the server line usually ready by the time the opener ends
-    const buf = await p;
-    if (my !== lineSeq || !ctx) return total; // a newer line took over
-    if (!buf) continue;
-    duckFor(buf.duration);
-    await playBuffer(buf, o.at);
-    total += buf.duration;
+  // each piece: its words and a lazy fetch (recorded files are free and start at once; server lines are asked for one
+  // sentence ahead of playback)
+  const pieces: { words: number; free: boolean; get: () => Promise<Clip | null> }[] = [];
+  const count = (t: string): number => t.split(/\s+/).filter(Boolean).length;
+  for (const text of parts.map((p) => p.trim()).filter(Boolean)) {
+    const whole = recordedUrl(speaker, text);
+    const op = whole ? null : opener(speaker, text);
+    if (whole) pieces.push({ words: count(text), free: true, get: () => fileClip(whole).then((c) => c ?? ttsClip(speaker, text, o.mood, ac.signal)) });
+    else if (op) {
+      pieces.push({ words: count(op), free: true, get: () => fileClip(recordedUrl(speaker, op)!) });
+      const rest = text.slice(op.length).trim();
+      if (!o.openerOnly) pieces.push({ words: count(rest), free: false, get: () => ttsClip(speaker, rest, o.mood, ac.signal) });
+    } else if (!o.openerOnly) pieces.push({ words: count(text), free: false, get: () => ttsClip(speaker, text, o.mood, ac.signal) });
   }
-  if (!total && parts.length && my === lineSeq) { // voice unavailable: short blips, so the subtitle never appears in silence
-    const syl = Math.min(6, Math.max(2, Math.round(text.split(/\s+/).length / 2)));
+  const asked: (Promise<Clip | null> | null)[] = pieces.map(() => null);
+  const ask = (i: number): Promise<Clip | null> | null => (i < pieces.length ? (asked[i] ??= pieces[i].get()) : null);
+  // free pieces and the first server piece now; each later server piece when the one before it starts playing
+  let firstServer = true;
+  pieces.forEach((p, i) => { if (p.free || firstServer) ask(i); if (!p.free) firstServer = false; });
+  let total = 0, said = 0, on = false;
+  const stop = (): number => { if (on) { o.onSpeaking?.(false); voiceHook?.(speaker, false); } return total; };
+  for (let i = 0; i < pieces.length; i++) {
+    const c = await ask(i);
+    if (my !== lineSeq || !ctx) return stop(); // a newer line or a cancel took over
+    if (!c) { said += pieces[i].words; o.onWords?.(said); continue; }
+    ask(i + 1);
+    if (!on) { on = true; o.onSpeaking?.(true); voiceHook?.(speaker, true); }
+    duckFor(c.buf.duration);
+    if (total > 0 && pieces[i].words) await new Promise((r) => window.setTimeout(r, SENTENCE_GAP_SEC * 1000));
+    if (my !== lineSeq) return stop();
+    await playClip(c, pieces[i].words, said, my, o);
+    said += pieces[i].words;
+    total += c.buf.duration;
+    if (my !== lineSeq) return stop();
+  }
+  o.onWords?.(Number.MAX_SAFE_INTEGER);
+  if (!total && pieces.length && my === lineSeq) { // voice unavailable: short blips, so the subtitle never appears in silence
+    const syl = Math.min(6, Math.max(2, Math.round(count(all) / 2)));
     const f = BLIP[speaker as MerchantId] ?? 260;
     for (let i = 0; i < syl; i++) blip(f * (0.9 + Math.random() * 0.25), ctx.currentTime + i * 0.09, 0.07, "square", 0.05, voiceBus);
   }
-  if (my === lineSeq) speaking = null;
-  return total;
+  if (my === lineSeq) { speaking = null; if (current === ac) current = null; }
+  return stop();
 }
 
 function duckFor(sec: number): void {
@@ -220,27 +283,46 @@ export const audio = {
   },
   /** One merchant line by id (kept for callers that know the line). */
   async say(id: MerchantId, _line: LineId, text: string): Promise<void> { await audio.line(id, text); },
-  /** Any character's line (speaker: a merchant id, folk0..3, engineer, harbor). The text is exactly what the subtitle
-   *  shows. Dialogue cuts the previous line (or queues after it); ambient chatter waits its turn and never interrupts. */
+  /** Any character's line (speaker: a merchant id, folk0..3, engineer, harbor, picker, porter). The text is exactly
+   *  what the subtitle shows. Dialogue cuts the previous line (or queues after it); ambient chatter waits its turn
+   *  and never interrupts. */
   line(speaker: string, text: string, o: LineOptions = {}): Promise<number> {
-    if (!ctx) return Promise.resolve(0);
+    return audio.reply(speaker, [text], o);
+  },
+  /** A reply of several sentences, spoken as one line (conversation answers: the validated sentences, exactly). */
+  reply(speaker: string, sentences: readonly string[], o: LineOptions = {}): Promise<number> {
+    if (!ctx) { o.onWords?.(Number.MAX_SAFE_INTEGER); return Promise.resolve(0); }
     if (o.ambient) {
+      const text = sentences.join(" ");
       if (speaking || ctx.currentTime < ambientUntil) return Promise.resolve(0);
       ambientUntil = ctx.currentTime + AMBIENT_GAP_SEC;
       const url = recordedUrl(speaker, text);
-      return (url ? fetchBuffer(url) : ttsBuffer(speaker, text)).then(async (b) => {
-        if (!b || !ctx || speaking) return 0;
-        ambientUntil = ctx.currentTime + b.duration + AMBIENT_GAP_SEC;
+      return (url ? fileClip(url) : ttsClip(speaker, text)).then(async (c) => {
+        if (!c || !ctx || speaking) return 0;
+        ambientUntil = ctx.currentTime + c.buf.duration + AMBIENT_GAP_SEC;
         const s = ctx.createBufferSource(), p = ctx.createPanner();
         p.panningModel = "equalpower"; p.distanceModel = "inverse"; p.refDistance = 2; p.rolloffFactor = 1.4; p.maxDistance = 25;
         if (o.at) { p.positionX.value = o.at.x; p.positionY.value = o.at.y; p.positionZ.value = o.at.z; }
-        s.buffer = b; s.connect(p).connect(voiceBus); s.start();
-        return b.duration;
+        s.buffer = c.buf; s.connect(p).connect(voiceBus); s.start();
+        return c.buf.duration;
       });
     }
-    if (o.queue) { const run = chain.then(() => speakLine(speaker, text, o)); chain = run.catch(() => 0); return run; }
-    const run = speakLine(speaker, text, o); chain = run.catch(() => 0); return run;
+    if (o.queue) { // a queued line still waiting when stop() runs never plays
+      const e = epoch;
+      const run = chain.then(() => (e === epoch ? speakLine(speaker, sentences, o) : 0)); chain = run.catch(() => 0); return run;
+    }
+    const run = speakLine(speaker, sentences, o); chain = run.catch(() => 0); return run;
   },
+  /** Cuts whatever is being said (conversation closed, player left, another character addressed): the voice stops,
+   *  pending server requests for it are cancelled, and its callbacks report "not speaking". */
+  stop(): void {
+    lineSeq++; epoch++;
+    current?.abort(); current = null;
+    if (speaking) { try { speaking.stop(); } catch { /* already ended */ } speaking = null; }
+    chain = Promise.resolve();
+  },
+  /** Called with (speaker, true) when a dialogue voice starts and (speaker, false) when it stops or is cut. */
+  onVoice(f: (speaker: string, on: boolean) => void): void { voiceHook = f; },
   /** Where the ears are (the camera): set every frame so reactions pan and fade with distance. */
   listen(x: number, y: number, z: number, fx: number, fz: number): void {
     if (!ctx) return;

@@ -2,6 +2,8 @@
 // to know which files exist to try). Files live in public/audio/; a missing file is simply silent.
 // Voice lines are spoken exactly as the subtitle starts, so what you hear always matches what you read.
 import type { MerchantId } from "../economy/state";
+import { initialEconomy } from "../economy/state.ts";
+import { CONVERSATIONS } from "../quests/mango.ts";
 
 /** haggle_ok / haggle_no / refuse are short openers spoken before the live haggle text (which carries the numbers);
  *  bump is a reaction when Kavi walks into them. */
@@ -67,15 +69,53 @@ export const SPEAKERS: Record<string, { voiceId: string; tag: string }> = {
   ...Object.fromEntries(FOLK_VOICES.map((v, n) => [`folk${n}`, { voiceId: v.voiceId, tag: v.tag.replace(/\[(surprised|startled|grumbling)\]/, "[casually]") }])),
   engineer: { voiceId: "Xb7hH8MSUJpSbSDYk0k2", tag: "[thoughtfully]" }, // Alice: Ines Varga, NEAR Labs
   harbor: { voiceId: "CwhRBWXzGAHq8TQ4Fs17", tag: "[gruffly]" },         // Roger: the harbor dispatcher
+  // residents (src/economy/residents.ts), voices no townsperson or merchant uses (premade list read 2026-11-13)
+  picker: { voiceId: "EXAVITQu4vr4xnSDxMaL", tag: "[cheerfully]" },      // Sarah: Lin, the orchard picker
+  porter: { voiceId: "nPczCjzI2devNBz1zQrb", tag: "[dryly]" },           // Brian: Dev, the harbor porter
 };
+
+/** How a line should be delivered, decided by the game from real events (never by the model). One restrained audio
+ *  tag replaces the speaker's usual tag; "neutral" keeps it. */
+export type Mood = "neutral" | "worried" | "relieved" | "down" | "grateful";
+export const MOODS: readonly Mood[] = ["neutral", "worried", "relieved", "down", "grateful"];
+const MOOD_TAG: Record<Exclude<Mood, "neutral">, string> = { worried: "[concerned]", relieved: "[relieved]", down: "[quietly]", grateful: "[warmly]" };
+export const moodTag = (speaker: string, mood: Mood = "neutral"): string => (mood === "neutral" ? SPEAKERS[speaker]?.tag ?? "" : MOOD_TAG[mood]);
+
+/** Speech text for a subtitle: the same words, only the coin unit read out ("15 c" -> "15 coins"). Word for word, so
+ *  word n of the subtitle is word n of the speech (timings map back one to one). */
+export const spokenText = (text: string): string => text.replace(/\b(\d+)\s?c\b/g, (_, n: string) => `${n} ${n === "1" ? "coin" : "coins"}`);
+
+/** Fixed one-off lines spoken in the economy flow (the rest of that flow is live figures, voiced by an opener plus the server). */
+const EVENT_LINES: Record<string, string[]> = {
+  pema: ["You saved my morning, Kavi!", "A partner! I've paid the harbor. My crates are coming!"],
+  tomas: ["There you go. Don't tell Pema where you got them."],
+  mira: [], arin: [],
+};
+const REOPEN_THANKS = "We're open again, thanks to you!";
+const fnv = (t: string): string => { let h = 0x811c9dc5; for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16).padStart(8, "0"); };
+/** Every static line of every conversation (read with the opening economy) plus the fixed event lines, per speaker.
+ *  Lines whose text carries live numbers differ from these and are voiced by the server instead. */
+export const STATIC_LINES: Record<string, string[]> = (() => {
+  const out: Record<string, Set<string>> = {};
+  const eco = initialEconomy();
+  for (const [id, c] of Object.entries(CONVERSATIONS)) {
+    for (const n of Object.values(c.nodes)) { try { (out[id] ??= new Set()).add(n.text(eco)); } catch { /* node needs state this opening economy lacks */ } }
+  }
+  for (const [id, ls] of Object.entries(EVENT_LINES)) for (const l of ls) (out[id] ??= new Set()).add(l);
+  for (const id of ["pema", "tomas", "mira", "arin"]) (out[id] ??= new Set()).add(REOPEN_THANKS);
+  return Object.fromEntries(Object.entries(out).map(([id, s]) => [id, [...s]]));
+})();
+export const staticUrl = (speaker: string, text: string): string => `/audio/voice/${speaker}/s${fnv(text)}.mp3`;
 
 /** The recorded file for a line, when this speaker has one with exactly this text (else the server voices it). */
 export function recordedUrl(speaker: string, text: string): string | null {
   const v = VOICES[speaker as MerchantId];
   if (v) {
     const line = (Object.keys(v.lines) as LineId[]).find((k) => v.lines[k] === text);
-    return line ? voiceUrl(speaker as MerchantId, line) : null;
+    if (line) return voiceUrl(speaker as MerchantId, line);
   }
+  if (STATIC_LINES[speaker]?.includes(text)) return staticUrl(speaker, text);
+  if (v) return null;
   const cb = CAST_BUMP[speaker as CastBumpId] as readonly string[] | undefined;
   if (cb) { const k = cb.indexOf(text); return k >= 0 ? castBumpUrl(speaker as CastBumpId, k) : null; }
   const m = /^folk(\d)$/.exec(speaker);

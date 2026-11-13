@@ -115,6 +115,11 @@ body.panel-open .hud-prompt, body.panel-open .hud-hint, body.panel-open .hud-acc
 .tp-head b { display:block; font-size:18px; font-weight:700; } .tp-head span { display:block; font-size:13px; color:var(--mute); margin-top:1px; }
 .tp-say { margin:0 18px 12px; padding:10px 13px; background:var(--paper2); border-radius:12px; font-size:15px; line-height:1.45; color:var(--ink); }
 .tp-say.good { background:var(--mints); } .tp-say.bad { background:var(--corals); animation:shake .3s; }
+/* spoken line: words light up as the voice reaches them (the rest stays readable); click skips or replays */
+.tp-say.live { cursor:pointer; } .tp-say.live span { opacity:.42; transition:opacity .12s; } .tp-say.live span.on { opacity:1; }
+.tp-say.thinking { letter-spacing:3px; animation:think 1.2s ease-in-out infinite; }
+@keyframes think { 50% { opacity:.35; } }
+.tp-who { margin:6px 0 4px; font-weight:600; font-size:13px; }
 @keyframes shake { 25% { transform:translateX(-4px); } 75% { transform:translateX(4px); } }
 .tp-tabs { display:flex; gap:4px; margin:0 18px 10px; background:var(--paper2); border-radius:10px; padding:3px; }
 .tp-tabs button { flex:1; text-align:center; padding:7px; font-size:14px; background:transparent; border-radius:8px; }

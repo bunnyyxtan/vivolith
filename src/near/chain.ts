@@ -104,10 +104,14 @@ let conversation: string | null = null;
 /** Asks a merchant or resident (Lin `picker`, Dev `porter`) the player's own question (relayer route `talk`). The answer
  *  is grounded in their chain state, decisions and memory; `ai` only when NEAR AI phrased it. `sentences` is the same
  *  line split for a streaming voice. */
-export async function askMerchant(id: string, question = ""): Promise<{ line: string; ai: boolean; sentences: string[] } | null> {
+export async function askMerchant(id: string, question = ""): Promise<{ line: string; ai: boolean; sentences: string[]; mood: string } | null> {
   const r = await post("talk", { npc: id, question: question.slice(0, 200), account: playerId() ?? undefined, conv: conversation ?? undefined }).catch(() => null);
   if (r && typeof r.conv === "string") conversation = r.conv;
-  return r && typeof r.line === "string" ? { line: r.line, ai: r.source === "ai", sentences: Array.isArray(r.sentences) ? (r.sentences as string[]) : [r.line] } : null;
+  if (!r || typeof r.line !== "string") return null;
+  // the validated reply's own sentences, exactly: they are what gets voiced, so nothing else can be spoken
+  const parts = r.sentences;
+  const sentences = Array.isArray(parts) && parts.every((s) => typeof s === "string") && (parts as string[]).join(" ") === r.line ? (parts as string[]) : [r.line];
+  return { line: r.line, ai: r.source === "ai", sentences, mood: typeof r.mood === "string" ? r.mood : "neutral" };
 }
 
 /** The Town Chronicle (relayer route `chronicle`): recorded market events with provenance; null when unavailable. */

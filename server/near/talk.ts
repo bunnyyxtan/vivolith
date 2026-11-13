@@ -11,7 +11,19 @@ import { quote } from "../../src/economy/pricing.ts";
 import { PERSONALITY } from "../../src/economy/haggle.ts";
 import type { Resident } from "../../src/economy/residents.ts";
 import type { EconomyState, MerchantId } from "../../src/economy/state.ts";
-import type { Decision } from "./agent.ts";
+/** The parts of a decision (agent.ts `Decision`) that dialogue reads. Structural, so these helpers carry no server
+ *  types and the browser can run the same scripted rules offline. */
+interface Decision {
+  readonly kind: "price" | "plan";
+  readonly lever: string;
+  readonly source: "ai" | "fallback";
+  readonly action: string;
+  readonly basePrice: number;
+  readonly price: number;
+  readonly choices: readonly { readonly question: string; readonly chosen: string }[] | null;
+  readonly justification: readonly string[];
+  readonly txHash: string | null;
+}
 import { memoryFacts, type MemoryRow } from "./memory.ts";
 
 export interface TalkReply {
@@ -40,6 +52,13 @@ export const PERSONA: Readonly<Record<string, { readonly name: string; readonly 
   picker: { name: "Lin", voice: "cheerful orchard picker; practical about every coin; talks about the trees, the morning pick and lunch" },
   porter: { name: "Dev", voice: "laconic harbor porter; few words, dry humour; talks about crates, lemons and the day's pay" },
 };
+
+/** How a merchant sounds while answering, from their real stall (never from the model): shut stalls speak quietly, a
+ *  till short of rent sounds worried, otherwise their usual voice. */
+export function moodOf(st: EconomyState, id: MerchantId): "neutral" | "worried" | "down" {
+  const m = st.merchants[id];
+  return m.status !== "open" ? "down" : m.cash < m.rent ? "worried" : "neutral";
+}
 
 /** Plain sentences describing today's decision without technical words (the UI shows the proof separately). */
 export function decisionFacts(d: Decision | null): string[] {
