@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { spokenText } from "../../src/v2/audio-manifest.ts";
-import { gameWords } from "../../server/near/voice.ts";
+import { gameLine } from "../../server/near/voice.ts";
 
 /** One representative line per economic character, in its usual delivery (mood from game events, never invented). */
 export const PROBES: { speaker: string; who: string; mood: string; text: string }[] = [
@@ -26,7 +26,7 @@ const OUT = "docs/evidence/phase3-voice";
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
   const list = PROBES.filter((p) => !only || only.includes(p.speaker));
-  const bad = list.filter((p) => !gameWords(spokenText(p.text)));
+  const bad = list.filter((p) => !gameLine(spokenText(p.text)));
   if (bad.length) { console.error("not game words (the route would refuse):", bad.map((p) => p.text)); process.exit(1); }
   fs.mkdirSync(OUT, { recursive: true });
   for (const p of list) {

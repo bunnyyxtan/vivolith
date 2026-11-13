@@ -1133,6 +1133,7 @@ export async function createPlay(game: Game): Promise<Play> {
     player.heading = Math.atan2(dx, dz);
     player.frozen = true;
     npc.talking = false; // listening: the mouth moves only while their voice plays (audio.onVoice)
+    for (const n of market.npcs) n.listening = n === npc; // they stop serving and face Kavi until the conversation ends
   };
   const openTalk = (npc: Npc, convo?: Conversation): void => {
     const c = convo ?? CONVERSATIONS[npc.id];
@@ -1146,7 +1147,7 @@ export async function createPlay(game: Game): Promise<Play> {
   const hush = (): void => { audio.stop(); live = null; asking = null; asked = null; lastTalk = ""; };
   const endPanel = (): void => {
     hush();
-    if (mode.kind === "trade" || mode.kind === "talk") mode.npc.talking = false;
+    if (mode.kind === "trade" || mode.kind === "talk") { mode.npc.talking = false; mode.npc.listening = false; }
     mode = { kind: "walk" };
     player.frozen = false;
     hidePanel();
@@ -1157,7 +1158,7 @@ export async function createPlay(game: Game): Promise<Play> {
 
   // ---------------------------------------------------------------- overlays: notebook and reports ----
   const openCard = (build: (card: HTMLDivElement) => void): void => {
-    if (mode.kind === "trade" || mode.kind === "talk") { hush(); mode.npc.talking = false; hidePanel(); }
+    if (mode.kind === "trade" || mode.kind === "talk") { hush(); mode.npc.talking = false; mode.npc.listening = false; hidePanel(); }
     mode = { kind: "card" };
     player.frozen = true;
     hud.card.innerHTML = "";
@@ -1987,7 +1988,7 @@ export async function createPlay(game: Game): Promise<Play> {
       for (const x of recent) {
         if (first) { past.push(`${r.name}, ${ago(age(x) ?? 0)}: ${tradeText(x)}.${chose(x)}`); continue; }
         const mer = x.counterparty.split(".")[0], qty = Number(x.qty), price = Number(x.price);
-        if (x.kind === "sold") market.life.errand(who, mer, `${r.name}: ${qty} ${x.token_id === "mango" ? "mangoes" : `${x.token_id}s`} for ${nameOf(x.counterparty)}. +${qty * price} c${chose(x)}`);
+        if (x.kind === "sold") market.life.errand(who, mer, `${r.name}: ${qty} ${x.token_id === "mango" ? "mangoes" : `${x.token_id}s`} for ${nameOf(x.counterparty)}. +${qty * price} c${chose(x)}`, true); // the goods go with them
         else market.life.errand(who, mer, `${r.name}: one ${x.token_id}, ${price} c. Lunch!${chose(x)}`);
       }
     }));

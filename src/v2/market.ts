@@ -38,6 +38,9 @@ const HEIGHT: Record<NpcId, number> = { pema: CAST_HEIGHT, tomas: CAST_HEIGHT * 
 const FOLK = 24;
 const INTERACT_RADIUS = 2.4;
 const NOTICE_RADIUS = 7;
+const MERCHANT_TURN_RATE = 3.2; // rad/s
+const WAVE_GAP_SEC = 90; // a merchant waves hello at most this often (reopening the panel is not a new hello)
+const NOD_EVERY_SEC = 6; // a listening merchant nods (Agree) about this often while the player reads or types
 
 export interface Board {
   readonly mesh: THREE.Mesh;
@@ -54,7 +57,14 @@ export interface Npc {
   talking: boolean;
   /** Set by the townsfolk brain: customer being served, merchant turns to face them. */
   serving: boolean;
+  /** While serving: the merchant's turn to speak (customer and merchant alternate). */
+  serveTalk: boolean;
   attend: THREE.Vector3 | null;
+  /** Set by play.ts while the player is in conversation (talk or trade) with this merchant: they face the player,
+   *  stop serving and listen; their mouth still moves only while their voice plays (talking). */
+  listening: boolean;
+  /** Seconds left on a one-shot gesture (Wave, Agree). */
+  gest: number;
 }
 
 export interface Market {
@@ -386,7 +396,7 @@ export async function createMarket(scene: THREE.Scene, colliders: Box[]): Promis
       scene.add(board.mesh);
     }
     if (id !== "engineer" && id !== "harbor") dressing.set(id, makeStallDressing(scene, post, y, id));
-    return { id, root, character, post, board, head: new THREE.Vector3(), talking: false, serving: false, attend: null };
+    return { id, root, character, post, board, head: new THREE.Vector3(), talking: false, serving: false, serveTalk: false, attend: null, listening: false, gest: 0 };
   }));
 
   const life: Life = createLife(scene, colliders, town, npcs, folk, floor);
@@ -419,11 +429,24 @@ export async function createMarket(scene: THREE.Scene, colliders: Box[]): Promis
         toP.subVectors(player, n.root.position);
         const near = toP.x * toP.x + toP.z * toP.z < NOTICE_RADIUS * NOTICE_RADIUS;
         const at = n.attend;
-        const want = near ? Math.atan2(toP.x, toP.z) : at ? Math.atan2(at.x - n.root.position.x, at.z - n.root.position.z) : Math.atan2(n.post.stall.x - n.post.npc.x, n.post.stall.z - n.post.npc.z);
+        // who they face: the player in conversation, else the customer being served, else a passer-by close to the
+        // stall, else their counter
+        const serving = n.serving && !n.listening;
+        const want = n.listening || (near && !serving) ? Math.atan2(toP.x, toP.z) : at && serving ? Math.atan2(at.x - n.root.position.x, at.z - n.root.position.z) : Math.atan2(n.post.stall.x - n.post.npc.x, n.post.stall.z - n.post.npc.z);
         let d = want - n.root.rotation.y;
-        d = Math.atan2(Math.sin(d), Math.cos(d));
-        n.root.rotation.y += d * (1 - Math.exp(-5 * dt));
-        n.character.setAction(n.talking || n.serving ? "Talking" : null);
+        d = Math.atan2(Math.sin(d), Math.cos(d)) * (1 - Math.exp(-5 * dt));
+        const m = MERCHANT_TURN_RATE * dt;
+        n.root.rotation.y += d > m ? m : d < -m ? -m : d;
+        // gestures: a wave when a conversation opens, a nod now and then while listening; speech always wins
+        if (n.gest > 0) n.gest -= dt;
+        const wasListening = n.root.userData.listening === true;
+        n.root.userData.listening = n.listening;
+        const ud = n.root.userData as { sinceWave?: number };
+        ud.sinceWave = (ud.sinceWave ?? WAVE_GAP_SEC) + dt;
+        if (n.talking) n.gest = 0;
+        else if (n.listening && !wasListening && ud.sinceWave >= WAVE_GAP_SEC && n.character.duration("Wave")) { ud.sinceWave = 0; n.character.setAction("Wave", true); n.gest = n.character.duration("Wave") - 0.2; }
+        else if (n.listening && n.gest <= 0 && Math.random() < dt / NOD_EVERY_SEC && n.character.duration("Agree")) { n.character.setAction("Agree", true); n.gest = n.character.duration("Agree") - 0.2; }
+        if (n.gest <= 0) n.character.setAction(n.talking || (serving && n.serveTalk) ? "Talking" : null);
         n.character.setSpeed(0, 1, 2);
         n.character.update(dt);
         n.head.copy(n.root.position).setY(n.root.position.y + HEIGHT[n.id] * 0.92);

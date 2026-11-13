@@ -149,7 +149,7 @@ export interface LineOptions {
   /** Speak only the recorded opener; the rest of the subtitle is interface detail (figures), not speech. */
   openerOnly?: boolean;
   /** Speech tokens from the server, one per part (a validated conversation answer): the voice route speaks those parts
-   *  as they are. Parts without one must be made of the game's own words. */
+   *  as they are. Parts without one must be sentences the game itself can say (server/near/lines.json). */
   tokens?: readonly (string | undefined)[];
   /** Delivery chosen by the game from real events (server voice only; recorded lines keep their take). */
   mood?: Mood;

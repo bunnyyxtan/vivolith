@@ -8,13 +8,15 @@
 // Mock mode (VIVOLITH_VOICE_MOCK=1, never on a production deployment): a locally synthesised placeholder voice with
 // exact word timings, so the whole pipeline can be played without credits. Responses say `mock: true`.
 // Who may spend: a line the server itself validated carries a short-lived speech token (HMAC over speaker, mood and
-// text, see speechToken); any other line must be made only of the game's own words (lexicon.json, numbers, one name),
-// so the route cannot be used as a general text-to-speech service. Spend is charged before the provider is called and
+// text, see speechToken); any other line must be, sentence by sentence, one the game's own text can produce (lines.json:
+// exact sentences, or template shapes whose slots hold only numbers, closed word sets or one name; scripts/audio/lines.ts),
+// so the route cannot be used to voice new text. Spend is charged before the provider is called and
 // is only returned when the provider refused the request outright (4xx): a timeout or a broken answer may still be
 // billed, so it stays spent, and the same line is not retried for a minute.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { SPEAKERS, MOODS, moodTag, type Mood } from "../../src/v2/audio-manifest.ts";
-import LEXICON from "./lexicon.json" with { type: "json" };
+import LINES from "./lines.json" with { type: "json" };
+import { approvedLines } from "./lines-match.ts";
 
 const MODEL = "eleven_v4"; // the model every recorded line was made with: dynamic speech must sound the same
 export const MAX_TEXT = 240;
@@ -68,19 +70,8 @@ export function voiceSecret(merchantSecret: string | undefined): string {
   return (devSecret ||= randomBytes(32).toString("hex"));
 }
 
-const WORDS = new Set<string>(LEXICON as string[]);
-/** True when every word of the line is the game's own (string literals of the game's text), a number or a time, with
- *  at most one other capitalised word (the player's chosen name). */
-export function gameWords(text: string): boolean {
-  let names = 0;
-  for (const raw of voiceText(text).split(/[\s/‐-—-]+/)) {
-    const w = raw.replace(/^[^\p{L}\p{N}']+|[^\p{L}\p{N}]+$/gu, "");
-    if (!w || /^\d{1,6}(?:[:.,]\d{1,3})?%?$/.test(w) || WORDS.has(w.toLowerCase())) continue;
-    if (/^[A-Z][a-z]{1,13}$/.test(w) && names++ === 0) continue;
-    return false;
-  }
-  return true;
-}
+/** True when every sentence of the line is one the game itself can say (an approved sentence or template shape). */
+export const gameLine: (text: string) => boolean = approvedLines(LINES);
 
 const cache = new Map<string, VoiceBody>();
 const inflight = new Map<string, Promise<VoiceResult>>();

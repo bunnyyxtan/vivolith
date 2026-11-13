@@ -4,8 +4,8 @@
 import { execFileSync } from "node:child_process";
 import { build } from "rolldown";
 
-// the voice route's closed vocabulary must match the game text being shipped
-execFileSync(process.execPath, ["scripts/audio/lexicon.ts"], { stdio: "inherit" });
+// the voice route's approved sentences must match the game text being shipped
+execFileSync(process.execPath, ["scripts/audio/lines.ts"], { stdio: "inherit" });
 
 await build({
   input: "server/near/vercel.ts",

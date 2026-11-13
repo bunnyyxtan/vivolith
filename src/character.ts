@@ -10,6 +10,8 @@ export interface AnimatedCharacter {
   setAction(name: string | null, once?: boolean): void;
   /** Whether the model carries a clip whose name matches (case-insensitive). */
   has(name: string): boolean;
+  /** Length (s) of the clip whose name matches, 0 when the model has none. */
+  duration(name: string): number;
   update(dt: number): void;
   /** Skeleton bone by name suffix (e.g. "LeftUpLeg"), or undefined. */
   bone(name: string): THREE.Object3D | undefined;
@@ -22,6 +24,8 @@ export interface AnimatedCharacter {
   /** Keep the lowest sole on the ground every frame (blended clips leave the per-clip trims a few cm off).
    *  One-shot overlays such as a jump are excluded, so the feet can still leave the ground. */
   autoGround: boolean;
+  /** Far away (a few pixels tall): auto-ground re-measures the soles every 4th update instead of every one. */
+  coarse: boolean;
   /** Raise the ground contact by dy metres: the depth of the rendered sole below the root, measured on the GPU
    *  (src/v2/soles.ts) for skins whose CPU skinning cannot be trusted. */
   raiseSole(dy: number): void;
@@ -188,10 +192,14 @@ export async function loadCharacter(url: string, height: number): Promise<Animat
   walkA?.setEffectiveWeight(0);
   runA?.setEffectiveWeight(0);
   let overlay: THREE.AnimationAction | null = null;
+  // Locomotion fades out while an overlay clip fades in (and back): dropping it at once left the blend's total weight
+  // under 1 for the fade, which three.js fills with the rest pose (a visible snap toward a T-pose).
+  let locoW = 1, locoFade = FADE;
   let last = { speed: 0, walk: 1, run: 2 };
   let trim = idle0;
   const api: { lift: number } = { lift: 0 };
   let ground = idle0; // smoothed auto-ground offset
+  let groundTick = 0, groundDt = 0; // coarse mode: updates since the last sole measure, and their time
   const rootPos = new THREE.Vector3();
   let phase = 0, phaseRate = 0; // shared gait phase (0..1 of a walk clip) and its rate, cycles/s
 
@@ -204,7 +212,7 @@ export async function loadCharacter(url: string, height: number): Promise<Animat
       const w = THREE.MathUtils.clamp(speed / (walkGait.natural * 0.8), 0, 1);
       const r0 = walkGait.natural * WALK_STRETCH, r1 = Math.max(r0 + 0.1, runGait.natural * RUN_SLOW);
       const r = THREE.MathUtils.smoothstep(speed, r0, r1);
-      const locoWeight = overlay ? 0 : 1;
+      const locoWeight = locoW;
       trim = overlay ? idle0 : trimOf(w, r);
       idleA.setEffectiveWeight((1 - w) * locoWeight);
       walkA.setEffectiveWeight(w * (1 - r) * locoWeight);
@@ -222,7 +230,7 @@ export async function loadCharacter(url: string, height: number): Promise<Animat
       // idle -> walk over [0, walkSpeed], walk -> run over [walkSpeed, runSpeed]
       const w = THREE.MathUtils.clamp(speed / walkSpeed, 0, 1);
       const r = runA ? THREE.MathUtils.clamp((speed - walkSpeed) / (runSpeed - walkSpeed), 0, 1) : 0;
-      const locoWeight = overlay ? 0 : 1;
+      const locoWeight = locoW;
       trim = overlay ? idle0 : trimOf(w, r);
       idleA.setEffectiveWeight((1 - w) * locoWeight);
       walkA?.setEffectiveWeight(w * (1 - r) * locoWeight);
@@ -236,6 +244,7 @@ export async function loadCharacter(url: string, height: number): Promise<Animat
     root,
     post: null,
     autoGround: false,
+    coarse: false,
     raiseSole(dy) { sole += dy; baseY += dy; },
     gait: walkGait && runGait ? { walk: walkGait.natural, run: runGait.natural } : null,
     get lift() { return api.lift; },
@@ -255,12 +264,14 @@ export async function loadCharacter(url: string, height: number): Promise<Animat
     },
     setSpeed,
     has: (name) => findClip(clips, new RegExp(name, "i")) !== undefined,
+    duration: (name) => findClip(clips, new RegExp(name, "i"))?.duration ?? 0,
     setAction(name, once = false) {
       const clip = name ? findClip(clips, new RegExp(name, "i")) : undefined;
       const next = clip ? mixer.clipAction(clip) : null;
       if (next === overlay) return;
       const fade = once ? 0.1 : FADE;
       overlay?.fadeOut(fade);
+      locoFade = fade;
       if (next) {
         next.setLoop(once ? THREE.LoopOnce : THREE.LoopRepeat, Infinity);
         next.clampWhenFinished = once;
@@ -270,6 +281,11 @@ export async function loadCharacter(url: string, height: number): Promise<Animat
       setSpeed(last.speed, last.walk, last.run);
     },
     update(dt) {
+      const locoTo = overlay ? 0 : 1;
+      if (locoW !== locoTo) {
+        locoW = locoTo > locoW ? Math.min(1, locoW + dt / locoFade) : Math.max(0, locoW - dt / locoFade);
+        setSpeed(last.speed, last.walk, last.run);
+      }
       if (walkA && runA && walkGait && runGait) {
         phase = (phase + phaseRate * dt) % 1;
         walkA.time = ((phase + walkGait.touchdown) % 1) * walk!.duration;
@@ -280,10 +296,12 @@ export async function loadCharacter(url: string, height: number): Promise<Animat
         // Measure where the soles really are this frame and ease the body so they rest on the ground. While seated
         // (lift > 0) the standing correction is held: the sit drop applies on top of it and the feet may lift.
         model.position.y = baseY + ground - api.lift;
-        if (api.lift < 0.01) {
+        groundDt += dt;
+        if (api.lift < 0.01 && (!character.coarse || (groundTick++ & 3) === 0)) {
           root.updateMatrixWorld(true);
           const err = sole - (lowFoot() - root.getWorldPosition(rootPos).y);
-          ground += err * Math.min(1, dt * 12);
+          ground += err * Math.min(1, Math.min(groundDt, 0.07) * 12); // at most 4 frames of catch-up (no pop after sitting)
+          groundDt = 0;
           model.position.y = baseY + ground;
         }
       } else {

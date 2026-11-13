@@ -13,7 +13,7 @@ import { Account, JsonRpcProvider, KeyPairSigner, PublicKey, SCHEMA, actions, ne
 import { MERCHANTS, keyPairFromSeed, merchantKey, residentKey, type MerchantId } from "./keys.ts";
 import { RESIDENTS, executableOffers, planResident, type Offer } from "../../src/economy/residents.ts";
 import { spokenText } from "../../src/v2/audio-manifest.ts";
-import { gameWords, speechToken, speechTokenOk, synthesize, voiceSecret, voiceText } from "./voice.ts";
+import { gameLine, speechToken, speechTokenOk, synthesize, voiceSecret, voiceText } from "./voice.ts";
 import { MAX_QUESTION, answer, factsFor, moodOf, playerFacts, residentFacts, type Exchange, type Ledger, type Receipt } from "./talk.ts";
 import { readMemory } from "./memory.ts";
 import { LEVERS, agentConfig, applyLivePrices, attachTx, claimBidSend, decideBid, decideResident, decisionFor, livePrices, priceMoved, recentDecisions, releaseBidSend, type AgentConfig, type Decision, type DecisionStore } from "./agent.ts";
@@ -1297,7 +1297,7 @@ export async function handle(route: string, req: Request, env: RelayEnv): Promis
       const b = await readJson(req);
       const speaker = String(b.speaker ?? ""), text = voiceText(String(b.text ?? "")), mood = typeof b.mood === "string" ? b.mood : "neutral";
       // only lines the server validated (speech token) or lines made of the game's own words: not a general TTS service
-      if (!speechTokenOk(voiceSecret(e.NEAR_MERCHANT_SECRET), b.token, speaker, mood, text) && !gameWords(text)) return json(403, { status: "error", message: "not a line of this game" });
+      if (!speechTokenOk(voiceSecret(e.NEAR_MERCHANT_SECRET), b.token, speaker, mood, text) && !gameLine(text)) return json(403, { status: "error", message: "not a line of this game" });
       const charge = (n: number): Promise<boolean> => hit(cfg, "voice:chars", LIMITS.voiceChars.max, LIMITS.voiceChars.windowSec, n);
       const r = await synthesize(speaker, text, e.ELEVENLABS_API_KEY?.trim(), { mood, mock, charge });
       return json(r.status, r.body);
