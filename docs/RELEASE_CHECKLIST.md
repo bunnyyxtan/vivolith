@@ -50,7 +50,9 @@ recordings, alignment, in-game first audio 1.70 s, streaming comparison, route h
       speech-token secret); Upstash Redis configured, otherwise the shared `voice:chars` budget is per instance only.
 - [ ] On the deployed site: an arbitrary line to `/api/near/voice` answers 403 "not a line of this game", and so does a new
       sentence made of game words (Phase 4: approved sentences, `server/near/lines.json`, replaced the word list).
-- [ ] Connected: a real Lin or Dev sale walks them to the buyer with the goods (Phase 4 only exercised a scripted errand).
+- [x] A real Lin sale on testnet acted out in the street (Phase 4, 2026-11-13: 3 transactions, see PROGRESS.md).
+- [ ] Connected session: the client's own receipt polling picks up a resident trade and sends them on the errand
+      (needs the market-turn cap from §1 before a connected session runs). Dev has not traded live.
 
 ## 5. Production release
 

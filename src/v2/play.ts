@@ -1988,7 +1988,7 @@ export async function createPlay(game: Game): Promise<Play> {
       for (const x of recent) {
         if (first) { past.push(`${r.name}, ${ago(age(x) ?? 0)}: ${tradeText(x)}.${chose(x)}`); continue; }
         const mer = x.counterparty.split(".")[0], qty = Number(x.qty), price = Number(x.price);
-        if (x.kind === "sold") market.life.errand(who, mer, `${r.name}: ${qty} ${x.token_id === "mango" ? "mangoes" : `${x.token_id}s`} for ${nameOf(x.counterparty)}. +${qty * price} c${chose(x)}`, true); // the goods go with them
+        if (x.kind === "sold") market.life.errand(who, mer, `${r.name}: ${qty} ${x.token_id === "mango" ? (qty === 1 ? "mango" : "mangoes") : qty === 1 ? x.token_id : `${x.token_id}s`} for ${nameOf(x.counterparty)}. +${qty * price} c${chose(x)}`, true); // the goods go with them
         else market.life.errand(who, mer, `${r.name}: one ${x.token_id}, ${price} c. Lunch!${chose(x)}`);
       }
     }));
