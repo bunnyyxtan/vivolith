@@ -163,6 +163,10 @@ that can't pay closes, and the player's coins are never charged; the line's tool
 mission card carries the stake and the pill stays hidden (no duplicate). Checked: new player (toast on Pema's story), Rent
 Night closed path, Day 2 after the reopening, Day 9-11 (clock moved by state edit to reach each case). Connected wording not
 checked live. `phase6c-before-rent-hud.png`, `phase6c-after-rent-hud-day9.jpg`.
+Review fix: connected, on an even (rent) market day the line said "due now" for the whole 10-minute day even after
+the chain had charged every open stall (`lastRent.<id>` >= day). It now moves to the next rent day once all open stalls
+are charged, and the "short" figure only counts stalls not yet charged for that day. Typecheck, checks and build pass;
+offline HUD unchanged (Day 10: "Tomas's rent tomorrow 21:00 · 15 c short"). Connected wording still not checked live.
 
 Verified offline in the browser: open stocked stall (Tomas), closed stall with stock (Pema, no goods outside, Closed card), vacant stall, reopening at 08:00 (shutter up, goods back), resident delivery to an open stall and to a shut stall (state injected to close her: labelled), trade and haggle panels with the mission visible, panel open at 20:58 (clock holds while trading), 1280x720 and 1920x1080, day and night. Not verified: a live resident delivery to a closed stall on testnet; sold-out display (no stall reached 0 stock in play). 13/13 checks, voice check, typecheck, build.
 

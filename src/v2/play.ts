@@ -386,9 +386,18 @@ export async function createPlay(game: Game): Promise<Play> {
     if (back) return { text: `${who(back)}'s stall reopened`, tone: "good" };
     // 3. the next rent and the stall least able to pay it
     let when: string | null = null;
+    let owes = (_id: MerchantId): boolean => true;
     if (connected) {
       const d = marketDay(), ms = marketDayMs();
-      if (d !== null && ms) { const due = d % 2 === 0 ? d : d + 1; const mins = Math.max(1, Math.ceil((due * ms - Date.now()) / 60_000)); when = due === d ? "due now" : `in about ${mins} min`; }
+      if (d !== null && ms) {
+        // once today's rent is charged (lastRent >= d), the next bill is two market days on, never "due now" all day
+        const paidOn = (id: MerchantId): number => Number(state.flags[`lastRent.${id}`] ?? -1);
+        const allPaid = TRADERS.every((id) => state.merchants[id].status !== "open" || paidOn(id) >= d);
+        const due = d % 2 === 0 ? (allPaid ? d + 2 : d) : d + 1;
+        owes = (id) => paidOn(id) < due;
+        const mins = Math.max(1, Math.ceil((due * ms - Date.now()) / 60_000));
+        when = due === d ? "due now" : `in about ${mins} min`;
+      }
     } else {
       const day = dayOf(state.minute), t = state.minute % MINUTES_PER_DAY;
       const rentDay = (day - 1) % 2 === 0; // stalls pay every second evening: Day 1, 3, 5 ... (sim.ts)
@@ -396,7 +405,7 @@ export async function createPlay(game: Game): Promise<Play> {
       else if (!rentDay) when = "tomorrow 21:00";
     }
     if (!when) return null;
-    const worst = TRADERS.map((id) => ({ id, short: state.merchants[id].rent - Math.floor(state.merchants[id].cash) })).sort((a, b) => b.short - a.short)[0];
+    const worst = TRADERS.filter(owes).map((id) => ({ id, short: state.merchants[id].rent - Math.floor(state.merchants[id].cash) })).sort((a, b) => b.short - a.short)[0];
     if (worst && worst.short > 0) return { text: `${who(worst.id)}'s rent ${when} · ${worst.short} c short`, tone: "bad" };
     return when.startsWith("at") || when.startsWith("in") || when === "due now" ? { text: `Stall rent ${when} · every stall can pay`, tone: "" } : null;
   };
