@@ -153,6 +153,17 @@ Nine issues from live screenshots (`docs/evidence/phase6c-before-*`), each trace
 | Goods visible under a shutter / crates outside a shut stall | Half shutter (above); crate pile ignored open/closed; counter display baked into the stall mesh | Visual truth | Counter display cut out of the stall model (triangles 0.84-1.4 m on the customer half, with its outline hull) and shown only while open with stock; crate pile only while open |
 | "Lin: 1 mango for Arin Okoye. +6 c" | Debug-style string used as speech | Copy | Speech "Here you go, Arin, one fresh mango." plus a separate small tag over the merchant "+1 mango · 6 c paid"; meals "One lassi, please. Lunch time!" with "+3 c" |
 
+Rent HUD (reported: a bare "rent at 21:00" read like the player's own bill): replaced by one line under the clock that
+always names whose rent it is: Pema's story stake while it runs ("Pema's rent at 21:00 · 6 c short"), "Pema paid her
+rent · 15 c left", "Mira's stall is closed: missed rent", "Pema's stall reopened", else the stall least able to pay its next
+rent ("Mira's rent at 21:00 · 7 c short", "... tomorrow 21:00 ..." on the day before), else "Stall rent at 21:00 · every
+stall can pay"; nothing after the charge. Connected it counts real minutes to the chain's rent market day instead of the
+21:00 clock. The first time rent appears (Pema's story) one toast says each merchant pays from their own till, a stall
+that can't pay closes, and the player's coins are never charged; the line's tooltip repeats it. During the first day the
+mission card carries the stake and the pill stays hidden (no duplicate). Checked: new player (toast on Pema's story), Rent
+Night closed path, Day 2 after the reopening, Day 9-11 (clock moved by state edit to reach each case). Connected wording not
+checked live. `phase6c-before-rent-hud.png`, `phase6c-after-rent-hud-day9.jpg`.
+
 Verified offline in the browser: open stocked stall (Tomas), closed stall with stock (Pema, no goods outside, Closed card), vacant stall, reopening at 08:00 (shutter up, goods back), resident delivery to an open stall and to a shut stall (state injected to close her: labelled), trade and haggle panels with the mission visible, panel open at 20:58 (clock holds while trading), 1280x720 and 1920x1080, day and night. Not verified: a live resident delivery to a closed stall on testnet; sold-out display (no stall reached 0 stock in play). 13/13 checks, voice check, typecheck, build.
 
 ## Phase 6: live production acceptance (2026-11-14, authorized)

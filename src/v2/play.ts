@@ -18,7 +18,7 @@ import { createCityMap } from "./map";
 import { MOODS, VOICES, type LineId, type Mood } from "./audio-manifest";
 import { factsFor, goodsOf, moodOf as voiceMood, scriptFor, sentencesOf } from "../../server/near/talk";
 import { createOrchardBasket, type OrchardBasket } from "./orchard";
-import { startNight, updateNight, type Clock, type NightOutcome } from "./story";
+import { night, startNight, updateNight, type Clock, type NightOutcome } from "./story";
 
 /** Metres per footstep sound, and how close to the stalls the market music and murmur take over. */
 const ORCHARD_REACH_M = 4;
@@ -367,17 +367,50 @@ export async function createPlay(game: Game): Promise<Play> {
     const worth = p.coins + goods + shares;
     return RANKS.find(([min]) => worth >= min)![1];
   };
+  /** The one stall-rent fact worth a glance right now (whose rent, when, can they pay), or null.
+   *  Offline the market charges rent at 21:00 every second day; connected, the chain charges it every second market day. */
+  const RENT_EXPLAINED = "Each merchant pays stall rent from their own till. A stall that can't pay closes until it is restocked. Your coins are never charged.";
+  const rentHint = (): { text: string; tone: "" | "bad" | "good" } | null => {
+    if (!unlocked(state, "rent") && !state.flags["night.start"]) return null;
+    const who = (id: MerchantId): string => PERSONALITY[id].name.replace(/^Auntie /, "").split(" ")[0];
+    const connected = !!playerId() && !isOffline();
+    // 1. Pema's story: her stake, in the words the mission card uses
+    const n = night(state, storyClock());
+    if (n.phase === "waiting" || n.phase === "charging") { const short = n.rent - n.till; return { text: `Pema's rent ${n.when.replace(/ on Day \d+$/, "")} · ${short > 0 ? `${short} c short` : "covered"}`, tone: short > 0 ? "bad" : "good" }; }
+    // the night's result, until the player has heard it from her
+    if (n.phase === "kept" && !state.flags["night.heard"] && state.merchants.pema.status === "open") return { text: `Pema paid her rent · ${Math.floor(state.merchants.pema.cash)} c left`, tone: "good" };
+    // 2. a stall that is shut: say who and why
+    const shut = TRADERS.find((id) => state.merchants[id].status !== "open");
+    if (shut) return { text: `${who(shut)}'s stall is closed: missed rent`, tone: "bad" };
+    const back = TRADERS.find((id) => moodOf(id) === "recovering");
+    if (back) return { text: `${who(back)}'s stall reopened`, tone: "good" };
+    // 3. the next rent and the stall least able to pay it
+    let when: string | null = null;
+    if (connected) {
+      const d = marketDay(), ms = marketDayMs();
+      if (d !== null && ms) { const due = d % 2 === 0 ? d : d + 1; const mins = Math.max(1, Math.ceil((due * ms - Date.now()) / 60_000)); when = due === d ? "due now" : `in about ${mins} min`; }
+    } else {
+      const day = dayOf(state.minute), t = state.minute % MINUTES_PER_DAY;
+      const rentDay = (day - 1) % 2 === 0; // stalls pay every second evening: Day 1, 3, 5 ... (sim.ts)
+      if (rentDay && t < RENT_MINUTE) when = "at 21:00";
+      else if (!rentDay) when = "tomorrow 21:00";
+    }
+    if (!when) return null;
+    const worst = TRADERS.map((id) => ({ id, short: state.merchants[id].rent - Math.floor(state.merchants[id].cash) })).sort((a, b) => b.short - a.short)[0];
+    if (worst && worst.short > 0) return { text: `${who(worst.id)}'s rent ${when} · ${worst.short} c short`, tone: "bad" };
+    return when.startsWith("at") || when.startsWith("in") || when === "due now" ? { text: `Stall rent ${when} · every stall can pay`, tone: "" } : null;
+  };
   let walletKey = "";
   let nearTimer = 0;
   const nearLine = el("div", "hud-near");
   const renderWallet = (): void => {
     const p = state.player;
     const showClock = unlocked(state, "rent");
-    const day = dayOf(state.minute), rentDay = (day - 1) % 2 === 0;
+    const hint = rentHint();
     const clock = clockOf(state.minute).replace(/^Day (\d+) /, "Day $1 · ");
     const shares = MERCHANT_IDS.reduce((n, id) => n + p.shares[id], 0);
     const rank = traderRank();
-    const key = `${p.coins}|${p.inventory.mango}|${p.inventory.lemon}|${p.inventory.lassi}|${shares}|${showClock ? clock : ""}|${ff ? 1 : 0}|${rank}`;
+    const key = `${p.coins}|${p.inventory.mango}|${p.inventory.lemon}|${p.inventory.lassi}|${shares}|${showClock ? clock : ""}|${ff ? 1 : 0}|${rank}|${hint?.text ?? ""}`;
     if (key === walletKey) return;
     const prev = walletKey.split("|");
     walletKey = key;
@@ -403,8 +436,14 @@ export async function createPlay(game: Game): Promise<Play> {
     if (showClock) {
       const c = el("div", "hud-clock");
       c.append(document.createTextNode(ff ? `${clock} · fast-forward (T to stop)` : clock));
-      if (!ff && rentDay && state.minute % MINUTES_PER_DAY < RENT_MINUTE) { c.append(document.createTextNode(" · ")); c.append(el("em", "", "rent at 21:00")); }
       hud.wallet.append(c);
+      // whose rent, when, and whether they can pay: never a bare "rent at 21:00" that reads like the player's bill
+      if (!ff && hint) {
+        const h = el("div", `hud-clock hud-rent${hint.tone ? ` ${hint.tone}` : ""}`, hint.text);
+        h.title = RENT_EXPLAINED;
+        hud.wallet.append(h);
+        if (!state.flags.rentExplained) { state.flags.rentExplained = true; hud.toast(RENT_EXPLAINED); save(); }
+      }
     }
     hud.wallet.append(nearLine);
   };
@@ -1838,7 +1877,12 @@ export async function createPlay(game: Game): Promise<Play> {
   /** Starts the arc once Pema has told her story and the connection is known, then reports its result the moment the
    *  chain (or the offline market) has one: a reaction at her stall, never earlier. */
   const storyBeat = (): void => {
-    if (state.flags.talkedPema && state.flags["night.start"] === undefined && (playerId() || isOffline())) { startNight(state, storyClock()); save(); }
+    if (state.flags.talkedPema && state.flags["night.start"] === undefined && (playerId() || isOffline())) {
+      startNight(state, storyClock());
+      // the first time rent appears: whose bill it is, once, in plain words
+      if (!state.flags.rentExplained) { state.flags.rentExplained = true; hud.toast(RENT_EXPLAINED); }
+      save();
+    }
     if (inTutorial(state) && STEPS[stepIndex(state)].done(state)) afterProgress(); // e.g. a step finished before a reload
     const wasRecovered = state.flags["night.recovered"] === true;
     const out = updateNight(state, storyClock());

@@ -72,6 +72,8 @@ body.panel-open .hud-obj .stake .nums { margin-top:3px; }
 @keyframes bump { 40% { transform:scale(1.12); } }
 .hud-clock { background:var(--paper); border-radius:999px; box-shadow:var(--shadow); padding:6px 12px; font-size:13px; font-weight:600; color:var(--ink2); }
 .hud-clock em { font-style:normal; color:var(--coral); }
+.hud-rent { font-size:12.5px; max-width:300px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--ink2); pointer-events:auto; cursor:help; }
+.hud-rent.bad { color:#b8402c; } .hud-rent.good { color:var(--mintd); }
 .hud-near { font-size:12px; font-weight:600; color:var(--ink2); background:rgba(255,250,241,.94); border-radius:999px; padding:4px 10px; box-shadow:var(--shadow);
   opacity:0; transition:opacity .4s; pointer-events:none; }
 .hud-near.on { opacity:1; } .hud-near i { font-style:normal; color:var(--mintd); } .hud-near.bad i { color:var(--coral); }
