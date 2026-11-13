@@ -13256,7 +13256,7 @@ function residentFacts(r, held, offers, names, extra = {}) {
 	const who = (id) => names[id] ?? id;
 	const dFacts = decisionFacts(extra.decision ?? null), mFacts = memoryFacts(extra.memory ?? [], r.good, 2);
 	const facts = [
-		`You are ${r.name}, a ${r.job} in Saltlight Market. Each market day you earn ${r.perDay} ${r.good}s from ${r.reason}, sell them to a stall, then buy a ${r.food} to eat.`,
+		`You are ${r.name}, ${/^[aeiou]/i.test(r.job) ? "an" : "a"} ${r.job} in Saltlight Market. Each market day you earn ${r.perDay} ${r.good}s from ${r.reason}, sell them to a stall, then buy a ${r.food} to eat.`,
 		`You hold ${held.coin ?? 0} coins, ${held[r.good] ?? 0} ${r.good}s and ${held[r.food] ?? 0} ${r.food}.`,
 		...bids.slice(0, 3).map((o) => `${who(o.merchant)} pays ${o.price} coins a ${r.good}, for up to ${o.qty}.`),
 		...meals.slice(0, 2).map((o) => `${who(o.merchant)} sells a ${r.food} for ${o.price} coins.`),
@@ -14061,7 +14061,7 @@ async function decideFresh(i, band) {
 	} catch (e) {
 		return make("hold", "fallback", band.base, null, e instanceof AgentError ? `${e.kind}: ${e.message}` : "unexpected error");
 	}
-	if (ai.confidence !== null && ai.confidence < .5) return make("hold", "ai", band.base, ai, `confidence ${ai.confidence} under ${MIN_CONFIDENCE}: held`);
+	if (ai.confidence !== null && ai.confidence < .5) return make("hold", ai.action === "hold" ? "ai" : "fallback", band.base, ai, `model chose ${ai.action} with confidence ${ai.confidence}, under ${MIN_CONFIDENCE}: held`);
 	if (ai.action === "raise" && band.raise === null) return make("hold", "fallback", band.base, null, "invalid: raise is not permitted (limit or funds)");
 	if (ai.action === "lower" && band.lower === null) return make("hold", "fallback", band.base, null, "invalid: lower is not permitted (limit)");
 	const price = ai.action === "raise" ? band.raise : ai.action === "lower" ? band.lower : band.base;
@@ -15869,7 +15869,10 @@ async function tick(cfg, env, trusted = false, scope = "market") {
 	const st = await chainEconomy(provider, cfg);
 	const posted = new Map((await view(provider, cfg.contractId, "get_offers", {})).map((o) => [orderKey(o), o]));
 	const agentStore = decisionStore(cfg);
-	const baseCfg = agentConfig(env);
+	const baseCfg = {
+		...agentConfig(env),
+		retries: 0
+	};
 	const halted = await agentsHalted(ops, agentStore);
 	const agentCfg = halted ? {
 		...baseCfg,
@@ -16365,6 +16368,7 @@ async function talk(cfg, req, env) {
 	]);
 	const noun = (good, n) => `${n} ${good === "mango" ? n === 1 ? "mango" : "mangoes" : `${good}${n === 1 ? "" : "s"}`}`;
 	const recalled = bondFacts(bonds, noun);
+	const town = (await readChronicle(store).catch(() => [])).filter((e) => e.actors.includes(id) && (e.status === "confirmed" || e.status === "recorded")).slice(-3).map((e) => `Recently in the market: ${e.text}`);
 	let built;
 	if (resident) {
 		const held = Object.fromEntries((await view(provider, cfg.contractId, "get_balances", { account_id: npcAccount }).catch(() => [])).map(([t, v]) => [t, Number(v)]));
@@ -16374,12 +16378,16 @@ async function talk(cfg, req, env) {
 			decision,
 			memory
 		});
+		built.facts.push(...town);
 	} else {
 		built = factsFor(await chainEconomy(provider, cfg), id, offers, receipts, {
 			decision,
 			memory,
 			player: player ? [...playerFacts(playerReceipts, npcAccount), ...recalled] : []
 		});
+		built.facts.push(...town);
+		const reopened = town.find((f) => /reopened|open again/.test(f));
+		if (reopened && !built.topics.past) built.topics.past = reopened.replace(/^Recently in the market: /, "Recently, ").replace(/Pema's stall/, "my stall");
 		const delivered = bonds.filter((x) => x.evidence === "chain" && x.kind === "delivered");
 		if (delivered.length && !built.topics.you) built.topics.you = `You've brought me ${noun("mango", delivered.reduce((n, x) => n + x.qty, 0))} so far. I keep count.`;
 	}

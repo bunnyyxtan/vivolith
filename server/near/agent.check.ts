@@ -106,13 +106,17 @@ for (const [name, bad] of [["unknown action", { type: "choice", choice: "double"
 }
 assert.equal(parseAnswer({ answers: { bid_action: { type: "choice", choice: "raise", confidence: 7 } } }, null, "m").confidence, null, "an out-of-range confidence is dropped, not trusted");
 
-// 5. Low confidence holds (still the model's answer, recorded as such).
+// 5. Low confidence holds. A held "raise" is the rule overriding the model (labelled fallback, the answer kept as
+//    evidence); a low-confidence "hold" is still the model's own choice (the live Arin run, 2026-11-13: hold at 0.49).
 {
   resetDecisions();
   const st = stall(), base = bandFor(st, "pema", offers)!.base;
   const o = await decide(st, reply(choice("raise", MIN_CONFIDENCE - 0.2)));
-  assert.equal(o.price, base); assert.equal(o.decision?.action, "hold"); assert.equal(o.decision?.source, "ai");
-  assert.match(o.decision!.fallbackReason!, /confidence/);
+  assert.equal(o.price, base); assert.equal(o.decision?.action, "hold"); assert.equal(o.decision?.source, "fallback");
+  assert.match(o.decision!.fallbackReason!, /model chose raise with confidence/);
+  resetDecisions();
+  const h = await decide(stall(), reply(choice("hold", MIN_CONFIDENCE - 0.01)));
+  assert.equal(h.decision?.action, "hold"); assert.equal(h.decision?.source, "ai");
 }
 
 // 6. Insufficient funds: the till cannot afford a raise, so a "raise" answer is refused and the price is unchanged.

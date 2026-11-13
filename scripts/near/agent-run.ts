@@ -211,7 +211,7 @@ if (dec.price < pre.band.min || dec.price > pre.band.max) stop("the decision pri
 save();
 
 // the game's own endpoint (the same handler production serves)
-const ep = await handle("decisions", new Request("http://localhost/api/near/decisions?merchant=pema"), process.env as Record<string, string | undefined>);
+const ep = await handle("decisions", new Request(`http://localhost/api/near/decisions?merchant=${AGENT}`), process.env as Record<string, string | undefined>);
 const epBody = (await ep.json()) as { decisions?: Record<string, unknown>[] };
 const top = epBody.decisions?.[0] ?? null;
 report.endpoint = { http: ep.status, count: epBody.decisions?.length ?? 0, top: top && { source: top.source, action: top.action, price: top.price, model: top.model, txHash: top.txHash, live: top.live, receipt: { id: (top.receipt as { id?: string })?.id, status: (top.receipt as { status?: string })?.status } } };

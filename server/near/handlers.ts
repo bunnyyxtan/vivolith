@@ -911,7 +911,9 @@ async function tick(cfg: Config, env: RelayEnv, trusted = false, scope: "market"
   const st = await chainEconomy(provider, cfg);
   const posted = new Map((await view<OfferRow[]>(provider, cfg.contractId, "get_offers", {})).map((o) => [orderKey(o), o]));
   const agentStore = decisionStore(cfg);
-  const baseCfg = agentConfig(env);
+  // no automatic retry inside a market turn: every paid request is one decision counted by the budget (a failed one
+  // falls back to the rule price)
+  const baseCfg: AgentConfig = { ...agentConfig(env), retries: 0 };
   const halted = await agentsHalted(ops, agentStore);
   const agentCfg: AgentConfig = halted ? { ...baseCfg, enabled: new Set() } : baseCfg; // kill switch: every price is the rule's
   const memory = agentCfg.enabled.size ? await memoriesFor(agentStore) : {};
@@ -1195,14 +1197,20 @@ async function talk(cfg: Config, req: Request, env: RelayEnv): Promise<Response>
   // what this character can still recall about this player beyond the 20 latest receipts (ledger.ts, 30 days)
   const noun = (good: string, n: number): string => `${n} ${good === "mango" ? (n === 1 ? "mango" : "mangoes") : `${good}${n === 1 ? "" : "s"}`}`;
   const recalled = bondFacts(bonds, noun);
+  // the speaker's recent confirmed market events from the Chronicle (reopening, rent, trades), as facts it may mention
+  const town = (await readChronicle(store).catch(() => [])).filter((e) => e.actors.includes(id) && (e.status === "confirmed" || e.status === "recorded")).slice(-3).map((e) => `Recently in the market: ${e.text}`);
   let built: { facts: string[]; script: string; topics: Record<string, string> };
   if (resident) {
     const held = Object.fromEntries((await view<[string, string][]>(provider, cfg.contractId, "get_balances", { account_id: npcAccount }).catch(() => [])).map(([t, v]) => [t, Number(v)]));
     const st = await chainEconomy(provider, cfg);
     const names = Object.fromEntries(MERCHANTS.map((m) => [m, st.merchants[m].name]));
     built = residentFacts(resident, held, executableOffers(offers as unknown as Offer[], st.merchants), names, { decision, memory });
+    built.facts.push(...town);
   } else {
     built = factsFor(await chainEconomy(provider, cfg), id as MerchantId, offers, receipts, { decision, memory, player: player ? [...playerFacts(playerReceipts, npcAccount), ...recalled] : [] });
+    built.facts.push(...town);
+    const reopened = town.find((f) => /reopened|open again/.test(f));
+    if (reopened && !built.topics.past) built.topics.past = reopened.replace(/^Recently in the market: /, "Recently, ").replace(/Pema's stall/, "my stall");
     const delivered = bonds.filter((x) => x.evidence === "chain" && x.kind === "delivered");
     if (delivered.length && !built.topics.you) built.topics.you = `You've brought me ${noun("mango", delivered.reduce((n, x) => n + x.qty, 0))} so far. I keep count.`;
   }

@@ -545,7 +545,9 @@ async function decideFresh(i: DecideInput, band: Band): Promise<Decision> {
   } catch (e) {
     return make("hold", "fallback", band.base, null, e instanceof AgentError ? `${e.kind}: ${e.message}` : "unexpected error");
   }
-  if (ai.confidence !== null && ai.confidence < MIN_CONFIDENCE) return make("hold", "ai", band.base, ai, `confidence ${ai.confidence} under ${MIN_CONFIDENCE}: held`);
+  // Under the confidence floor the price is held. That is the model's decision only if the model chose hold; a raise or
+  // lower it was unsure of is overridden by the rule and labelled so (its answer stays in the record as evidence).
+  if (ai.confidence !== null && ai.confidence < MIN_CONFIDENCE) return make("hold", ai.action === "hold" ? "ai" : "fallback", band.base, ai, `model chose ${ai.action} with confidence ${ai.confidence}, under ${MIN_CONFIDENCE}: held`);
   if (ai.action === "raise" && band.raise === null) return make("hold", "fallback", band.base, null, "invalid: raise is not permitted (limit or funds)");
   if (ai.action === "lower" && band.lower === null) return make("hold", "fallback", band.base, null, "invalid: lower is not permitted (limit)");
   const price = ai.action === "raise" ? band.raise! : ai.action === "lower" ? band.lower! : band.base;

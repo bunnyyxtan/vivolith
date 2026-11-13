@@ -109,7 +109,7 @@ export function residentFacts(r: Resident, held: Readonly<Record<string, number>
   const who = (id: string): string => names[id] ?? id;
   const dFacts = decisionFacts(extra.decision ?? null), mFacts = memoryFacts(extra.memory ?? [], r.good, 2);
   const facts = [
-    `You are ${r.name}, a ${r.job} in Saltlight Market. Each market day you earn ${r.perDay} ${r.good}s from ${r.reason}, sell them to a stall, then buy a ${r.food} to eat.`,
+    `You are ${r.name}, ${/^[aeiou]/i.test(r.job) ? "an" : "a"} ${r.job} in Saltlight Market. Each market day you earn ${r.perDay} ${r.good}s from ${r.reason}, sell them to a stall, then buy a ${r.food} to eat.`,
     `You hold ${held.coin ?? 0} coins, ${held[r.good] ?? 0} ${r.good}s and ${held[r.food] ?? 0} ${r.food}.`,
     ...bids.slice(0, 3).map((o) => `${who(o.merchant)} pays ${o.price} coins a ${r.good}, for up to ${o.qty}.`),
     ...meals.slice(0, 2).map((o) => `${who(o.merchant)} sells a ${r.food} for ${o.price} coins.`),
