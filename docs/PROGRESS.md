@@ -53,6 +53,22 @@ Dev relayer with real testnet keys, NEAR AI and ElevenLabs keys blanked (`near-w
 
 ## Phase 2: NEAR AI merchants and residents
 
+**Status: IMPLEMENTATION COMPLETE (closed 2026-11-13).** No further Phase 2 features. Remaining live checks moved
+to [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md). The approved connected playthrough was stopped before its first
+market turn: 0 transactions, 0 guest accounts, 0 paid requests.
+
+Live-verified (testnet or production, evidence below):
+- Jev probe and one Jev decision to a confirmed order (Arin `ErDdDdcC…`, signature signed).
+- Closed-bid recovery delivery to Pema (guest `g88b8a3081b294900`, reopened on chain).
+- Production `c2ace0b` with routes, status and 3 capped live conversations (Pema, Arin clean; Lin's grounding defect).
+- Phase 1 testnet pass: orchard pick, buy, chain rent closure, reopening by delivery, friend's price.
+
+Offline or isolated only (mocked RPC, mocked NEAR AI, or offline browser play):
+- Six-agent engine, economic memory, budgets and kill switch, signature verification, market-turn handler.
+- Economic recovery rules, Guild, rent grace, residents Lin and Dev, carried shopper demand.
+- Town Chronicle, durable bonds, butterfly scenarios.
+- Lin's grounding fix (`86cf4be`) and the Rent Night journey fixes (`f781fb2`): local commits, not deployed.
+
 | Item | Status | Evidence |
 |---|---|---|
 | Live Jev probe (`scripts/near/jev-probe.ts --yes`, 2026-11-13): one request to `cloud-api.near.ai/v1/systemone` with Pema's opening-state bid facts, no tick, no transaction | VERIFIED | HTTP 200 in 1254 ms; choice schema accepted; `bid_action` = raise, confidence 0.56 (probabilities raise 0.71 / lower 0.27 / hold 0.02; confidence is not the top probability); model `typesafe/jev-1.13-20260917`; id `gen-dec-1794553666-cE3HvpVndC2Z4LWFcuge` (unverified, no SDK check); 695 input / 39 output tokens, cost 0.00002919 |
