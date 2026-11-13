@@ -10,6 +10,7 @@ const MIN_DIST = 2.2, MAX_DIST = 9;
 const SHOULDER = 0; // character centred on screen (was 0.65 m over-the-shoulder)
 const GROUND_CLEARANCE = 0.35;
 const WALL_PAD = 0.3;
+const POLE = 0.5; // colliders thinner than this on both axes never pull the camera in
 
 export interface CameraRig {
   readonly camera: THREE.PerspectiveCamera;
@@ -26,6 +27,9 @@ export interface CameraRig {
 function clipRay(o: THREE.Vector3, d: THREE.Vector3, maxT: number, boxes: readonly Box[], pad: number): number {
   let best = maxT;
   for (const b of boxes) {
+    // lamp posts, sign poles, bollards: they hide a sliver of the view; cutting the camera into Kavi's back for each one
+    // the arm sweeps past (177 in town, lining the market walk) was far worse
+    if (b.maxX - b.minX < POLE && b.maxZ - b.minZ < POLE) continue;
     let t0 = 0, t1 = best;
     const lo = [b.minX - pad, b.minY - pad, b.minZ - pad], hi = [b.maxX + pad, b.maxY + pad, b.maxZ + pad];
     const oo = [o.x, o.y, o.z], dd = [d.x, d.y, d.z];

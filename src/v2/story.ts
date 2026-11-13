@@ -20,6 +20,8 @@ export interface Night {
   /** Pema's till and rent right now. */
   readonly till: number;
   readonly rent: number;
+  /** Mangoes on her shelf: coins only once shoppers buy them (selling to her lowers the till and raises this). */
+  readonly shelf: number;
   /** Connected: market day of the charge. Offline: game minute of the charge. */
   readonly due: number | null;
   /** When the charge comes: real minutes (connected) or the game clock (offline). */
@@ -84,7 +86,7 @@ export function updateNight(s: EconomyState, c: Clock): NightOutcome | null {
 
 export function night(s: EconomyState, c: Clock): Night {
   const m = s.merchants.pema;
-  const base = { till: Math.floor(m.cash), rent: m.rent, connected: s.flags["night.mode"] === "chain" };
+  const base = { till: Math.floor(m.cash), rent: m.rent, shelf: m.stock.mango, connected: s.flags["night.mode"] === "chain" };
   if (!s.flags["night.start"]) return { ...base, phase: "off", due: null, when: "" };
   const out = s.flags["night.outcome"] as NightOutcome | undefined;
   const due = num(s.flags["night.due"]);

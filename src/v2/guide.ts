@@ -267,6 +267,9 @@ function renderCardInto(card: HTMLElement, c: Objective): void {
   const nums = el("div", "nums");
   nums.append(el("b", "", `${n.till} c`), el("span", "", ` in her till · rent ${n.rent} c`), el("em", "", short > 0 ? `${short} c short` : "covered"));
   panel.append(top, meter, nums);
+  // the stock the player sold her: it cost her till coins and pays rent only once shoppers buy it (without this line,
+  // helping her read as "she is now further from rent")
+  if (short > 0 && n.shelf > 0) panel.append(el("div", "shelf", `${n.shelf} ${n.shelf === 1 ? "mango" : "mangoes"} on her shelf: coins only once shoppers buy them`));
   card.append(panel);
 }
 
@@ -314,7 +317,7 @@ export function createGuide(hud: Hud, clock: () => Clock): Guide {
     draw(s, camera, targetPos, player) {
       const c = current(s);
       if (!c) { hud.obj.style.display = "none"; hud.mark.style.display = "none"; return; }
-      const key = `${c.label}|${c.title}|${c.detail}|${c.progress?.join("/") ?? ""}|${c.meter?.text ?? ""}|${c.stake ? `${c.stake.till}/${c.stake.rent}/${c.stake.when}` : ""}`;
+      const key = `${c.label}|${c.title}|${c.detail}|${c.progress?.join("/") ?? ""}|${c.meter?.text ?? ""}|${c.stake ? `${c.stake.till}/${c.stake.rent}/${c.stake.shelf}/${c.stake.when}` : ""}`;
       if (key !== lastKey) { lastKey = key; renderCard(c); }
       hud.obj.style.display = "block";
       const p = c.target ? targetPos(c.target) : null;

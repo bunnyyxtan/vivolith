@@ -159,18 +159,19 @@ function makeShutter(width: number, glow: THREE.Material): { group: THREE.Group;
   const card = new THREE.Mesh(new THREE.PlaneGeometry(0.64, 0.28), new THREE.MeshBasicMaterial({ map: ctex, toneMapped: false }));
   card.position.set(0, 1.12, 0.03);
   group.add(curtain, bar, handle, card);
-  return {
-    group,
-    set(level) {
-      const h = Math.max(0.001, (SHUTTER_TOP - SHUTTER_BOTTOM) * level);
-      curtain.visible = bar.visible = handle.visible = level > 0;
-      curtain.scale.y = h;
-      tex.repeat.set(1, Math.max(1, Math.round(h / SLAT_M)));
-      bar.position.y = SHUTTER_TOP - h;
-      handle.position.set(0, SHUTTER_TOP - h, 0.045);
-      card.visible = level >= 1;
-    },
+  const set = (level: number): void => {
+    const h = Math.max(0.001, (SHUTTER_TOP - SHUTTER_BOTTOM) * level);
+    curtain.visible = bar.visible = handle.visible = level > 0;
+    curtain.scale.y = h;
+    tex.repeat.set(1, Math.max(1, Math.round(h / SLAT_M)));
+    bar.position.y = SHUTTER_TOP - h;
+    handle.position.set(0, SHUTTER_TOP - h, 0.045);
+    card.visible = level >= 1;
   };
+  // rolled up from the start: the dressing only calls set() when the level changes, so an open stall that never changes
+  // kept the default full curtain and its "Closed" card (Tomas looked shut while he traded)
+  set(0);
+  return { group, set };
 }
 
 let CRATE_GEO: THREE.BufferGeometry | null = null;

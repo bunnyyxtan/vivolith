@@ -47,6 +47,7 @@ const CSS = /* css */ `
 .hud-obj .stake .nums span { white-space:pre; }
 .hud-obj .stake .nums em { margin-left:auto; font-style:normal; font-weight:700; color:var(--mintd); }
 .hud-obj .stake.short .nums em { color:#b8402c; }
+.hud-obj .stake .shelf { margin-top:4px; font-size:11.5px; color:var(--ink2); }
 .tp-compare b { font-weight:700; }
 .hud-obj.done { animation:pop .5s ease; }
 @keyframes pop { 30% { transform:scale(1.04); box-shadow:0 0 0 4px var(--mints), var(--shadow); } }
