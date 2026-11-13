@@ -88,6 +88,7 @@ function toToon(src: THREE.Material, character = false): THREE.MeshToonMaterial 
     side: s.side === THREE.DoubleSide ? THREE.DoubleSide : THREE.FrontSide,
     transparent: s.transparent,
     alphaTest: s.alphaTest,
+    vertexColors: s.vertexColors,
   });
   m.onBeforeCompile = (sh) => {
     // Props: cool fresnel rim light. Characters: the rim only brightens the surface's own lit colour (a fixed cool
@@ -142,7 +143,9 @@ export function applyToon(root: THREE.Object3D, thickness = 0.012, ink = "#1a223
     mesh.material = Array.isArray(mesh.material) ? mesh.material.map((m) => toToon(m, character)) : toToon(mesh.material, character);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
-    mesh.frustumCulled = false;
+    // skinned bounds don't follow the animation, so characters are never culled; static props are (off-screen ones cost
+    // a draw call each, twice with their ink hull)
+    mesh.frustumCulled = !character;
     const first = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
     if (!outline || first.transparent || first.alphaTest > 0 || first.side === THREE.DoubleSide) continue;
     const mat = new THREE.ShaderMaterial({
@@ -166,7 +169,7 @@ export function applyToon(root: THREE.Object3D, thickness = 0.012, ink = "#1a223
       hull = new THREE.Mesh(hardSurface ? smoothHull(mesh.geometry) : mesh.geometry, mat);
     }
     hull.name = `${mesh.name}_outline`;
-    hull.frustumCulled = false;
+    hull.frustumCulled = !character;
     hull.castShadow = false;
     hull.receiveShadow = false;
     mesh.add(hull);

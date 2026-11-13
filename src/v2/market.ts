@@ -3,6 +3,7 @@
 // Until town.glb exists, FALLBACK_POSTS place the market on the plaza promenade (x -7..7, z -7..-41,
 // benches along x = +-7.2) with Ines behind the Spire lobby desk (desk top at x -28.7..-23.7, z ~-60).
 import * as THREE from "three";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { loadGLB, prepareModel } from "../assets";
 import { loadCharacter, type AnimatedCharacter } from "../character";
 import { groundHeightAt, type Box } from "../physics/collision";
@@ -160,6 +161,27 @@ function makeShutter(width: number, glow: THREE.Material): { group: THREE.Group;
   };
 }
 
+let CRATE_GEO: THREE.BufferGeometry | null = null;
+function makeCrateGeometry(): THREE.BufferGeometry {
+  const part = (geo: THREE.BufferGeometry, color: number, m: THREE.Matrix4): THREE.BufferGeometry => {
+    const g = geo.index ? geo.toNonIndexed() : geo;
+    g.applyMatrix4(m);
+    const c = new THREE.Color(color), n = g.attributes.position.count, col = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) col.set([c.r, c.g, c.b], i * 3);
+    g.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    return g;
+  };
+  const at = (x: number, y: number, z: number, sx = 1, sy = 1, sz = 1): THREE.Matrix4 => new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion(), new THREE.Vector3(sx, sy, sz));
+  const parts = [part(new THREE.BoxGeometry(0.5, 0.26, 0.38), 0x9c6a3c, at(0, 0, 0))];
+  for (const sy of [-0.06, 0.06]) parts.push(part(new THREE.BoxGeometry(0.51, 0.03, 0.39), 0x6e4524, at(0, sy, 0))); // dark slat lines
+  for (let k = 0; k < 6; k++) parts.push(part(new THREE.IcosahedronGeometry(0.075, 1), 0xffa21a, // mangoes heaped in the crate
+    at(-0.15 + (k % 3) * 0.15, 0.15 + (k > 2 ? 0.03 : 0), k > 2 ? 0.07 : -0.07, 1, 0.85, 1.25)));
+  const merged = mergeGeometries(parts.map((g) => { for (const k of Object.keys(g.attributes)) if (!["position", "normal", "color"].includes(k)) g.deleteAttribute(k); return g; }));
+  if (!merged) throw new Error("crate geometry could not be merged");
+  merged.computeBoundingSphere();
+  return merged;
+}
+
 /** Crate pile, closed shutter and upgrade dressing beside a stall; meshes are created once and toggled. */
 function makeStallDressing(scene: THREE.Scene, post: Post, y: number, id: string): (s: StallState) => void {
   const side = Math.sign(post.stall.x - post.npc.x) || 1; // +1: customers stand on +X of the counter
@@ -169,24 +191,12 @@ function makeStallDressing(scene: THREE.Scene, post: Post, y: number, id: string
   g.position.set(front + side * 0.3, y, post.npc.z - 2.3);
   g.rotation.y = face;
   scene.add(g);
-  const wood = new THREE.MeshToonMaterial({ color: 0x9c6a3c });
-  const slat = new THREE.MeshToonMaterial({ color: 0x6e4524 });
-  const fruit = new THREE.MeshToonMaterial({ color: 0xffa21a });
-  const mangoGeo = new THREE.IcosahedronGeometry(0.075, 1);
+  // One crate is one mesh: box, two slat bands and six mangoes merged with vertex colours (was 9 meshes, each with
+  // its own ink hull: 648 draw calls across the four stalls, 45% of the frame). Geometry and material are shared.
+  const crateGeo = CRATE_GEO ??= makeCrateGeometry();
+  const crateMat = new THREE.MeshToonMaterial({ color: 0xffffff, vertexColors: true });
   const crates = Array.from({ length: MAX_CRATES }, (_, i) => {
-    const c = new THREE.Group();
-    c.add(new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.26, 0.38), wood));
-    for (const sy of [-0.06, 0.06]) { // dark slat lines on the long faces
-      const band = new THREE.Mesh(new THREE.BoxGeometry(0.51, 0.03, 0.39), slat);
-      band.position.y = sy;
-      c.add(band);
-    }
-    for (let k = 0; k < 6; k++) { // mangoes heaped in the crate
-      const m = new THREE.Mesh(mangoGeo, fruit);
-      m.position.set(-0.15 + (k % 3) * 0.15, 0.15 + (k > 2 ? 0.03 : 0), k > 2 ? 0.07 : -0.07);
-      m.scale.set(1, 0.85, 1.25);
-      c.add(m);
-    }
+    const c = new THREE.Mesh(crateGeo, crateMat);
     const row = Math.floor(i / 3);
     c.position.set((i % 3) * 0.52 - 0.52 + row * 0.26, 0.13 + row * 0.3, 0);
     g.add(c);

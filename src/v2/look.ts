@@ -95,6 +95,11 @@ export function createLook(canvas: HTMLCanvasElement): Look {
   renderer.toneMappingExposure = 1.2;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap; // soft PCF in r187 (PCFSoftShadowMap removed)
+  renderer.shadowMap.autoUpdate = false; // see pipeline.render: refreshed every other frame or when the frustum moves
+  let shadowFrame = 0, shadowDirty = true;
+  const lastSun = new THREE.Vector3(Number.NaN, 0, 0);
+  const SHADOW_RECENTER_M = 4;
+  const shadowCenter = new THREE.Vector3(Number.NaN, 0, 0);
 
   const scene = new THREE.Scene();
   scene.fog = new THREE.Fog("#8fc6ff", 150, 900);
@@ -175,7 +180,12 @@ export function createLook(canvas: HTMLCanvasElement): Look {
   const pipeline: Pipeline = {
     composer,
     setCamera(c) { pass.camera = c; },
-    render() { composer.render(); },
+    render() {
+      // the shadow map holds a mostly static city: redraw it every other frame (moving characters' shadows at 30 Hz at
+      // 60 fps) and on any frame the frustum moved, so a lookup never uses a map drawn from another position
+      if (shadowDirty || (shadowFrame++ & 1) === 0) { renderer.shadowMap.needsUpdate = true; shadowDirty = false; }
+      composer.render();
+    },
     resize(w, h) {
       renderer.setSize(w, h, false);
       composer.setPixelRatio(renderer.getPixelRatio());
@@ -217,7 +227,11 @@ export function createLook(canvas: HTMLCanvasElement): Look {
       const q = Math.floor(h * 4), now = performance.now();
       if (q !== lastBake && now - bakedAt > 500) { lastBake = q; bakedAt = now; rebakeEnv(); } // fast-forward: twice a second at most
     },
-    followSun(t) {
+    followSun(target) {
+      // the 76 m frustum re-centres only after the player has moved SHADOW_RECENTER_M from its centre, so standing
+      // or walking a few metres keeps the shadow map valid and pipeline.render can skip redrawing it
+      if (!(shadowCenter.distanceTo(target) < SHADOW_RECENTER_M)) shadowCenter.copy(target);
+      const t = shadowCenter;
       // work in light space so the snap is along shadow-map axes
       const m = sun.shadow.camera.matrixWorldInverse;
       sun.position.copy(t).addScaledVector(sunDir, 110);
@@ -234,6 +248,7 @@ export function createLook(canvas: HTMLCanvasElement): Look {
       const up = new THREE.Vector3().setFromMatrixColumn(sun.shadow.camera.matrixWorld, 1);
       sun.position.addScaledVector(right, -dx).addScaledVector(up, -dy);
       sun.target.position.addScaledVector(right, -dx).addScaledVector(up, -dy);
+      if (!sun.position.equals(lastSun)) { lastSun.copy(sun.position); shadowDirty = true; }
     },
     updateSky(time, camPos) { skyMat.uniforms.uTime.value = time; sky.position.copy(camPos); },
   } as Look;
