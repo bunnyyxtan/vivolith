@@ -129,6 +129,25 @@ Offline or isolated only (mocked RPC, mocked NEAR AI, or offline browser play):
 | Residents (Lin, Dev) and real NEAR settlement in this journey | NOT PLAYED | Residents only act in on-chain market turns; a connected run writes to the shared testnet market (production) and needs the owner's approval |
 | At 800x600 the trade panel covers the objective card's rent meter | OPEN | Seen in `rentnight-a1-choice-at-pema.jpg`; not checked at 1080p |
 
+## Phase 6: visual truth and trade UI correction (2026-11-14, local `db3c7a1`, offline play)
+
+Nine issues from live screenshots (`docs/evidence/phase6c-before-*`), each traced to its cause; after captures `phase6c-after-*`.
+
+| Issue | Cause | Kind | Fix |
+|---|---|---|---|
+| Lin "delivering" to a shuttered stall | Arin was open but "struggling" (till under rent); that mood lowered a half shutter, so an open stall looked closed. The sale was real and to an open stall | Misleading presentation | No half shutter: only closed stalls roll down; a struggling till shows in its guttering lantern. A delivery to a truly shut stall (reopening deliveries are legitimate) hands over at the stall's open end, never through the shutter |
+| "Open again" board over Pema's sign | Recovering-mood banner | Presentation | Banner removed; the shutter rolling up, the merchant back at work and her existing reopening line carry it |
+| Cluttered trade panel | Every fact rendered by default | UI | Merchant, product and price, one deciding line, quantity with resulting purse, actions; comparisons, reasons, till breakdown and Ask in "Details"; goal line names the mission's merchant and where; haggle states its fixed 3-mango lot (relayer replays 3) |
+| Lassi icon a blank box | CSS gradient placeholder | Presentation | SVG glass of mango lassi with foam and straw; share icon a small stall |
+| Orchard Row stall without a merchant | A stall model in town.glb with a sign and no merchant post, account or economy entry | Decorative, falsely advertised | Shown vacant: shutter down without a Closed card, sign hidden, no goods |
+| A second stall closed with Pema | Mira was closed on chain at the time (her own unpaid rent, debt 48 c); every stall's shutter, goods and board come from its own `state.merchants[id]` | Valid, independent | Its board says Closed and its own panel shows its reopen meter; no change to the binding |
+| Mission card read like a dashboard | Labels (LIVE, NEXT), coloured block, "NEAR charges it" | UI | Title, next action, then "Pema's rent · due ...", "x of y c in her till", "n c short", shelf note |
+| Panel over the mission card | Card grew to about 250 px; panel centred from y = 150 | Layout bug | While a panel is open the card collapses to title plus one stake line; checked 1280x720 and 1920x1080, day and night |
+| Goods visible under a shutter / crates outside a shut stall | Half shutter (above); crate pile ignored open/closed; counter display baked into the stall mesh | Visual truth | Counter display cut out of the stall model (triangles 0.84-1.4 m on the customer half, with its outline hull) and shown only while open with stock; crate pile only while open |
+| "Lin: 1 mango for Arin Okoye. +6 c" | Debug-style string used as speech | Copy | Speech "Here you go, Arin, one fresh mango." plus a separate small tag over the merchant "+1 mango · 6 c paid"; meals "One lassi, please. Lunch time!" with "+3 c" |
+
+Verified offline in the browser: open stocked stall (Tomas), closed stall with stock (Pema, no goods outside, Closed card), vacant stall, reopening at 08:00 (shutter up, goods back), resident delivery to an open stall and to a shut stall (state injected to close her: labelled), trade and haggle panels with the mission visible, panel open at 20:58 (clock holds while trading), 1280x720 and 1920x1080, day and night. Not verified: a live resident delivery to a closed stall on testnet; sold-out display (no stall reached 0 stock in play). 13/13 checks, voice check, typecheck, build.
+
 ## Phase 6: live production acceptance (2026-11-14, authorized)
 
 **Verdict: NO-GO for `55a4121` as deployed; fixes are in local `d8443ba`, not deployed (needs approval).** The connected
