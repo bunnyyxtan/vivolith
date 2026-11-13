@@ -32,6 +32,7 @@ const CSS = /* css */ `
 .hud-obj .prog i { display:block; height:100%; background:var(--acc); border-radius:2px; }
 .hud-obj .title { font-size:17px; font-weight:700; line-height:1.25; margin-top:9px; letter-spacing:-.005em; }
 .hud-obj .desc { margin:5px 0 0; font-size:13.5px; line-height:1.45; color:var(--ink2); }
+.hud-obj .desc .nx { font-size:10.5px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--accd); margin-right:7px; }
 .hud-obj .stake { margin:11px -4px 0; padding:9px 11px 10px; border-radius:10px; background:var(--mints); }
 .hud-obj .stake.short { background:var(--corals); }
 .hud-obj .stake .sh { display:flex; justify-content:space-between; align-items:baseline; gap:10px; }

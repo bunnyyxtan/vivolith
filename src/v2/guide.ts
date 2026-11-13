@@ -3,18 +3,20 @@
 // and a completion test on the economy state. Progress lives in state.flags.tut (index into STEPS).
 import * as THREE from "three";
 import type { EconomyState, MerchantId } from "../economy/state";
-import { MERCHANT_IDS } from "../economy/state";
+import { MERCHANT_IDS, MINUTES_PER_DAY } from "../economy/state";
 import { chainLive, reopenGap, SHARE_PACK } from "../economy/sim";
-import { bidFor, profitRun, quote } from "../economy/pricing";
+import { bidFor, quote } from "../economy/pricing";
 import { el, type Hud } from "./hud";
 import { night, type Clock, type Night } from "./story";
+import { cheapestSeller, NAMES, nextMove, orchardWhen, type Target } from "./advice";
+export type { Target } from "./advice";
 
 export interface Step {
   readonly id: string;
   readonly title: string | ((s: EconomyState) => string);
   readonly detail: (s: EconomyState) => string;
-  /** Who to walk to, if anyone. */
-  readonly target: MerchantId | null | ((s: EconomyState) => MerchantId);
+  /** Who (or where) to walk to, if anyone. */
+  readonly target: Target | null | ((s: EconomyState) => Target);
   readonly done: (s: EconomyState) => boolean;
   /** Shown when the step completes. */
   readonly reward: string;
@@ -47,7 +49,7 @@ export function nightAdvice(s: EconomyState): string {
   const mangoes = (k: number): string => `${k} ${k === 1 ? "mango" : "mangoes"}`;
   const coming = s.shipments.filter((x) => x.to === "pema" && x.good === "mango" && x.status === "transit").reduce((k, x) => k + x.qty, 0);
   if (coming > 0 && p.stock.mango < n + 3) return `Her harbor crates (${mangoes(coming)}) are on their way. Stock alone won't pay rent: she needs ${short} c by 21:00, from shoppers or from you buying ${mangoes(n)} at ${price} c.`;
-  if (p.stock.mango >= n + 3) return `Her shelf has ${mangoes(p.stock.mango)}; what she lacks is coins. Buying ${mangoes(n)} from her at ${price} c puts ${n * price} c in her till. Or trust street shoppers to buy enough before rent at 21:00.`;
+  if (p.stock.mango >= n + 3) return `Her shelf has ${mangoes(p.stock.mango)}; what she lacks is coins. Buying ${mangoes(n)} from her at ${price} c puts ${n * price} c in her till${s.player.coins < n * price ? ` (you have ${s.player.coins} c: buy what you can)` : ""}. Or trust street shoppers to buy enough before rent at 21:00.`;
   return `Her shelf is nearly bare (${mangoes(p.stock.mango)}), so shoppers have little to buy. Bring her mangoes (free at the Orchard in the morning, cheap at Tomas) and buy from her if you can spare coins.`;
 }
 
@@ -79,12 +81,14 @@ export const STEPS: readonly Step[] = [
     done: (s) => f(s, "haggled"), reward: "You can haggle with every merchant now.",
   },
   {
-    id: "invest", title: "Become a stall partner", target: investTarget,
+    id: "invest", title: "Become a stall partner",
+    // short of the pack's price, the marker leads to the trade that earns it
+    target: (s) => (s.player.coins >= SHARE_PACK[investTarget(s)].price ? investTarget(s) : nextMove(s).target ?? investTarget(s)),
     detail: (s) => {
       const t = investTarget(s), { price, per } = SHARE_PACK[t];
       return s.player.coins >= price
         ? `Open the Invest tab at ${NAMES[t]}'s stall and buy a pack of shares (${per} for ${price} c). You earn part of every sale the stall makes from then on.`
-        : `A pack of ${NAMES[t]}'s shares costs ${price} c and you have ${s.player.coins} c. Trade a little more: buy from Tomas, sell to Pema or Arin.`;
+        : `A pack of ${NAMES[t]}'s shares costs ${price} c; you need ${price - s.player.coins} c more. ${nextMove(s).text}`;
     },
     done: (s) => ownsShares(s),
     reward: "You're a partner now: part of every sale that stall makes comes to you.",
@@ -111,15 +115,74 @@ export const STEPS: readonly Step[] = [
   },
 ];
 
+/** A goal's progress on the card: a bar from `have` to `need` and its words ("64 / 100 c"). */
+export interface Meter { readonly have: number; readonly need: number; readonly text: string }
+interface Goal {
+  id: string; title: string;
+  /** One line for the goals list (Town tab). */
+  detail: string;
+  /** The card: the next concrete step from the live market, and where it is. */
+  next: (s: EconomyState) => { text: string; target: Target | null };
+  meter?: (s: EconomyState) => Meter;
+  done: (s: EconomyState) => boolean;
+}
+const owned = (s: EconomyState): MerchantId[] => MERCHANT_IDS.filter((id) => s.player.shares[id] > 0);
+const clockNow = (s: EconomyState): string => {
+  const m = s.minute % MINUTES_PER_DAY;
+  return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(Math.floor(m % 60)).padStart(2, "0")}`;
+};
+/** "Sell to Arin": what to do from what the player carries, can afford, and whether Arin is buying at all. */
+function arinNext(s: EconomyState): { text: string; target: Target | null } {
+  const b = bidFor(s, "arin", "mango"), till = Math.floor(s.merchants.arin.cash);
+  if (!b || till < b.price) return { text: `Arin isn't buying mangoes right now${b ? ` (his till holds ${till} c)` : ""}. Bids change through the day.`, target: null };
+  const held = s.player.inventory.mango;
+  if (held > 0) return { text: `Arin pays ${b.price} c a mango and you carry ${held}. Press E at his tea house and sell.`, target: "arin" };
+  const src = nextMove(s);
+  if (src.target === "orchard") return { text: `First get mangoes: ${src.text} Arin pays ${b.price} c each.`, target: "orchard" };
+  const sell = cheapestSeller(s);
+  if (sell && sell.id !== "arin" && sell.qty >= 1) return { text: `Buy mangoes at ${NAMES[sell.id]} (${sell.price} c), then sell them to Arin for ${b.price} c each.`, target: sell.id };
+  return { text: `Arin pays ${b.price} c a mango, but you have none and can't buy one yet. Free mangoes at the Orchard ${orchardWhen(s)}.`, target: null };
+}
+/** "Shares in two stalls": the cheapest stall you are not yet a partner in, and whether you can pay for a pack. */
+function sharesNext(s: EconomyState): { text: string; target: Target | null } {
+  const mine = owned(s);
+  const pick = MERCHANT_IDS.filter((id) => !mine.includes(id)).sort((a, b) => SHARE_PACK[a].price - SHARE_PACK[b].price)[0];
+  const { price, per } = SHARE_PACK[pick];
+  if (s.player.coins >= price) return { text: `At ${NAMES[pick]}'s stall, press E and open Invest: ${per} shares for ${price} c.`, target: pick };
+  const m = nextMove(s);
+  return { text: `A pack at ${NAMES[pick]}'s costs ${price} c; you need ${price - s.player.coins} c more. ${m.text}`, target: m.target };
+}
+
 /** Goals after the first mission: the first unfinished one is the current objective. */
-/** Where a goal sends the player: a merchant or the Mango Orchard (gold marker in the world and on the map). */
-export type Target = MerchantId | "orchard";
-export const GOALS: readonly { id: string; title: string; detail: string; target?: Target; done: (s: EconomyState) => boolean }[] = [
-  { id: "orchard", title: "Pick free mangoes at the Orchard", detail: "Follow the gold marker to the Mango Orchard sign. Press F there between 06:00 and 11:00 for 3 free mangoes, then sell them where the price is best.", target: "orchard", done: (s) => f(s, "pickedOrchard") },
-  { id: "arin", title: "Supply Arin's tea house", detail: "Arin buys mangoes for his lassi. Buy from Tomas or Mira and sell to him.", done: (s) => f(s, "soldArin") },
-  { id: "two", title: "Own shares in two stalls", detail: "Every partner earns from that stall's daily sales.", done: (s) => MERCHANT_IDS.filter((id) => s.player.shares[id] > 0).length >= 2 },
-  { id: "hundred", title: "Reach 100 coins", detail: "Buy where goods are cheap, sell where they are missing.", done: (s) => s.player.coins >= 100 },
-  { id: "open", title: "Keep all four stalls open for a week", detail: "Merchants who miss rent close. Deliveries and shares keep them going.", done: (s) => f(s, "allOpenWeek") },
+export const GOALS: readonly Goal[] = [
+  {
+    id: "orchard", title: "Pick free mangoes at the Orchard", detail: "Press F at the Mango Orchard crate, 06:00 to 11:00: 3 free mangoes a day.",
+    next: (s) => s.flags.orchardReady === true
+      ? { text: "Follow the gold marker to the Mango Orchard sign and press F at the crate: 3 free mangoes until 11:00.", target: "orchard" }
+      : { text: `The pickers work 06:00 to 11:00 (now ${clockNow(s)}): come back ${orchardWhen(s)}. Meanwhile: ${nextMove(s).text}`, target: nextMove(s).target ?? "orchard" },
+    done: (s) => f(s, "pickedOrchard"),
+  },
+  { id: "arin", title: "Sell mangoes to Arin's tea house", detail: "Arin buys mangoes for his lassi.", next: arinNext, done: (s) => f(s, "soldArin") },
+  {
+    id: "two", title: "Own shares in two stalls", detail: "Partners earn part of every sale a stall makes.", next: sharesNext,
+    meter: (s) => ({ have: owned(s).length, need: 2, text: `${owned(s).length} / 2 stalls` }),
+    done: (s) => owned(s).length >= 2,
+  },
+  {
+    id: "hundred", title: "Reach 100 coins", detail: "Trade mangoes from the stall that sells cheap to the one that pays most.",
+    next: (s) => { const m = nextMove(s); return { text: m.text, target: m.target }; },
+    meter: (s) => ({ have: Math.min(100, s.player.coins), need: 100, text: `${s.player.coins} / 100 c` }),
+    done: (s) => s.player.coins >= 100,
+  },
+  {
+    id: "open", title: "Keep all four stalls open for a week", detail: "Merchants who miss rent close. Deliveries and shares keep them going.",
+    next: (s) => {
+      const weak = [...MERCHANT_IDS].sort((a, b) => s.merchants[a].cash / s.merchants[a].rent - s.merchants[b].cash / s.merchants[b].rent)[0], w = s.merchants[weak];
+      return { text: `Press T to run a week and see who misses rent. Closest to the edge: ${NAMES[weak]}, ${Math.floor(w.cash)} c for ${w.rent} c rent. Buying from that stall fills its till.`, target: weak };
+    },
+    meter: (s) => { const n = MERCHANT_IDS.filter((id) => s.merchants[id].status === "open").length; return { have: n, need: 4, text: `${n} / 4 open` }; },
+    done: (s) => f(s, "allOpenWeek"),
+  },
 ];
 
 export const stepIndex = (s: EconomyState): number => Number(s.flags.tut ?? 0);
@@ -132,18 +195,8 @@ export const unlocked = (s: EconomyState, what: "haggle" | "invest" | "week" | "
 
 /** The standing objective once every goal is done: carry mangoes from the cheap stall to the stall that pays most. */
 function opportunity(s: EconomyState): Objective | null {
-  if (s.player.inventory.mango === 0 && s.flags.orchardReady === true) return { title: "The Orchard is picking", target: "orchard", label: "Opportunity",
-    detail: "Today's share of mangoes is waiting in the crate by the Orchard sign, free until 11:00. Sell them to whoever bids best." };
-  const run = profitRun(s);
-  if (!run) return null;
-  const held = s.player.inventory.mango, gain = run.bid - run.ask;
-  if (held > 0) {
-    const sell = (() => { let best: { id: MerchantId; bid: number } | null = null; for (const id of MERCHANT_IDS) { const b = s.merchants[id].status === "open" ? bidFor(s, id, "mango") : null; if (b && (!best || b.price > best.bid)) best = { id, bid: b.price }; } return best; })();
-    if (sell) return { title: `Sell your ${held} ${held === 1 ? "mango" : "mangoes"} to ${NAMES[sell.id]}`, target: sell.id, label: "Opportunity",
-      detail: `${NAMES[sell.id]} pays ${sell.bid} c each right now. Press E at the stall and sell: that is ${held * sell.bid} c.` };
-  }
-  return { title: `Profit run: ${NAMES[run.buy]} to ${NAMES[run.sell]}`, target: run.buy, label: "Opportunity",
-    detail: `${NAMES[run.buy]} sells mangoes at ${run.ask} c and ${NAMES[run.sell]} pays ${run.bid} c: about ${gain} c per mango. Buy what you can carry (you have ${s.player.coins} c), then walk them over.` };
+  const m = nextMove(s);
+  return m.target ? { title: m.title, detail: m.text, target: m.target, label: "Opportunity" } : null; // "wait" is no opportunity
 }
 
 export interface Objective {
@@ -152,6 +205,8 @@ export interface Objective {
   stake?: Night;
   /** Step i of n, for the first-day progress bar. */
   progress?: readonly [number, number];
+  /** A goal's own progress (coins, stalls), drawn as the bar instead of steps. */
+  meter?: Meter;
 }
 const live = (n: Night): Night | undefined => (n.phase === "waiting" || n.phase === "charging" ? n : undefined);
 
@@ -163,7 +218,6 @@ export interface Guide {
   current(s: EconomyState): Objective | null;
 }
 
-const NAMES: Record<MerchantId, string> = { pema: "Pema", tomas: "Tomas", mira: "Mira", arin: "Arin" };
 
 /** Pema's night (story.ts) as an objective: its stake while it runs, then "go and hear her" once it has a result. */
 function nightObjective(s: EconomyState, c: Clock): Objective | null {
@@ -191,10 +245,16 @@ function renderCardInto(card: HTMLElement, c: Objective): void {
   card.className = `hud hud-obj tone-${TONE[c.label] ?? "main"}`;
   const head = el("div", "oh");
   head.append(el("span", "sec", c.label));
-  if (c.progress) head.append(el("span", "step", `${c.progress[0]} / ${c.progress[1]}`));
+  const done = c.meter ? [c.meter.have, c.meter.need] : c.progress;
+  if (done) head.append(el("span", "step", c.meter ? c.meter.text : `Step ${done[0]} of ${done[1]}`));
   card.append(head);
-  if (c.progress) { const bar = el("div", "prog"), fill = el("i"); fill.style.width = `${(c.progress[0] / c.progress[1]) * 100}%`; bar.append(fill); card.append(bar); }
-  card.append(el("div", "title", c.title), el("p", "desc", c.detail));
+  if (done) { const bar = el("div", "prog"), fill = el("i"); fill.style.width = `${Math.min(100, (done[0] / Math.max(1, done[1])) * 100)}%`; bar.append(fill); card.append(bar); }
+  card.append(el("div", "title", c.title));
+  // the next action, set apart from the mission title so it reads as "do this now"
+  const next = el("p", "desc");
+  if (c.label === "First day" || c.label === "Goal") next.append(el("b", "nx", "Next"));
+  next.append(document.createTextNode(c.detail));
+  card.append(next);
   const n = c.stake;
   if (!n) return;
   const short = n.rent - n.till;
@@ -234,7 +294,9 @@ export function createGuide(hud: Hud, clock: () => Clock): Guide {
       };
     }
     const g = GOALS.find((x) => !x.done(s));
-    return g ? { title: g.title, detail: g.detail, target: g.target ?? null, label: "Goal" } : opportunity(s);
+    if (!g) return opportunity(s);
+    const n = g.next(s);
+    return { title: g.title, detail: n.text, target: n.target, label: "Goal", meter: g.meter?.(s) };
   };
   return {
     current,
@@ -252,7 +314,7 @@ export function createGuide(hud: Hud, clock: () => Clock): Guide {
     draw(s, camera, targetPos, player) {
       const c = current(s);
       if (!c) { hud.obj.style.display = "none"; hud.mark.style.display = "none"; return; }
-      const key = `${c.label}|${c.title}|${c.detail}|${c.progress?.join("/") ?? ""}|${c.stake ? `${c.stake.till}/${c.stake.rent}/${c.stake.when}` : ""}`;
+      const key = `${c.label}|${c.title}|${c.detail}|${c.progress?.join("/") ?? ""}|${c.meter?.text ?? ""}|${c.stake ? `${c.stake.till}/${c.stake.rent}/${c.stake.when}` : ""}`;
       if (key !== lastKey) { lastKey = key; renderCard(c); }
       hud.obj.style.display = "block";
       const p = c.target ? targetPos(c.target) : null;

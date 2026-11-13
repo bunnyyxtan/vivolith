@@ -354,6 +354,21 @@ async function loadTown(colliders: Box[], scene: THREE.Scene): Promise<THREE.Obj
       }
       uv.needsUpdate = true;
     }
+    // The roundabout island tree in front of the NEAR AI Lab stands on the lab's entrance axis and hid its wordmark from
+    // the street; the island keeps its shrubs. All town trees are one merged mesh, so the cut is by triangle centroid
+    // (360 bark + 252 leaf triangles; no other trunk within 16 m).
+    const drop = { x: 58.13, z: 70.06, r: 4.5 };
+    gltf.scene.getObjectByName("TOWN_trees")?.children.forEach((t) => {
+      if (!(t instanceof THREE.Mesh) || !t.geometry.index) return;
+      t.updateWorldMatrix(true, false);
+      const g = t.geometry as THREE.BufferGeometry, ix = g.index!, pos = g.attributes.position, a = new THREE.Vector3(), keep: number[] = [];
+      for (let i = 0; i < ix.count; i += 3) {
+        let cx = 0, cz = 0;
+        for (let k = 0; k < 3; k++) { a.fromBufferAttribute(pos, ix.getX(i + k)).applyMatrix4(t.matrixWorld); cx += a.x / 3; cz += a.z / 3; }
+        if (Math.hypot(cx - drop.x, cz - drop.z) >= drop.r) keep.push(ix.getX(i), ix.getX(i + 1), ix.getX(i + 2));
+      }
+      g.setIndex(keep);
+    });
     gltf.scene.traverse((o) => { // street lamps and lit windows follow the time of day (dim at noon)
       if (o instanceof THREE.Mesh) for (const mat of Array.isArray(o.material) ? o.material : [o.material]) trackGlow(mat);
     });

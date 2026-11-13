@@ -559,7 +559,10 @@ def build_ai_lab():
     box(G, "white", -5.7, -8.64, ZV1[0], 13.7, -8.5, 9.9, 0.05)
     box(G, "led", -5.7, -8.68, 9.82, 13.7, -8.64, 9.9)
     box(G, "led", -5.7, -8.68, ZV1[0], 13.7, -8.64, ZV1[0] + 0.08)
-    svg_geo(G, "nearai-primary-color.svg", {"blue": "led", "black": "ink", "white": "white", "orange": "gold"}, (4.0, -8.71, 8.75), 8.2, 0.14)
+    # Wordmark on the entrance axis (x 0), not the band's middle (x 4): in town the band's right end (x > 7, behind
+    # the next block on the street) is hidden, so a sign centred at x 4 lost "AI" behind it. x 0 is also the middle of
+    # the band's visible part (-5.7 .. ~7).
+    svg_geo(G, "nearai-primary-color.svg", {"blue": "led", "black": "ink", "white": "white", "orange": "gold"}, (0.0, -8.71, 8.75), 8.2, 0.14)
     slab(G, s1, 1.8, *ZS1)
     for x, y in ((-10.4, -2.3), (-10.4, 8.4)):  # pilotis under the overhanging upper volume
         cyl(G, "white", x, y, ZS0[1], ZS1[0], 0.3, 14)
