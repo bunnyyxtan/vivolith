@@ -5,7 +5,7 @@ explicit approval before it runs: each one writes to testnet, production Redis o
 credits. Record evidence in `docs/evidence/` and the result in PROGRESS.md.
 
 Production today: `c2ace0b`. Local commits not deployed: `86cf4be` (Lin grounding), `16ed7a5` (relayer bundle),
-`f781fb2` (Rent Night journey), the Phase 3 voice commit, plus docs.
+`f781fb2` (Rent Night journey), the Phase 3 voice commits (`30e1fff`, live voice and hardening), plus docs.
 
 ## 1. Connected playthrough (testnet)
 
@@ -32,20 +32,28 @@ Production today: `c2ace0b`. Local commits not deployed: `86cf4be` (Lin groundin
 
 ## 4. Live voice (Phase 3; paid ElevenLabs and NEAR AI calls)
 
-- [ ] `node --env-file=.env.local scripts/audio/generate.ts --account` (free) to see credits, then generate the 30 missing
-      static lines (`--run voice`, about $0.20 at published prices). The 4 `sdf58f4d1` ("We're open again") jobs duplicate
-      the recorded `reopen.mp3` and can be skipped.
-- [ ] One dynamic line per economic character through `/api/near/voice` (Pema, Tomas, Mira, Arin, Lin, Dev): listen for
-      timbre continuity with the recorded opener, Arin's delivery (no breathiness), Lin and Dev for the first time.
-- [ ] Moods heard live: Pema worried, relieved, down, grateful; soften a tag in `MOOD_TAG` if one is exaggerated.
-- [ ] Latency with the pane visible: talk round trip, then Ask to first audio (target about 2 s); record in PROGRESS.md.
-- [ ] Confirm `alignment` arrives and lights words in step with the voice (with-timestamps on `eleven_v4`).
-- [ ] Production env: `ELEVENLABS_API_KEY` set; `VIVOLITH_VOICE_MOCK` unset.
+Done locally on 2026-11-13 (36 generations, 1459 credits, see PROGRESS.md "Live voice pass"): six live voices, 26
+recordings, alignment, in-game first audio 1.70 s, streaming comparison, route hardening. Remaining:
+
+- [ ] Human listen (no credits): `docs/evidence/phase3-voice/*.mp3` (Arin's delivery, Lin and Dev for the first time,
+      continuity with the recordings) and the two lines Whisper misheard: `public/audio/voice/pema/s583444d9.mp3`
+      ("Thirty crates!") and `public/audio/voice/engineer/s71b0f56e.mp3` ("Your call."). Re-take only what sounds wrong
+      (`rm` the file, then `generate.ts --run voice --one <file>`).
+- [ ] Generate the one missing recording, Pema's first-day greeting (`generate.ts --run voice`, 93 characters, about
+      45 credits). Until then every new player's first conversation spends one server generation.
+- [ ] Moods heard live: Pema relieved, down, grateful (only worried was generated); soften a tag in `MOOD_TAG` if one
+      is exaggerated. Rent Night kept and closed outcomes and a haggle reaction in the real voice.
+- [ ] Live talk route (NEAR AI, paid) plus voice: Ask to first audio with the pane visible (expected about 1.5-1.7 s
+      talk + 1.7 s first sentence); confirm the `speech` tokens arrive and an AI answer outside the game's vocabulary is
+      still voiced.
+- [ ] Production env: `ELEVENLABS_API_KEY` set; `VIVOLITH_VOICE_MOCK` unset; `NEAR_MERCHANT_SECRET` set (also the
+      speech-token secret); Upstash Redis configured, otherwise the shared `voice:chars` budget is per instance only.
+- [ ] On the deployed site: an arbitrary line to `/api/near/voice` answers 403 "not a line of this game".
 
 ## 5. Production release
 
 - [ ] Deploy from a clean worktree (`npm run deploy`; uncommitted audio not shipped); page meta matches the commit.
-- [ ] 12/12 checks, client typecheck, build; API bundle built from the same tree.
+- [ ] 13/13 checks, client typecheck, build; API bundle built from the same tree.
 - [ ] Status route: driver, agents, Redis; `market-turn` 401 without the secret.
 - [ ] Browser pass on vivolith.world: welcome, guest, first trade, Rent Night, report. Frame time measured with the
       pane visible. Known: `car_van.glb` 404, trade panel overlaps the objective card at 800x600.

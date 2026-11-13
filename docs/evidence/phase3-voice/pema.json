@@ -1,0 +1,31 @@
+{
+ "who": "Pema",
+ "speaker": "pema",
+ "mood": "worried",
+ "text": "Rent is due tonight and my till holds only 18 coins. Every mango you buy helps.",
+ "ms": 2439,
+ "bytes": 53123,
+ "seconds": 6.56,
+ "words": 16,
+ "timed": 16,
+ "firstWord": 0.16,
+ "lastWord": 6.12,
+ "starts": [
+  0.16,
+  0.48,
+  0.76,
+  1.04,
+  1.76,
+  1.92,
+  2.12,
+  2.56,
+  2.88,
+  3.12,
+  4.08,
+  4.64,
+  5.147,
+  5.44,
+  5.76,
+  6.12
+ ]
+}
