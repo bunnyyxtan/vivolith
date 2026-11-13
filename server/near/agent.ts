@@ -46,7 +46,8 @@ export function agentConfig(env: Record<string, string | undefined>): AgentConfi
     url: (env.NEAR_AI_SYSTEMONE_URL ?? "").trim() || DEFAULT_URL,
     model: (env.NEAR_AI_DECISION_MODEL ?? "").trim() || DEFAULT_MODEL,
     timeoutMs: 6000,
-    retries: 1,
+    // a retry is a second paid request: a controlled run sets NEAR_AI_DECISION_RETRIES=0
+    retries: (env.NEAR_AI_DECISION_RETRIES ?? "").trim() === "0" ? 0 : 1,
   };
 }
 

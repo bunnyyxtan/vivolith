@@ -13546,7 +13546,7 @@ function agentConfig(env) {
 		url: (env.NEAR_AI_SYSTEMONE_URL ?? "").trim() || "https://cloud-api.near.ai/v1/systemone",
 		model: (env.NEAR_AI_DECISION_MODEL ?? "").trim() || "typesafe/jev-1.13",
 		timeoutMs: 6e3,
-		retries: 1
+		retries: (env.NEAR_AI_DECISION_RETRIES ?? "").trim() === "0" ? 0 : 1
 	};
 }
 /** The one price each merchant may move, using only orders the contract already supports (`bid` / `list`). */
@@ -15454,7 +15454,10 @@ async function residentTurn(cfg, provider, relayer, secret, day, log, txs, agent
 /** One market turn. `trusted` = called by the scheduler route with its secret: only such turns may ask NEAR AI (and
 *  only within the daily budget); browser-driven turns replay a decision already made today, else use the rule. With
 *  NEAR_MARKET_DRIVER=scheduler, browser requests do not move the market at all. */
-async function tick(cfg, env, trusted = false) {
+/** `scope: "agents"` (scheduler only): a controlled turn that sends nothing but the enabled agents' own lever orders,
+*  and only when a decision exists; no settlement, rent, Guild, other orders, merchant trades, residents or operator. */
+async function tick(cfg, env, trusted = false, scope = "market") {
+	const full = scope === "market";
 	const ops = opsConfig(env);
 	if (ops.driver === "scheduler" && !trusted) return json(200, {
 		status: "scheduled",
@@ -15514,7 +15517,8 @@ async function tick(cfg, env, trusted = false) {
 	const signerOf = (id) => new Account(`${id}.${cfg.relayerId}`, provider, new KeyPairSigner(merchantKey(id, secret)));
 	const log = [];
 	const txs = [];
-	if (MERCHANTS.some((id) => Number(st.flags[`lastSettled.${id}`]) < day - 1) && await hit(cfg, `settled:${day - 1}`, 1, Math.ceil(600) * 2)) {
+	const unsettled = MERCHANTS.some((id) => Number(st.flags[`lastSettled.${id}`]) < day - 1);
+	if (full && unsettled && await hit(cfg, `settled:${day - 1}`, 1, Math.ceil(600) * 2)) {
 		const r = outcome(await relayer.signAndSendTransaction({
 			receiverId: cfg.contractId,
 			actions: MERCHANTS.map((merchant) => actions.functionCall("settle_day", {
@@ -15529,7 +15533,7 @@ async function tick(cfg, env, trusted = false) {
 	const rentCalls = [];
 	for (const id of MERCHANTS) {
 		const m = st.merchants[id];
-		if (m.status !== "open" || day % m.rentEveryDays !== 0 || Number(st.flags[`lastRent.${id}`]) >= day) continue;
+		if (!full || m.status !== "open" || day % m.rentEveryDays !== 0 || Number(st.flags[`lastRent.${id}`]) >= day) continue;
 		if (!await hit(cfg, `rent:${id}:${day}`, 1, Math.ceil(600) * 2)) continue;
 		const need = closingNeed(st, id);
 		rentCalls.push(actions.functionCall("charge_rent", {
@@ -15559,7 +15563,7 @@ async function tick(cfg, env, trusted = false) {
 			st.merchants = (await chainEconomy(provider, cfg)).merchants;
 		}
 	}
-	const guildCalls = await guildTurn(cfg, provider, st, day, log);
+	const guildCalls = full ? await guildTurn(cfg, provider, st, day, log) : [];
 	if (guildCalls.length) {
 		const r = outcome(await relayer.signAndSendTransaction({
 			receiverId: cfg.contractId,
@@ -15573,6 +15577,7 @@ async function tick(cfg, env, trusted = false) {
 		}
 	}
 	const repriced = await Promise.all(MERCHANTS.map(async (id) => {
+		if (!full && !(LEVERS[id] && agentCfg.enabled.has(id))) return [];
 		const m = st.merchants[id];
 		const calls = [];
 		const want = (side, token, qty, price) => {
@@ -15613,7 +15618,9 @@ async function tick(cfg, env, trusted = false) {
 			if (agent) log.push(`${id} ${agent.source === "ai" ? "NEAR AI" : "rule"} decision: ${agent.action} ${lever.good} ${lever.side} ${agent.basePrice} -> ${agent.price} c${agent.fallbackReason ? ` (${agent.fallbackReason})` : ""}`);
 		}
 		const isLever = (side, good) => lever !== void 0 && lever.side === side && lever.good === good;
+		const skip = (side, good) => !full && (!isLever(side, good) || agent === null);
 		for (const good of m.sells) {
+			if (skip("ask", good)) continue;
 			if (skipLever && isLever("ask", good)) continue;
 			want("ask", good, m.status === "open" ? m.stock[good] : 0, isLever("ask", good) && leverPrice !== null ? leverPrice : quote(st, id, good, false).price);
 		}
@@ -15621,6 +15628,7 @@ async function tick(cfg, env, trusted = false) {
 			const b = bidFor(st, id, good);
 			const price = isLever("bid", good) && leverPrice !== null ? leverPrice : b?.price ?? 1;
 			if (skipLever && isLever("bid", good)) continue;
+			if (skip("bid", good)) continue;
 			want("bid", good, b ? Math.min(b.qty, Math.floor(m.cash / Math.max(1, price))) : 0, price);
 		}
 		const hashes = [];
@@ -15650,7 +15658,7 @@ async function tick(cfg, env, trusted = false) {
 		return hashes;
 	}));
 	txs.push(...repriced.flat());
-	for (const t of planMerchantTrades(st)) {
+	for (const t of full ? planMerchantTrades(st) : []) {
 		const r = outcome(await signerOf(t.buyer).signAndSendTransaction({
 			receiverId: cfg.contractId,
 			actions: [actions.functionCall("buy", {
@@ -15664,9 +15672,9 @@ async function tick(cfg, env, trusted = false) {
 		txs.push(r.txHash);
 		log.push(`${t.buyer} bought ${t.qty} ${t.good} from ${t.seller} at ${t.price} c (${t.reason})${r.ok ? "" : ` FAILED: ${r.error}`}`);
 	}
-	const ate = await residentTurn(cfg, provider, relayer, secret, day, log, txs, agentCfg, agentStore, true, turn);
+	const ate = full ? await residentTurn(cfg, provider, relayer, secret, day, log, txs, agentCfg, agentStore, true, turn) : {};
 	const op = [];
-	for (const id of MERCHANTS) {
+	for (const id of full ? MERCHANTS : []) {
 		const m = st.merchants[id];
 		if (m.status !== "open") continue;
 		for (const good of m.sells) {
@@ -15682,7 +15690,7 @@ async function tick(cfg, env, trusted = false) {
 	}
 	const tomas = st.merchants.tomas;
 	const nearlyOut = tomas.stock.mango < 6;
-	const harborQty = tomas.status === "open" && (nearlyOut || tomas.stock.mango < tomas.target.mango) && (nearlyOut || await hit(cfg, `harbor:${day}`, 1, Math.ceil(600))) ? Math.min(Math.round(tomas.target.mango * 1.4) - tomas.stock.mango, Math.floor(tomas.cash / HARBOR_COST)) : 0;
+	const harborQty = full && tomas.status === "open" && (nearlyOut || tomas.stock.mango < tomas.target.mango) && (nearlyOut || await hit(cfg, `harbor:${day}`, 1, Math.ceil(600))) ? Math.min(Math.round(tomas.target.mango * 1.4) - tomas.stock.mango, Math.floor(tomas.cash / HARBOR_COST)) : 0;
 	if (harborQty > 0) {
 		op.push(actions.functionCall("operator_burn", {
 			account_id: `tomas.${cfg.relayerId}`,
@@ -15699,7 +15707,7 @@ async function tick(cfg, env, trusted = false) {
 		log.push(`harbor delivered ${harborQty} mangoes to tomas for ${harborQty * HARBOR_COST} c`);
 	}
 	const arin = st.merchants.arin;
-	const batches = Math.min(arin.stock.mango, Math.max(0, Math.ceil((8 - arin.stock.lassi) / 4)));
+	const batches = !full ? 0 : Math.min(arin.stock.mango, Math.max(0, Math.ceil((8 - arin.stock.lassi) / 4)));
 	if (batches > 0) {
 		op.push(actions.functionCall("operator_burn", {
 			account_id: `arin.${cfg.relayerId}`,
@@ -15902,7 +15910,7 @@ async function handle(route, req, env) {
 				status: "unconfigured",
 				message: "NEAR relayer not configured"
 			});
-			return await tick(cfg, env, true);
+			return await tick(cfg, env, true, new URL(req.url).searchParams.get("scope") === "agents" ? "agents" : "market");
 		}
 		if (route === "decisions" && req.method === "GET") {
 			const who = new URL(req.url).searchParams.get("merchant") ?? "";
