@@ -119,6 +119,15 @@ async function preflight(): Promise<Pre> {
     productionLastTurn: prod, enabledAgents: [...ai.enabled], decisionModel: ai.model, retries: ai.retries,
     pema: { status: p.status, till: p.cash, mangoes: p.stock.mango, normalStock: p.target.mango, rent: p.rent, rentEveryDays: p.rentEveryDays, rentDueToday: day % p.rentEveryDays === 0, reopensAfterMangoes: st.flags["reopenNeed.pema"] ?? null, guildDebt: st.flags["debt.pema"] ?? null, lastRentDay: st.flags["lastRent.pema"] ?? null },
     pemaPostedMangoBid: posted ? { price: Number(posted.price), qty: Number(posted.qty) } : null,
+    // reopening by one player sale: the relayer signs a sale only inside dealBounds(bid) and only if the till covers it
+    reopenSale: p.status === "open" ? "not needed" : ((): unknown => {
+      const bid = b?.price ?? null;
+      if (bid === null) return { bid: null, feasibleUnit: null, why: "Pema has no mango bid while closed" };
+      const min = Math.floor(bid * 0.55), unit = Math.min(bid, Math.floor(p.cash));
+      return { bid, allowedUnit: { min, max: bid }, till: p.cash, feasibleUnit: unit >= Math.max(1, min) ? unit : null };
+    })(),
+    stalls: Object.fromEntries((["pema", "tomas", "mira", "arin"] as const).map((id) => [id, { status: st.merchants[id].status, till: st.merchants[id].cash, mangoes: st.merchants[id].stock.mango, guildDebt: st.flags[`debt.${id}`] ?? null }])),
+    guildFundCoins: await (async () => { try { const g = await view<string>("get_guild", {}); return Number((await view<[string, string][]>("get_balances", { account_id: g })).find(([t]) => t === "coin")?.[1] ?? 0); } catch { return null; } })(),
     band, lever: LEVERS.pema,
     // what each permitted choice would post; the turn sends a bid only if it differs from what is posted
     outcomes: band ? Object.fromEntries((["lower", "hold", "raise"] as const).map((c) => {
