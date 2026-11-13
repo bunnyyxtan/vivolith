@@ -9,6 +9,10 @@ import type { Box } from "../physics/collision";
 import { loadBrandAssets, makeSignTexture, type SignLine } from "./brand";
 
 const PROP = /^PROP_(.+)__(.+)$/;
+/** Slot assets town.glb names but no GLB exists for: shown with a model we have (the two dock vans were empty, 404),
+ *  fitted to the slot's collider: the pickup is 5.8 m, the van box 5.2 m nose-in at the dock wall (z scale, then shift
+ *  back so the nose stops at the wall face). */
+const STAND_IN: Record<string, { asset: string; sz: number; dz: number }> = { car_van: { asset: "ev_pickup", sz: 0.92, dz: -0.15 } };
 const OUTLINE = 0.02; // metres: props sit further from the camera than characters
 
 /** Readable lettering for the blank boards Tripo left on the models (fictional NEAR City businesses). */
@@ -90,10 +94,11 @@ async function loadTemplate(asset: string): Promise<THREE.Object3D> {
 /** Clones each prop under its empty. Missing GLBs leave the slot empty and are reported once. */
 export async function installProps(town: THREE.Object3D, colliders?: Box[]): Promise<number> {
   void installLandmarks(town, colliders); // NEAR AI Lab + Intents Exchange on their LANDMARK_ empties
-  const slots: { node: THREE.Object3D; asset: string; id: string }[] = [];
+  const slots: { node: THREE.Object3D; asset: string; id: string; fit?: { sz: number; dz: number } }[] = [];
   town.traverse((o) => {
     const m = PROP.exec(o.name);
-    if (m) slots.push({ node: o, asset: m[1], id: m[2] });
+    const sub = m ? STAND_IN[m[1]] : undefined;
+    if (m) slots.push({ node: o, asset: sub?.asset ?? m[1], id: m[2], fit: sub });
   });
   const brand = loadBrandAssets().catch((e: unknown) => console.warn("brand assets", e));
   const templates = new Map<string, Promise<THREE.Object3D | null>>();
@@ -113,10 +118,11 @@ export async function installProps(town: THREE.Object3D, colliders?: Box[]): Pro
     const sign = placard(o.name.slice("PLACARD_".length));
     if (sign) { o.add(sign); placed++; }
   }
-  await Promise.all(slots.map(async ({ node, asset, id }) => {
+  await Promise.all(slots.map(async ({ node, asset, id, fit }) => {
     const t = await templates.get(asset);
     if (!t) return;
     const inst = t.clone(true);
+    if (fit) { inst.scale.z *= fit.sz; inst.position.z += fit.dz; }
     const sign = decor(asset, id);
     if (sign) inst.add(sign);
     node.add(inst);

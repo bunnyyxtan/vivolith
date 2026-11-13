@@ -23,7 +23,10 @@ interface Car extends Rig {
   /** Axle positions (x, z): the leading one follows the road, the trailing one is dragged behind it. */
   fx: number; fz: number; rx: number; rz: number; steer: number; pv: number; pitch: number; roll: number;
   mode: number; poly: Poly; seg: number; s: number; dir: number; v: number;
-  lane: number; next: number; claim: number; spot: number; wantSpot: number; timer: number; stuck: number;
+  /** next2: the lane after `next` when `next` is a short stub (chosen early so the front axle can run through it). */
+  lane: number; next: number; next2: number; claim: number;
+  /** Leading-axle offset from its path, eased to zero while driving (keepAxle). */
+  ox: number; oz: number; spot: number; wantSpot: number; timer: number; stuck: number;
   x: number; z: number; yaw: number; hx: number; hz: number; spin: number; despawn: boolean;
   /** Current acceleration (m/s^2), rate-limited by JERK_UP / JERK_DOWN. */
   acc: number;
@@ -43,6 +46,10 @@ const CAR_REFLECT = 0.5, CAR_COAT = 0.35;
 const MAX_STEER = 0.6, PITCH_PER_ACCEL = 0.006, ROLL_PER_LATERAL = 0.004, MAX_TILT = 0.035;
 const PROBES = [1.5, 3, 4.5, 6, 7.5, 9, 10.5, 12, 13.5, 15, 16.5, 18, 19.5];
 const MAX_PARKED = 2, PARK_CHANCE = 0.5, RING_UTURN = 0.4, MIN_SPAWN_GAP = 18, MIN_SPAWN_PLAYER = 30;
+/** Lanes shorter than this (roads.json has 0.47 m stubs between a U-turn ring and a junction) are looked through. */
+const SHORT_LANE = 6;
+/** Metres driven over which a leading axle that starts off its new path (after reversing out of a bay) eases onto it. */
+const OFFSET_FADE_M = 1.5;
 
 /** Gives this car its own copy of the paint material with the baked colour turned by `deg` around the grey axis. */
 function repaint(obj: THREE.Object3D, deg: number): void {
@@ -286,19 +293,25 @@ export async function installTraffic(scene: THREE.Scene, colliders: Box[], playe
 
   const sampleAhead = (c: Car, d: number, out: number[]): void => {
     const rem = c.dir > 0 ? c.poly.len - c.s : c.s;
-    if (d > rem && c.dir > 0 && c.next >= 0) sample(lanes[c.next].poly, d - rem, 0, out);
-    else sample(c.poly, c.s + c.dir * d, c.seg, out);
+    if (d > rem && c.dir > 0 && c.next >= 0) {
+      const N = lanes[c.next].poly, over = d - rem - N.len;
+      if (over > 0 && c.next2 >= 0) sample(lanes[c.next2].poly, over, 0, out);
+      else sample(N, d - rem, 0, out);
+    } else sample(c.poly, c.s + c.dir * d, c.seg, out);
   };
 
-  const pickNext = (c: Car): void => {
-    const L = lanes[c.lane];
-    c.next = L.next.length ? L.next[Math.floor(Math.random() * L.next.length)] : -1;
+  const pick = (L: Lane): number => (L.next.length ? L.next[Math.floor(Math.random() * L.next.length)] : -1);
+  const pickNext = (c: Car, forced: number): void => {
+    c.next = forced >= 0 ? forced : pick(lanes[c.lane]);
+    c.next2 = c.next >= 0 && lanes[c.next].poly.len < SHORT_LANE ? pick(lanes[c.next]) : -1;
   };
 
   const enterLane = (c: Car, li: number, s: number): void => {
     const L = lanes[li];
+    const forced = li === c.next && c.mode === DRIVE ? c.next2 : -1; // keep the way already chosen through a stub
     c.mode = DRIVE; c.dir = 1; c.lane = li; c.poly = L.poly; c.s = s; c.seg = 0; c.spot = -1; c.wantSpot = -1;
-    pickNext(c);
+    pickNext(c, forced);
+    keepAxle(c);
     if (L.ring) c.despawn = Math.random() > RING_UTURN;
     if (!L.turn && !L.ring && cars.reduce((n, o) => n + (o.mode === PARK_IN || o.mode === PARKED || o.mode === LEAVE ? 1 : 0), 0) < MAX_PARKED && (Math.random() < PARK_CHANCE || spots.some((sp) => sp.lane === li && sp.reverseOut && !sp.busy))) {
       const free = spots.flatMap((sp, i) => (!sp.busy && sp.lane === li && sp.sA > s - 0.6 && !blockedSpot(sp) ? [i] : []));
@@ -318,15 +331,18 @@ export async function installTraffic(scene: THREE.Scene, colliders: Box[], playe
       c.fx = tmp[0] + tmp[2] * half; c.fz = tmp[1] + tmp[3] * half;
       c.rx = tmp[0] - tmp[2] * half; c.rz = tmp[1] - tmp[3] * half;
       if (back > 0) { c.rx = tmp2[0]; c.rz = tmp2[1]; } else { c.fx = tmp2[0]; c.fz = tmp2[1]; }
+      c.ox = 0; c.oz = 0;
     } else if (c.dir > 0) {
-      c.fx = tmp2[0]; c.fz = tmp2[1];
+      c.fx = tmp2[0] + c.ox; c.fz = tmp2[1] + c.oz;
       const dx = c.fx - c.rx, dz = c.fz - c.rz, d = Math.hypot(dx, dz) || 1;
       c.rx = c.fx - (dx / d) * c.wb; c.rz = c.fz - (dz / d) * c.wb;
     } else {
-      c.rx = tmp2[0]; c.rz = tmp2[1];
+      c.rx = tmp2[0] + c.ox; c.rz = tmp2[1] + c.oz;
       const dx = c.fx - c.rx, dz = c.fz - c.rz, d = Math.hypot(dx, dz) || 1;
       c.fx = c.rx + (dx / d) * c.wb; c.fz = c.rz + (dz / d) * c.wb;
     }
+    // the leading axle's offset from its path (see keepAxle) shrinks with distance driven, never while standing
+    const fade = Math.exp(-(c.v * dt) / OFFSET_FADE_M); c.ox *= fade; c.oz *= fade;
     const hl = Math.hypot(c.fx - c.rx, c.fz - c.rz) || 1;
     c.hx = (c.fx - c.rx) / hl; c.hz = (c.fz - c.rz) / hl;
     c.yaw = Math.atan2(c.hx, c.hz);
@@ -347,6 +363,14 @@ export async function installTraffic(scene: THREE.Scene, colliders: Box[], playe
       c.body.rotation.set(c.pitch, 0, c.roll);
     }
     c.pv = c.v;
+  };
+
+  /** After a change of path or direction: the axle that now leads stays where it is, its offset from the new path is
+   *  eased out while driving (the dragged axle cuts inside curves, so it is rarely on the path it now has to follow). */
+  const lead3 = [0, 0, 0, 0];
+  const keepAxle = (c: Car): void => {
+    sampleAhead(c, c.wb / 2, lead3);
+    c.ox = (c.dir > 0 ? c.fx : c.rx) - lead3[0]; c.oz = (c.dir > 0 ? c.fz : c.rz) - lead3[1];
   };
 
   const hide = (c: Car, delay: number): void => {
@@ -385,7 +409,7 @@ export async function installTraffic(scene: THREE.Scene, colliders: Box[], playe
     const car: Car = {
       obj, ...rigOf(obj), halfL: t.halfL, halfW: t.halfW, fx: 0, fz: 0, rx: 0, rz: 0, steer: 0, pv: 0, pitch: 0, roll: 0,
       mode: HIDDEN, poly: lanes[0].poly, seg: 0, s: 0, dir: 1, v: 0,
-      lane: 0, next: -1, claim: -1, spot: -1, wantSpot: -1, timer: i * 1.5, stuck: 0, x: 0, z: 0, yaw: 0, hx: 0, hz: 1, spin: 0, despawn: false, acc: 0,
+      ox: 0, oz: 0, lane: 0, next: -1, next2: -1, claim: -1, spot: -1, wantSpot: -1, timer: i * 1.5, stuck: 0, x: 0, z: 0, yaw: 0, hx: 0, hz: 1, spin: 0, despawn: false, acc: 0,
     };
     repaint(obj, PAINT_HUES[i % PAINT_HUES.length] + (Math.floor(i / PAINT_HUES.length) * 30));
     obj.visible = false;
@@ -424,8 +448,11 @@ export async function installTraffic(scene: THREE.Scene, colliders: Box[], playe
         const a = sp.reverseOut ? sp.inP : sp.outP;
         const ex = sp.reverseOut ? sp.inP.x[0] : a.x[a.n - 1], ez = sp.reverseOut ? sp.inP.z[0] : a.z[a.n - 1];
         if (clearAround(ex, ez, 14, c) && !cars.some((o) => o !== c && o.mode === DRIVE && o.lane === sp.lane && o.s > sp.sA - 35 && o.s < sp.sB + 6) && Math.hypot(pl.x - sp.x, pl.z - sp.z) > 2.5) {
+          // s is the axles' midpoint: the parked car's front axle is on the bay point, its rear one wheelbase back.
+          // Reversing keeps s; pulling through starts with the front axle at the exit path's start (s = -wb/2).
           c.mode = LEAVE; c.dir = sp.reverseOut ? -1 : 1;
-          c.poly = sp.reverseOut ? sp.inP : sp.outP; c.s = sp.reverseOut ? c.poly.len : 0; c.seg = 0;
+          c.poly = sp.reverseOut ? sp.inP : sp.outP; c.s = sp.reverseOut ? c.poly.len - c.wb / 2 : -c.wb / 2; c.seg = 0;
+          keepAxle(c);
         } else c.timer = 1.5;
       }
       return;
@@ -486,18 +513,20 @@ export async function installTraffic(scene: THREE.Scene, colliders: Box[], playe
     c.s += c.dir * c.v * dt;
     if (hold && c.s > c.poly.len - stopAt) { c.s = Math.max(sPrev, c.poly.len - stopAt); c.v = 0; }
 
-    // end of path
-    if (c.dir > 0 && c.s >= c.poly.len) {
+    // end of path: a bay path ends where the leading axle stops (half a wheelbase before s reaches its end), and the
+    // lane is re-entered with that axle where it is, so parking and leaving never pop the car
+    const lead = c.mode === DRIVE ? 0 : c.wb / 2;
+    if (c.dir > 0 && c.s + lead >= c.poly.len) {
       if (c.mode === PARK_IN) {
-        c.s = c.poly.len; c.mode = PARKED; c.v = 0; c.timer = 8 + Math.random() * 10; place(c, true, dt); return;
+        c.s = c.poly.len - lead; c.mode = PARKED; c.v = 0; c.acc = 0; c.timer = 8 + Math.random() * 10; place(c, false, dt); return;
       }
-      if (c.mode === LEAVE) { const sp = spots[c.spot]; sp.busy = false; enterLane(c, sp.lane, sp.sB); }
+      if (c.mode === LEAVE) { const sp = spots[c.spot]; sp.busy = false; enterLane(c, sp.lane, sp.sB - lead + (c.s + lead - c.poly.len)); }
       else if (c.next < 0) { hide(c, 6); return; }
       else if (lanes[c.next].turn && c.claim !== c.next) { c.s = c.poly.len - 0.02; c.v = 0; }
       else { const carry = c.s - c.poly.len; enterLane(c, c.next, carry); }
-    } else if (c.dir < 0 && c.s <= 0) {
+    } else if (c.dir < 0 && c.s - lead <= 0) {
       const sp = spots[c.spot];
-      const li = sp.lane, s = sp.reverseOut ? sp.sA : sp.sB;
+      const li = sp.lane, s = (sp.reverseOut ? sp.sA : sp.sB) + lead; // rear axle on the lane, front one wheelbase ahead
       sp.busy = false;
       enterLane(c, li, s);
     }
@@ -508,7 +537,7 @@ export async function installTraffic(scene: THREE.Scene, colliders: Box[], playe
       if (c.wantSpot >= 0 && c.lane === spots[c.wantSpot].lane && c.s >= spots[c.wantSpot].sA) {
         const sp = spots[c.wantSpot];
         if (!sp.busy && c.v < MAX_SPEED + 1) {
-          sp.busy = true; c.spot = c.wantSpot; c.wantSpot = -1; c.mode = PARK_IN; c.poly = sp.inP; c.s = 0; c.seg = 0; c.next = -1;
+          sp.busy = true; c.spot = c.wantSpot; c.wantSpot = -1; c.mode = PARK_IN; c.poly = sp.inP; c.s = c.s - sp.sA; c.seg = 0; c.next = -1; keepAxle(c);
         } else c.wantSpot = -1;
       }
     }
