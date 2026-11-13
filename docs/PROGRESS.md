@@ -242,6 +242,24 @@ Town news wording, complete (local, 2026-11-14):
   a fixture, Town notebook shows 10 rows, 10 unique, in order, all corrected, the stored log unchanged
   (`phase6d-town-news-historical-fixture.jpg`; "0 mangoes" is a fixture case, not a real event).
 
+Production deploy of db46f27 (authorized 2026-11-14, 22:0x UTC): `npm run deploy` from the clean release worktree,
+deployment `vivolith-hc7b2i49j` aliased to vivolith.world; rollback `vivolith-mofecbv8l` (d483ee3), then
+`vivolith-9eu9hcz07` (66907f3). Env, AI, contract and schedulers untouched (agents [], no test caps).
+- Live: page meta db46f27; bundle carries the read-only guard, the news fix and the count helper in the new templates
+  (`You bought ${Lh(o,n)}`, `${Lh(r,"pre-paid crate")}`), no "mangos" string; greeting mp3, rent_ok, plaza, kavi, roads,
+  market music all 200.
+- `?inspect` on production (first load inspected): Town notebook 25 rows = the 25 newest stored events, in order, every
+  digit preserved; exactly the 6 old lines corrected ("Lin sold 2 mangoes", "A player bought 3 mangoes" x3, "sold 2
+  mangoes", "it reopens after 1 mango is delivered"), the other 19 byte-identical; 25 distinct event ids, 20 distinct
+  texts in the store and on screen (repeats are separate events). Network: GET status and chronicle only; no console
+  errors (`phase6e-prod-db46f27-town-news.jpg`).
+- `?offline&inspect` on production (live bundle, no API call at all): 12 old-style fixture lines in the local log, all
+  12 shown corrected and in order, "5 mango crates" and "the mango bid" untouched, stored log unchanged.
+- 0 relayer transactions after 21:10:45 UTC (nearblocks, checked 22:04 UTC); lastTick unchanged (day 2991003).
+- Not verifiable without a transaction: a new server-written Chronicle line (covered by news.check on this commit).
+  Minor, pre-existing: Town news is empty until the first market-turn sync (about 60 s); under ?inspect the account chip
+  says "saved in this browser".
+
 Verified offline in the browser: open stocked stall (Tomas), closed stall with stock (Pema, no goods outside, Closed card), vacant stall, reopening at 08:00 (shutter up, goods back), resident delivery to an open stall and to a shut stall (state injected to close her: labelled), trade and haggle panels with the mission visible, panel open at 20:58 (clock holds while trading), 1280x720 and 1920x1080, day and night. Not verified: a live resident delivery to a closed stall on testnet; sold-out display (no stall reached 0 stock in play). 13/13 checks, voice check, typecheck, build.
 
 ## Phase 6: live production acceptance (2026-11-14, authorized)
