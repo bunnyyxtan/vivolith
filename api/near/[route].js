@@ -11834,10 +11834,13 @@ function bidForRule(state, id, good) {
 	if (m.status !== "open" && good === "mango") {
 		const left = state.flags[`reopenNeed.${id}`];
 		const need = typeof left === "number" ? left : m.target.mango - m.stock.mango;
+		const till = Math.floor(m.cash), full = Math.round(m.baseCost.mango * CLOSED_RESTOCK);
+		if (till < 1) return null;
+		const price = Math.min(full, till);
 		return {
-			price: Math.round(m.baseCost.mango * CLOSED_RESTOCK),
+			price,
 			qty: Math.max(1, need),
-			reason: "Restocking to reopen"
+			reason: price < full ? `Restocking to reopen: only ${till} c in the till` : "Restocking to reopen"
 		};
 	}
 	const short = m.target[good] - m.stock[good];
@@ -14395,6 +14398,145 @@ async function verifyPass(store, day, check, budget, log) {
 		if (next) log.push(`${id} decision for day ${d}: ${next.receipt.status} (${next.receipt.note.slice(0, 80)})`);
 	}
 }
+// src/economy/chronicle.ts
+let seq = 0;
+const eventId = (at, kind) => `${at.toString(36)}-${kind}-${(seq++ % 1296).toString(36)}`;
+/** Ids of events that changed `who`'s holdings after `afterAt` and before `beforeAt`, oldest first. */
+function changedSince(events, who, afterAt, beforeAt) {
+	return events.filter((e) => e.at > afterAt && e.at < beforeAt && e.status !== "failed" && e.changes.some((c) => c.who === who && c.delta !== 0)).sort((a, b) => a.at - b.at).map((e) => e.id);
+}
+/** Appends `e` (newest last), dropping the oldest past CHRONICLE_MAX and any repeat of the same id, or of the same
+*  transaction recorded twice for the same kind and actors (a retried write never doubles an event). */
+function appendEvent(list, e) {
+	if (list.some((x) => x.id === e.id || e.txHash !== null && x.txHash === e.txHash && x.kind === e.kind && x.actors.join() === e.actors.join())) return [...list];
+	return [...list, e].sort((a, b) => a.at - b.at).slice(-60);
+}
+/** Time of the most recent decision event of `who` before `at` (0 if none): it bounds the "since" window. */
+function lastDecisionAt(events, who, at) {
+	return events.filter((e) => e.kind === "decision" && e.actors[0] === who && e.at < at).reduce((t, e) => Math.max(t, e.at), 0);
+}
+/** A decision as a Chronicle event: what was decided, by whom (model or rule), on which facts, and which recorded events
+*  had changed the decider's goods or till since its previous decision. No claim that those events were the reason. */
+function decisionEvent(id, name, history, d, tx, day, at = Date.now(), offline = false) {
+	const what = d.side === "ask" ? `${d.good} price` : `${d.good} bid`;
+	return {
+		id: `decision-${id}-${day}-${d.source}-${d.to}`,
+		at,
+		day,
+		kind: "decision",
+		actors: [id],
+		player: null,
+		text: d.from === d.to ? `${name} kept the ${what} at ${d.to} c.` : `${name} ${d.to > d.from ? "raised" : "lowered"} the ${what} from ${d.from} to ${d.to} c.`,
+		changes: [],
+		status: offline ? "offline" : tx ? tx.ok ? "confirmed" : "failed" : "recorded",
+		txHash: tx?.hash || null,
+		decision: {
+			source: d.source,
+			action: d.action,
+			from: d.from,
+			to: d.to,
+			model: d.model,
+			decisionId: d.decisionId,
+			verification: d.verification,
+			inputs: d.inputs
+		},
+		since: changedSince(history, id, lastDecisionAt(history, id, at), at)
+	};
+}
+// server/near/ledger.ts
+const CHRONICLE_KEY = "vivolith:chronicle";
+const CHRONICLE_TTL = 604800;
+const BOND_TTL = 2592e3;
+const DEAL_REF_TTL = 300;
+const bondKey = (npc, player) => `vivolith:bond:${npc}:${player}`;
+const dealRefKey = (player, nonce) => `vivolith:dealref:${player}:${nonce}`;
+const validEvent = (x) => {
+	const e = x;
+	return !!e && typeof e === "object" && typeof e.id === "string" && typeof e.at === "number" && typeof e.text === "string" && Array.isArray(e.actors) && Array.isArray(e.changes) && Array.isArray(e.since);
+};
+async function readChronicle(store) {
+	const raw = await store.get(CHRONICLE_KEY);
+	if (!raw) return [];
+	try {
+		const l = JSON.parse(raw);
+		return Array.isArray(l) ? l.filter(validEvent) : [];
+	} catch {
+		return [];
+	}
+}
+/** Appends events under a short lock (the market turn and players' relays both write). If the lock cannot be taken the
+*  events are not written and false is returned: the Chronicle may miss an entry, it never holds a wrong one.
+*  ponytail: one list and one lock; per-day lists if writes ever contend. */
+async function chronicle(store, events, sleep = (ms) => new Promise((r) => setTimeout(r, ms))) {
+	if (!events.length) return true;
+	const lock = `${CHRONICLE_KEY}:lock`;
+	for (let k = 0; k < 5; k++) {
+		if (await store.setNx(lock, "1", 10)) try {
+			let list = await readChronicle(store);
+			for (const e of events) list = appendEvent(list, e);
+			await store.set(CHRONICLE_KEY, JSON.stringify(list), CHRONICLE_TTL);
+			return true;
+		} finally {
+			await store.del(lock).catch(() => void 0);
+		}
+		await sleep(120);
+	}
+	return false;
+}
+const validBond = (x) => {
+	const b = x;
+	return !!b && typeof b === "object" && typeof b.at === "number" && [
+		"delivered",
+		"bought",
+		"refused"
+	].includes(b.kind) && typeof b.qty === "number" && typeof b.unit === "number";
+};
+async function readBonds(store, npc, player) {
+	const raw = await store.get(bondKey(npc, player));
+	if (!raw) return [];
+	try {
+		const l = JSON.parse(raw);
+		return Array.isArray(l) ? l.filter(validBond).slice(-20) : [];
+	} catch {
+		return [];
+	}
+}
+/** Adds a bond, once per transaction (a retried relay never records a delivery twice). */
+async function addBond(store, npc, player, b) {
+	const list = await readBonds(store, npc, player);
+	if (b.txHash && list.some((x) => x.txHash === b.txHash)) return;
+	await store.set(bondKey(npc, player), JSON.stringify([...list, b].slice(-20)), BOND_TTL);
+}
+/** Plain sentences for a character's dialogue facts, keeping facts and interpretations apart. Never a promise. */
+function bondFacts(bonds, noun) {
+	const out = [];
+	const confirmed = bonds.filter((b) => b.evidence === "chain");
+	const delivered = confirmed.filter((b) => b.kind === "delivered");
+	if (delivered.length) {
+		const qty = delivered.reduce((n, b) => n + b.qty, 0);
+		out.push(`Fact (recorded on NEAR): this customer has delivered ${noun("mango", qty)} to you in ${delivered.length} sale${delivered.length > 1 ? "s" : ""}.`);
+		const under = delivered.filter((b) => b.reference !== null && b.unit < b.reference);
+		if (under.length) {
+			const kept = under.reduce((n, b) => n + (b.reference - b.unit) * b.qty, 0);
+			out.push(`Interpretation: in ${under.length} of those sales they accepted less than your own bid, which left ${kept} coins more in your till than your bid would have.`);
+		}
+	}
+	const bought = confirmed.filter((b) => b.kind === "bought");
+	if (bought.length) out.push(`Fact (recorded on NEAR): this customer has bought ${noun("mango", bought.reduce((n, b) => n + b.qty, 0))} from you.`);
+	const refused = bonds.filter((b) => b.kind === "refused").slice(-2);
+	for (const r of refused) out.push(`Fact (no trade happened): an offer of ${r.unit} coins each for ${noun(r.good, r.qty)} was refused${r.note ? `: ${r.note}` : ""}.`);
+	return out;
+}
+const putDealRef = (store, player, nonce, ref) => store.set(dealRefKey(player, nonce), JSON.stringify(ref), DEAL_REF_TTL);
+async function takeDealRef(store, player, nonce) {
+	const raw = await store.get(dealRefKey(player, nonce)).catch(() => null);
+	if (!raw) return null;
+	try {
+		return JSON.parse(raw);
+	} catch {
+		return null;
+	}
+}
 // server/near/handlers.ts
 const MAX_BODY = 4096;
 const MAX_GAS = teraToGas("100");
@@ -14863,6 +15005,7 @@ async function relay(cfg, req) {
 		message: "already submitted"
 	});
 	const r = outcome(raw);
+	await recordPlayerDeal(cfg, decoded, sender, r).catch(() => void 0);
 	return json(r.ok ? 200 : 422, {
 		status: r.ok ? "onchain" : "failed",
 		txHash: r.txHash,
@@ -14870,6 +15013,88 @@ async function relay(cfg, req) {
 		contractId: cfg.contractId,
 		message: r.error
 	});
+}
+/** A relayed `deal` (signed by the relayer moments earlier, see deal()) becomes history: a Chronicle trade event (confirmed
+*  or failed), a durable bond between this player and the stall, and a "reopened" event when a delivery opened a closed
+*  stall (read back from the contract). Only the transaction's own arguments and outcome are used. */
+async function recordPlayerDeal(cfg, d, player, r) {
+	const fc = d.delegateAction.actions[0]?.functionCall;
+	if (!fc || fc.methodName !== "deal" || !fc.args) return;
+	const a = JSON.parse(Buffer.from(fc.args).toString());
+	const merchant = String(a.merchant ?? ""), side = a.side === "buy" ? "buy" : "sell", good = String(a.token_id ?? ""), qty = Number(a.qty), unit = Number(a.unit_price);
+	if (!MERCHANTS.includes(merchant) || !Number.isInteger(qty) || !Number.isInteger(unit)) return;
+	const store = decisionStore(cfg), at = Date.now(), day = Math.floor(at / MARKET_DAY_MS);
+	const ref = await takeDealRef(store, player, String(a.nonce ?? ""));
+	const reference = ref && ref.merchant === merchant && ref.unit === unit && ref.qty === qty ? ref.reference : null;
+	const total = qty * unit, sign = side === "sell" ? 1 : -1;
+	const name = merchant.charAt(0).toUpperCase() + merchant.slice(1);
+	const events = [{
+		id: eventId(at, "trade"),
+		at,
+		day,
+		kind: "trade",
+		actors: [merchant],
+		player,
+		text: side === "sell" ? `A player sold ${qty} ${good} to ${name} at ${unit} c${reference !== null && unit < reference ? ` (${name}'s own bid was ${reference} c)` : ""}.` : `A player bought ${qty} ${good} from ${name} at ${unit} c.`,
+		changes: [
+			{
+				who: merchant,
+				good,
+				delta: sign * qty
+			},
+			{
+				who: merchant,
+				good: "coin",
+				delta: -sign * total
+			},
+			{
+				who: "player",
+				good,
+				delta: -sign * qty
+			},
+			{
+				who: "player",
+				good: "coin",
+				delta: sign * total
+			}
+		],
+		status: r.ok ? "confirmed" : "failed",
+		txHash: r.txHash || null,
+		decision: null,
+		since: []
+	}];
+	if (r.ok) {
+		await addBond(store, merchant, player, {
+			at,
+			day,
+			kind: side === "sell" ? "delivered" : "bought",
+			good,
+			qty,
+			unit,
+			reference,
+			evidence: "chain",
+			txHash: r.txHash,
+			note: null
+		});
+		if (ref?.closed && side === "sell") {
+			const { provider } = account(cfg);
+			if ((await view(provider, cfg.contractId, "get_stalls", {}).catch(() => [])).find((s) => s.merchant === merchant)?.open) events.push({
+				id: eventId(at + 1, "reopened"),
+				at: at + 1,
+				day,
+				kind: "reopened",
+				actors: [merchant],
+				player,
+				text: `${name}'s stall reopened after a delivery.`,
+				changes: [],
+				status: "confirmed",
+				txHash: r.txHash,
+				decision: null,
+				since: []
+			});
+		}
+	}
+	await chronicle(store, events);
 }
 /** A price better for the player than the stall's current price (live NEAR AI price included) needs a haggle the relayer can
 *  replay from the claimed tactics; anything else must be the current price. The two scripted first-day prices
@@ -14910,27 +15135,56 @@ async function deal(cfg, req, env) {
 	const moved = priceMoved(st, id, side, good, ref);
 	if (moved !== null) throw new HttpError(409, `price moved: now ${moved} c`);
 	const posted = offers.find((o) => o.merchant === merchant && o.token_id === token && o.side === (side === "buy" ? "ask" : "bid"));
-	if (side === "buy") {
-		if (m.status !== "open") throw new HttpError(409, "stall is closed");
-		if (!m.sells.includes(good)) throw new HttpError(409, "doesn't sell that");
-		if (m.stock[good] < qty) throw new HttpError(409, m.stock[good] > 0 ? `only ${m.stock[good]} on offer` : "sold out");
-		const p = posted ? Number(posted.price) : quote(st, id, good, false).price;
-		const bounds = dealBounds(p);
-		if (unit < bounds.min) throw new HttpError(409, `won't go below ${bounds.min} c`);
-		if (unit > bounds.max) throw new HttpError(409, `won't take more than ${bounds.max} c`);
-		await checkNegotiated(cfg, st, id, "buy", good, unit, b, player);
-	} else {
-		const p = bidFor(st, id, good)?.price ?? null;
-		if (p === null) throw new HttpError(409, "not buying that today");
-		const bounds = dealBounds(p);
-		if (unit > bounds.max) throw new HttpError(409, `won't pay more than ${bounds.max} c`);
-		if (unit < bounds.min) throw new HttpError(409, `won't pay less than ${bounds.min} c`);
-		if (m.cash < qty * unit) throw new HttpError(409, "not enough coin to pay that");
-		await checkNegotiated(cfg, st, id, "sell", good, unit, b, player);
+	let reference = null;
+	const store = decisionStore(cfg);
+	try {
+		if (side === "buy") {
+			if (m.status !== "open") throw new HttpError(409, "stall is closed");
+			if (!m.sells.includes(good)) throw new HttpError(409, "doesn't sell that");
+			if (m.stock[good] < qty) throw new HttpError(409, m.stock[good] > 0 ? `only ${m.stock[good]} on offer` : "sold out");
+			const p = posted ? Number(posted.price) : quote(st, id, good, false).price;
+			reference = p;
+			const bounds = dealBounds(p);
+			if (unit < bounds.min) throw new HttpError(409, `won't go below ${bounds.min} c`);
+			if (unit > bounds.max) throw new HttpError(409, `won't take more than ${bounds.max} c`);
+			await checkNegotiated(cfg, st, id, "buy", good, unit, b, player);
+		} else {
+			const p = bidFor(st, id, good)?.price ?? null;
+			if (p === null) throw new HttpError(409, "not buying that today");
+			reference = p;
+			const bounds = dealBounds(p);
+			if (unit > bounds.max) throw new HttpError(409, `won't pay more than ${bounds.max} c`);
+			if (unit < bounds.min) throw new HttpError(409, `won't pay less than ${bounds.min} c`);
+			if (m.cash < qty * unit) throw new HttpError(409, "not enough coin to pay that");
+			await checkNegotiated(cfg, st, id, "sell", good, unit, b, player);
+		}
+	} catch (e) {
+		if (e instanceof HttpError && e.status === 409) await addBond(store, id, player, {
+			at: Date.now(),
+			day: Math.floor(Date.now() / MARKET_DAY_MS),
+			kind: "refused",
+			good,
+			qty,
+			unit,
+			reference,
+			evidence: "relayer",
+			txHash: null,
+			note: e.message.slice(0, 60)
+		}).catch(() => void 0);
+		throw e;
 	}
 	const secret = (env.NEAR_MERCHANT_SECRET ?? "").trim();
 	if (!secret) throw new HttpError(503, "merchant keys not configured");
 	const nonce = Date.now() * 1e3 + Math.floor(Math.random() * 1e3);
+	await putDealRef(store, player, String(nonce), {
+		merchant,
+		side,
+		token,
+		qty,
+		unit,
+		reference,
+		closed: m.status !== "open"
+	}).catch(() => void 0);
 	const expiresMs = Date.now() + DEAL_TTL_MS;
 	const message = `vivolith-deal|${cfg.contractId}|${merchant}|${player}|${side}|${token}|${qty}|${unit}|${nonce}|${expiresMs}`;
 	const { signature } = merchantKey(merchant, secret).sign(new TextEncoder().encode(message));
@@ -15397,11 +15651,12 @@ async function residentTurn(cfg, provider, relayer, secret, day, log, txs, agent
 		}
 		const held = Object.fromEntries((await view(provider, cfg.contractId, "get_balances", { account_id: accountId })).map(([t, v]) => [t, Number(v)]));
 		const stalls = (await chainEconomy(provider, cfg)).merchants;
+		const book = executableOffers(await view(provider, cfg.contractId, "get_offers", {}), stalls);
 		const dec = await decideResident({
 			store: agentStore,
 			cfg: agentCfg,
 			res: r,
-			offers: executableOffers(await view(provider, cfg.contractId, "get_offers", {}), stalls),
+			offers: book,
 			coin: held.coin ?? 0,
 			holding: held[r.good] ?? 0,
 			day,
@@ -15417,6 +15672,34 @@ async function residentTurn(cfg, provider, relayer, secret, day, log, txs, agent
 		const plan = dec.plan;
 		if (dec.decision) log.push(`resident ${r.id} ${dec.decision.source === "ai" ? "NEAR AI" : "rule"} plan: ${dec.decision.action}${dec.decision.fallbackReason ? ` (${dec.decision.fallbackReason})` : ""}`);
 		let carried = null;
+		const seenBids = book.filter((o) => o.side === "bid" && o.token_id === r.good && Number(o.qty) > 0).map((o) => `${stalls[o.merchant]?.name ?? o.merchant} bid ${o.price} c`);
+		const resDecision = (action) => ({
+			source: dec.decision?.source === "ai" ? "ai" : "rule",
+			action,
+			from: null,
+			to: null,
+			model: dec.decision?.source === "ai" ? dec.decision.model : null,
+			decisionId: dec.decision?.receipt.id ?? null,
+			verification: dec.decision?.receipt.status ?? "none",
+			inputs: [`${held[r.good] ?? 0} ${r.good}s and ${held.coin ?? 0} c in hand`, ...seenBids]
+		});
+		const resEvent = (kind, text, changes, tx, mer) => {
+			const at = Date.now();
+			turn.events?.push({
+				id: eventId(at, `res-${kind}`),
+				at,
+				day,
+				kind: "resident",
+				actors: [r.id, mer],
+				player: null,
+				text,
+				changes,
+				status: tx.ok ? "confirmed" : "failed",
+				txHash: tx.txHash || null,
+				decision: resDecision(kind === "sell" ? `sell to ${mer}` : `meal from ${mer}`),
+				since: turn.history ? changedSince(turn.history, r.id, lastDecisionAt(turn.history, r.id, at), at) : []
+			});
+		};
 		if (plan.sell) {
 			const s = await call(me, "sell", {
 				buyer: plan.sell.buyer,
@@ -15425,6 +15708,29 @@ async function residentTurn(cfg, provider, relayer, secret, day, log, txs, agent
 				min_price: String(plan.sell.price)
 			});
 			log.push(`resident ${r.id} sold ${plan.sell.qty} ${r.good} to ${plan.sell.merchant} at ${plan.sell.price} c${s.ok ? "" : ` FAILED: ${s.error}`}`);
+			const total = plan.sell.qty * plan.sell.price, mer = plan.sell.merchant;
+			resEvent("sell", `${r.name} sold ${plan.sell.qty} ${r.good}${plan.sell.qty > 1 ? "s" : ""} to ${stalls[mer]?.name ?? mer} at ${plan.sell.price} c.`, [
+				{
+					who: r.id,
+					good: r.good,
+					delta: -plan.sell.qty
+				},
+				{
+					who: r.id,
+					good: "coin",
+					delta: total
+				},
+				{
+					who: mer,
+					good: r.good,
+					delta: plan.sell.qty
+				},
+				{
+					who: mer,
+					good: "coin",
+					delta: -total
+				}
+			], s, mer);
 			if (!s.ok) continue;
 			carried = s.txHash;
 		}
@@ -15435,6 +15741,24 @@ async function residentTurn(cfg, provider, relayer, secret, day, log, txs, agent
 				qty: "1",
 				max_price: String(plan.eat.price)
 			});
+			const mer = plan.eat.merchant;
+			resEvent("meal", `${r.name} bought a ${r.food} from ${stalls[mer]?.name ?? mer} for ${plan.eat.price} c.`, [
+				{
+					who: r.id,
+					good: "coin",
+					delta: -plan.eat.price
+				},
+				{
+					who: mer,
+					good: "coin",
+					delta: plan.eat.price
+				},
+				{
+					who: mer,
+					good: r.food,
+					delta: -1
+				}
+			], b, mer);
 			if (b.ok) {
 				carried ??= b.txHash;
 				const e = await call(relayer, "operator_burn", {
@@ -15481,10 +15805,14 @@ async function tick(cfg, env, trusted = false, scope = "market") {
 		enabled: /* @__PURE__ */ new Set()
 	} : baseCfg;
 	const memory = agentCfg.enabled.size ? await memoriesFor(agentStore) : {};
+	const history = await readChronicle(agentStore).catch(() => []);
+	const events = [];
 	const turn = {
 		replayOnly: !trusted,
 		budget: () => spend(ops, agentStore, "decision"),
-		memory
+		memory,
+		history,
+		events
 	};
 	const snaps = /* @__PURE__ */ new Map();
 	const day = Math.floor(Date.now() / MARKET_DAY_MS);
@@ -15530,7 +15858,7 @@ async function tick(cfg, env, trusted = false, scope = "market") {
 		txs.push(r.txHash);
 		log.push(`dividends for market day ${day - 1} settled${r.ok ? "" : ` FAILED: ${r.error}`}`);
 	}
-	const rentCalls = [];
+	const rentCalls = [], rentEvents = [];
 	for (const id of MERCHANTS) {
 		const m = st.merchants[id];
 		if (!full || m.status !== "open" || day % m.rentEveryDays !== 0 || Number(st.flags[`lastRent.${id}`]) >= day) continue;
@@ -15542,10 +15870,43 @@ async function tick(cfg, env, trusted = false, scope = "market") {
 			rent: String(m.rent),
 			reopen_need: String(need)
 		}, TICK_GAS, 0n));
+		const at = Date.now(), name = st.merchants[id].name;
 		if (m.cash >= m.rent) {
+			rentEvents.push({
+				id: eventId(at, "rent"),
+				at,
+				day,
+				kind: "rent",
+				actors: [id],
+				player: null,
+				text: `${name} paid ${m.rent} c rent.`,
+				changes: [{
+					who: id,
+					good: "coin",
+					delta: -m.rent
+				}],
+				status: "pending",
+				txHash: null,
+				decision: null,
+				since: []
+			});
 			m.cash -= m.rent;
 			log.push(`${id} paid ${m.rent} c rent`);
 		} else {
+			rentEvents.push({
+				id: eventId(at, "closed"),
+				at,
+				day,
+				kind: "closed",
+				actors: [id],
+				player: null,
+				text: `${name} could not pay ${m.rent} c rent with ${Math.floor(m.cash)} c in the till and closed; it reopens after ${Math.max(1, need)} mangoes are delivered.`,
+				changes: [],
+				status: "pending",
+				txHash: null,
+				decision: null,
+				since: []
+			});
 			m.status = "closed";
 			st.flags[`reopenNeed.${id}`] = Math.max(1, need);
 			log.push(`${id} could not pay ${m.rent} c rent and closed (reopens after ${Math.max(1, need)} mangoes)`);
@@ -15558,6 +15919,11 @@ async function tick(cfg, env, trusted = false, scope = "market") {
 			throwOnFailure: false
 		}));
 		txs.push(r.txHash);
+		events.push(...rentEvents.map((e) => ({
+			...e,
+			status: r.ok ? "confirmed" : "failed",
+			txHash: r.txHash || null
+		})));
 		if (!r.ok) {
 			log.push(`rent FAILED: ${r.error}`);
 			st.merchants = (await chainEconomy(provider, cfg)).merchants;
@@ -15632,6 +15998,7 @@ async function tick(cfg, env, trusted = false, scope = "market") {
 			want("bid", good, b ? Math.min(b.qty, Math.floor(m.cash / Math.max(1, price))) : 0, price);
 		}
 		const hashes = [];
+		let leverTx = null;
 		for (const call of calls) {
 			const isAgentCall = (c) => agent !== null && lever !== void 0 && c.functionCall?.methodName === (lever.side === "ask" ? "list" : "bid") && JSON.parse(new TextDecoder().decode(c.functionCall.args)).token_id === lever.good;
 			const agentBid = isAgentCall(call);
@@ -15650,10 +16017,59 @@ async function tick(cfg, env, trusted = false, scope = "market") {
 			const fc = call.functionCall;
 			const a = JSON.parse(new TextDecoder().decode(fc.args));
 			log.push(`${id} ${fc.methodName === "list" ? "asks" : "bids"} ${a.qty === "0" ? "withdrawn for" : `${a.qty} x ${a.price} c${a.per ? ` per ${a.per}` : ""} for`} ${a.token_id}${r.ok ? "" : ` FAILED: ${r.error}`}`);
+			if (lever && fc.methodName === (lever.side === "ask" ? "list" : "bid") && a.token_id === lever.good && a.qty !== "0") {
+				const cur = posted.get(`${id}|${lever.side}|${lever.good}`);
+				leverTx = {
+					hash: r.txHash,
+					ok: r.ok,
+					price: Number(a.price),
+					was: cur && Number(cur.qty) > 0 ? Number(cur.price) : null
+				};
+			}
 		}
 		if (agent) {
 			const at = calls.findIndex((c) => lever !== void 0 && c.functionCall?.methodName === (lever.side === "ask" ? "list" : "bid") && JSON.parse(new TextDecoder().decode(c.functionCall.args)).token_id === lever.good);
 			if (at >= 0 && hashes[at]) await attachTx(agentStore, id, day, hashes[at]).catch(() => void 0);
+		}
+		if (lever && turn.events) {
+			const tx = leverTx;
+			if (agent) turn.events.push(decisionEvent(id, m.name, turn.history ?? [], {
+				source: agent.source === "ai" ? "ai" : "rule",
+				action: agent.action,
+				from: agent.basePrice,
+				to: agent.price,
+				side: lever.side,
+				good: lever.good,
+				model: agent.model,
+				decisionId: agent.receipt.id,
+				verification: agent.receipt.status,
+				inputs: agent.justification.slice(0, -1)
+			}, tx ? {
+				hash: tx.hash,
+				ok: tx.ok
+			} : null, day));
+			else if (tx && tx.was !== null && tx.was !== tx.price) {
+				const reason = lever.side === "bid" ? bidFor(st, id, lever.good)?.reason ?? "rule" : "rule";
+				turn.events.push(decisionEvent(id, m.name, turn.history ?? [], {
+					source: "rule",
+					action: tx.price > tx.was ? "raise" : "lower",
+					from: tx.was,
+					to: tx.price,
+					side: lever.side,
+					good: lever.good,
+					model: null,
+					decisionId: null,
+					verification: "none",
+					inputs: [
+						`${m.stock[lever.good]} ${lever.good}s on the shelf`,
+						`${Math.floor(m.cash)} c in the till`,
+						reason
+					]
+				}, {
+					hash: tx.hash,
+					ok: tx.ok
+				}, day));
+			}
 		}
 		return hashes;
 	}));
@@ -15732,6 +16148,7 @@ async function tick(cfg, env, trusted = false, scope = "market") {
 		txs.push(r.txHash);
 		if (!r.ok) log.push(`operator FAILED: ${r.error}`);
 	}
+	if (!await chronicle(agentStore, events).catch(() => false)) log.push("chronicle not written (store busy or down)");
 	const receiptsOf = (id) => view(provider, cfg.contractId, "get_receipts", { account_id: `${id}.${cfg.relayerId}` });
 	await recordMemories(agentStore, day, snaps, receiptsOf, log);
 	if (trusted && !halted && baseCfg.key) await verifyPass(agentStore, day, (decisionId, ev) => verifyDecision(baseCfg.url, baseCfg.key, decisionId, ev, fetch), () => spend(ops, agentStore, "verify"), log);
@@ -15805,14 +16222,17 @@ async function talk(cfg, req, env) {
 	const store = decisionStore(cfg), day = Math.floor(Date.now() / MARKET_DAY_MS), npcAccount = `${id}.${cfg.relayerId}`;
 	const histKey = `vivolith:talk:${conv}:${id}`;
 	const { provider } = account(cfg);
-	const [offers, receipts, decision, memory, history, playerReceipts] = await Promise.all([
+	const [offers, receipts, decision, memory, history, playerReceipts, bonds] = await Promise.all([
 		view(provider, cfg.contractId, "get_offers", {}),
 		view(provider, cfg.contractId, "get_receipts", { account_id: npcAccount }).catch(() => []),
 		(async () => await decisionFor(store, id, day) ?? await decisionFor(store, id, day - 1))().catch(() => null),
 		readMemory(store, id).catch(() => []),
 		store.get(histKey).then((v) => v ? JSON.parse(v) : []).catch(() => []),
-		player ? view(provider, cfg.contractId, "get_receipts", { account_id: player }).catch(() => []) : Promise.resolve([])
+		player ? view(provider, cfg.contractId, "get_receipts", { account_id: player }).catch(() => []) : Promise.resolve([]),
+		player ? readBonds(store, id, player).catch(() => []) : Promise.resolve([])
 	]);
+	const noun = (good, n) => `${n} ${good === "mango" ? n === 1 ? "mango" : "mangoes" : `${good}${n === 1 ? "" : "s"}`}`;
+	const recalled = bondFacts(bonds, noun);
 	let built;
 	if (resident) {
 		const held = Object.fromEntries((await view(provider, cfg.contractId, "get_balances", { account_id: npcAccount }).catch(() => [])).map(([t, v]) => [t, Number(v)]));
@@ -15822,11 +16242,15 @@ async function talk(cfg, req, env) {
 			decision,
 			memory
 		});
-	} else built = factsFor(await chainEconomy(provider, cfg), id, offers, receipts, {
-		decision,
-		memory,
-		player: player ? playerFacts(playerReceipts, npcAccount) : []
-	});
+	} else {
+		built = factsFor(await chainEconomy(provider, cfg), id, offers, receipts, {
+			decision,
+			memory,
+			player: player ? [...playerFacts(playerReceipts, npcAccount), ...recalled] : []
+		});
+		const delivered = bonds.filter((x) => x.evidence === "chain" && x.kind === "delivered");
+		if (delivered.length && !built.topics.you) built.topics.you = `You've brought me ${noun("mango", delivered.reduce((n, x) => n + x.qty, 0))} so far. I keep count.`;
+	}
 	const ops = opsConfig(env);
 	const ai = {
 		key: (env.NEAR_AI_KEY ?? "").trim() || null,
@@ -15912,6 +16336,7 @@ async function handle(route, req, env) {
 			});
 			return await tick(cfg, env, true, new URL(req.url).searchParams.get("scope") === "agents" ? "agents" : "market");
 		}
+		if (route === "chronicle" && req.method === "GET") return json(200, { events: (await readChronicle(decisionStore(cfg)).catch(() => [])).slice(-40) });
 		if (route === "decisions" && req.method === "GET") {
 			const who = new URL(req.url).searchParams.get("merchant") ?? "";
 			if (!AGENTS.includes(who)) return json(200, { decisions: [] });

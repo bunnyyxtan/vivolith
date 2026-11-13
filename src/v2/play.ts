@@ -12,6 +12,7 @@ import { adjustRep, advance, shopperWant, invest, MAX_PACKS, payReleaseFee, reco
 import { bidFor, quote, lassiPrice, stallPull, ORCHARD_PICK, ORCHARD_HOURS, HAGGLE_FLOOR, DIVIDEND_BPS, type Quote } from "../economy/pricing";
 import { clockOf, dayOf, MERCHANT_IDS, MINUTES_PER_DAY, STARTER_COINS, type EconomyState, type Good, type MerchantId, type Receipt } from "../economy/state";
 import { RESIDENTS } from "../economy/residents";
+import { gossipLine, provenance, type ChronicleEvent, type ChronicleKind } from "../economy/chronicle";
 import { audio } from "./audio";
 import { createCityMap } from "./map";
 import { VOICES, type LineId } from "./audio-manifest";
@@ -28,7 +29,7 @@ import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
 import {
   EXPLORER_ACCOUNT, EXPLORER_TX, agentDecision, finalHeight, type AgentDecision, type ChainReceipt, balances, buyPosted, sellPosted, connectGuest, haggleDeal, marketTick, merchantAccount, playerId, playerLabel, receipts as chainReceipts,
-  settleDay, claimDividends, lastMarketTurn, askMerchant, chainStatus, pickOrchard, marketDay, marketDayMs, isOffline, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
+  settleDay, claimDividends, lastMarketTurn, askMerchant, chainStatus, chronicleEvents, pickOrchard, marketDay, marketDayMs, isOffline, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
 } from "../near/chain";
 
 const GAME_MIN_PER_SEC = 2.4; // 09:00 -> 21:00 in five real minutes
@@ -253,6 +254,28 @@ export async function createPlay(game: Game): Promise<Play> {
   window.addEventListener("pagehide", saveNow);
 
   /** Hourly: the townsfolk's rhythm, crates on the depot dock for shipments that landed, and what people talk about. */
+  // ---------------------------------------------------------------- Town Chronicle ----
+  // Online: the relayer's recorded events (src/economy/chronicle.ts), refreshed once per market turn. Offline: the local
+  // simulation's own log, labelled offline. Street gossip leads with the latest confirmed facts, never with a cause.
+  let townEvents: ChronicleEvent[] = [], townNews: string[] = [];
+  const actorName = (id: string): string => state.merchants[id as MerchantId]?.name.replace(/^Auntie /, "") ?? RESIDENTS.find((r) => r.id === id)?.name ?? id;
+  const LOCAL_KINDS: Readonly<Record<string, ChronicleKind>> = { trade: "trade", rent: "rent", closed: "closed", reopened: "reopened", player: "trade" };
+  const localEvents = (): ChronicleEvent[] => state.log.filter((l) => LOCAL_KINDS[l.kind]).slice(-30).map((l, i) => ({
+    id: `local-${l.minute}-${i}`, at: l.minute, day: dayOf(l.minute), kind: LOCAL_KINDS[l.kind], actors: [], text: l.text, changes: [],
+    status: "offline" as const, txHash: null, decision: null, since: [], player: l.kind === "player" ? "you" : null,
+  }));
+  const whenOf = (e: ChronicleEvent, online: boolean): string => {
+    if (!online) return clockOf(e.at);
+    const m = Math.max(0, Math.round((Date.now() - e.at) / 60000));
+    return m < 1 ? "just now" : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`;
+  };
+  const refreshTown = async (): Promise<void> => {
+    const ev = await chronicleEvents();
+    if (!ev) return;
+    townEvents = ev;
+    townNews = [...ev].reverse().map((e) => gossipLine(e, actorName)).filter((x): x is string => !!x).slice(0, 3);
+    townHour(lastHour);
+  };
   const townHour = (prevHour: number): void => {
     const hour = Math.floor(state.minute / 60);
     market.life.setHour(hour % 24);
@@ -272,7 +295,7 @@ export async function createPlay(game: Game): Promise<Play> {
     if (nightOut === "closed" && state.merchants.pema.status !== "open") lines.push("Pema's shutters are down. She needs mangoes to reopen.");
     if (state.flags["night.recovered"] === true) lines.push("Pema's stall is open again. Who'd have thought?");
     lines.push(hour % 24 >= 18 ? "Everyone's on the Spire lawn tonight." : hour % 24 < 11 ? "Busy morning at the Harbor Depot." : "Lunch at the food trucks by the Labs?");
-    market.life.setGossip(lines);
+    market.life.setGossip([...townNews, ...lines]); // what really happened in the market comes first
   };
   townHour(lastHour);
 
@@ -1088,14 +1111,39 @@ export async function createPlay(game: Game): Promise<Play> {
     card.append(f);
   };
 
-  type NoteTab = "goals" | "bag" | "near" | "help";
+  type NoteTab = "goals" | "bag" | "town" | "near" | "help";
   const openNotebook = (tab: NoteTab): void => openCard((card) => {
     card.append(el("h2", "", "Notebook"));
     const tabs = el("div", "nb-tabs");
-    for (const [t, label] of [["goals", "Goals"], ["bag", "Bag"], ["near", "On NEAR"], ["help", "How to play"]] as const) tabs.append(button(label, t === tab ? "on" : "", () => openNotebook(t)));
+    for (const [t, label] of [["goals", "Goals"], ["bag", "Bag"], ["town", "Town"], ["near", "On NEAR"], ["help", "How to play"]] as const) tabs.append(button(label, t === tab ? "on" : "", () => openNotebook(t)));
     card.append(tabs);
     const sec = el("section");
-    if (tab === "goals") {
+    if (tab === "town") {
+      // The Town Chronicle: what happened, who acted, and how sure it is; the evidence stays folded until asked for
+      const online = !isOffline() && townEvents.length > 0;
+      const list = online ? townEvents : localEvents();
+      sec.append(el("p", "why", online ? "What happened in the market, newest first. Open Evidence for the facts a decision saw and its transaction." : "This session is offline: these are the local simulation's events, not NEAR."));
+      const byId = new Map(list.map((e) => [e.id, e]));
+      const ul = el("ul", "chron");
+      for (const e of [...list].reverse().slice(0, 25)) {
+        const li = el("li");
+        li.append(el("b", "", e.text), el("span", `prov${e.decision?.source === "ai" ? " ai" : ""}${e.status === "failed" ? " failed" : ""}`, `${whenOf(e, online)} · ${provenance(e)}`));
+        const facts = [
+          ...(e.decision?.inputs ?? []).map((x) => `Saw: ${x}`),
+          ...e.since.map((id) => byId.get(id)).filter((x): x is ChronicleEvent => !!x).map((x) => `Changed since its last decision: ${x.text}`),
+          ...(e.decision?.decisionId ? [`Decision id ${e.decision.decisionId}${e.decision.verification !== "none" ? ` · signature ${e.decision.verification}` : ""}`] : []),
+        ];
+        if (facts.length || e.txHash) {
+          const d = el("details"); d.append(el("summary", "", "Evidence"));
+          if (facts.length) { const fl = el("ul"); for (const f of facts) fl.append(el("li", "", f)); d.append(fl); }
+          if (e.txHash) { const a = el("a", "", "view transaction"); a.href = `${EXPLORER_TX}${e.txHash}`; a.target = "_blank"; a.rel = "noopener"; d.append(a); }
+          li.append(d);
+        }
+        ul.append(li);
+      }
+      if (!list.length) sec.append(el("p", "", "Nothing recorded yet. Trades, price decisions and rent nights appear here as they happen."));
+      sec.append(ul);
+    } else if (tab === "goals") {
       const i = stepIndex(state);
       sec.append(el("h4", "", "First day"));
       STEPS.forEach((st, k) => { const g = el("div", `goal${k < i ? " done" : k === i ? " now" : ""}`); g.append(el("i"), el("span", "", titleOf(st, state))); sec.append(g); });
@@ -1134,7 +1182,7 @@ export async function createPlay(game: Game): Promise<Play> {
       if (id) { const b = button("Check my account live on NEAR", "", () => { void showProof(); }); b.style.marginTop = "12px"; sec.append(b); }
     } else {
       const t = el("table");
-      for (const [k, v] of [["W A S D", "walk (Shift to run, Space to jump)"], ["Mouse", "look around (click the game first)"], ["F", "talk or trade with the person in front of you"], ["B · J · N · H", "bag · goals · NEAR · this help"], ["T", "fast-forward a week (after the first day)"], ["Esc", "close a window, or open the menu"]]) {
+      for (const [k, v] of [["W A S D", "walk (Shift to run, Space to jump)"], ["Mouse", "look around (click the game first)"], ["F", "talk or trade with the person in front of you"], ["B · J · C · N · H", "bag · goals · town chronicle · NEAR · this help"], ["T", "fast-forward a week (after the first day)"], ["Esc", "close a window, or open the menu"]]) {
         const row = t.insertRow(); const a = row.insertCell(); a.append(el("kbd", "", k)); const b = row.insertCell(); b.textContent = v;
       }
       sec.append(t);
@@ -1650,6 +1698,7 @@ export async function createPlay(game: Game): Promise<Play> {
       if (input.consumePress("KeyB")) openNotebook("bag");
       else if (input.consumePress("KeyJ")) openNotebook("goals");
       else if (input.consumePress("KeyN")) openNotebook("near");
+      else if (input.consumePress("KeyC")) openNotebook("town");
       else if (input.consumePress("KeyH")) openNotebook("help");
       else if (input.consumePress("KeyL") && !playerLabel() && socialAvailable()) void signIn();
     }
@@ -1657,7 +1706,7 @@ export async function createPlay(game: Game): Promise<Play> {
     if (tickIn <= 0 && playerId()) {
       tickIn = TICK_EVERY_SEC;
       const me = playerId()!;
-      void marketTick().then((t) => { hungry(t); return syncMerchants(); }).then(syncResidents).then(() => claimDividends(me)).then((r) => {
+      void marketTick().then((t) => { hungry(t); return syncMerchants(); }).then(syncResidents).then(() => { void refreshTown(); return claimDividends(me); }).then((r) => {
         if (Number(r.coins) > 0 && r.status === "onchain") { hud.toast(`+${String(r.coins)} c in dividends from your stall shares`, true); void audio.sfx("coin_big"); }
         return syncPlayer(me); // every turn re-reads the wallet, so the purse can never drift from the chain for long
       });

@@ -5,6 +5,7 @@
 // Social/email login (NEAR Auth): one Auth0 sign-in; the relayer verifies it and opens an account owned by the
 // player's NEAR Auth MPC key, with a game session key for moves, so play continues with no further popups.
 import { Auth0Client } from "@auth0/auth0-spa-js";
+import type { ChronicleEvent } from "../economy/chronicle";
 import { Account, JsonRpcProvider, KeyPair, KeyPairSigner, actions, encodeSignedDelegate, teraToGas, type KeyPairString } from "near-api-js";
 
 export const EXPLORER_TX = "https://testnet.nearblocks.io/txns/";
@@ -107,6 +108,15 @@ export async function askMerchant(id: string, question = ""): Promise<{ line: st
   const r = await post("talk", { npc: id, question: question.slice(0, 200), account: playerId() ?? undefined, conv: conversation ?? undefined }).catch(() => null);
   if (r && typeof r.conv === "string") conversation = r.conv;
   return r && typeof r.line === "string" ? { line: r.line, ai: r.source === "ai", sentences: Array.isArray(r.sentences) ? (r.sentences as string[]) : [r.line] } : null;
+}
+
+/** The Town Chronicle (relayer route `chronicle`): recorded market events with provenance; null when unavailable. */
+export async function chronicleEvents(): Promise<ChronicleEvent[] | null> {
+  if (isOffline()) return null;
+  try {
+    const r = await fetch("/api/near/chronicle");
+    return r.ok ? (((await r.json()) as { events?: ChronicleEvent[] }).events ?? []) : null;
+  } catch { return null; }
 }
 
 /** When the market last took a turn on NEAR (a fresh read, not the cached status). */

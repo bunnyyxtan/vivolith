@@ -181,10 +181,15 @@ export function bidFor(state: EconomyState, id: MerchantId, good: Good): Bid | n
 function bidForRule(state: EconomyState, id: MerchantId, good: Good): Bid | null {
   const m = state.merchants[id];
   if (m.status !== "open" && good === "mango") {
-    // Every closed stall buys mangoes until deliveries reopen it (the contract counts them), whatever its style.
+    // Every closed stall buys mangoes until deliveries reopen it (the contract counts them), whatever its style. It can
+    // only offer what its till can pay for at least one: a broke stall bids low (a delivery at that price is a real
+    // favour, worth less than selling elsewhere) and a stall with nothing in the till cannot buy at all.
     const left = state.flags[`reopenNeed.${id}`];
     const need = typeof left === "number" ? left : m.target.mango - m.stock.mango;
-    return { price: Math.round(m.baseCost.mango * CLOSED_RESTOCK), qty: Math.max(1, need), reason: "Restocking to reopen" };
+    const till = Math.floor(m.cash), full = Math.round(m.baseCost.mango * CLOSED_RESTOCK);
+    if (till < 1) return null;
+    const price = Math.min(full, till);
+    return { price, qty: Math.max(1, need), reason: price < full ? `Restocking to reopen: only ${till} c in the till` : "Restocking to reopen" };
   }
   const short = m.target[good] - m.stock[good];
   if (short <= 0) return null;

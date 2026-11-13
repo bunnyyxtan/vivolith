@@ -191,6 +191,15 @@ body.panel-open .hud-prompt, body.panel-open .hud-hint, body.panel-open .hud-acc
 .hud-card a, .hud-near a { color:var(--mintd); font-weight:600; }
 .nb-tabs { display:flex; gap:4px; padding:4px 22px 12px; flex-wrap:wrap; } .nb-tabs button { padding:8px 14px; font-size:14px; background:transparent; }
 .nb-tabs button.on { background:var(--paper2); }
+/* Town Chronicle: one line of fact per event, provenance underneath, evidence folded away */
+.chron { list-style:none; margin:0; padding:0; }
+.chron li { padding:10px 0; border-bottom:1px solid var(--line); }
+.chron li > b { display:block; font-weight:600; font-size:15px; line-height:1.4; }
+.chron .prov { display:block; font-size:12px; color:var(--mute); margin-top:2px; }
+.chron .prov.ai { color:var(--mintd); } .chron .prov.failed { color:var(--coral, #c0392b); }
+.chron details { margin-top:6px; font-size:13px; color:var(--ink2); }
+.chron summary { cursor:pointer; color:var(--mintd); font-weight:600; font-size:12px; }
+.chron details ul { margin:6px 0 0; padding-left:18px; line-height:1.5; }
 .goal { display:flex; gap:10px; padding:7px 0; font-size:15px; line-height:1.35; } .goal i { width:16px; height:16px; border-radius:50%; border:2px solid #d8ccb6; flex:none; margin-top:1px; }
 .goal.done i { background:var(--mint); border-color:var(--mint); } .goal.done span { color:var(--mute); } .goal.now span { font-weight:700; }
 .goal small { display:block; color:var(--mute); font-size:13px; font-weight:400; }
