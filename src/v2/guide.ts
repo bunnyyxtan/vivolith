@@ -5,7 +5,7 @@ import * as THREE from "three";
 import type { EconomyState, MerchantId } from "../economy/state";
 import { MERCHANT_IDS } from "../economy/state";
 import { chainLive, reopenGap, SHARE_PACK } from "../economy/sim";
-import { bidFor, profitRun } from "../economy/pricing";
+import { bidFor, profitRun, quote } from "../economy/pricing";
 import { el, type Hud } from "./hud";
 import { night, type Clock, type Night } from "./story";
 
@@ -37,6 +37,19 @@ export const titleOf = (st: Step, s: EconomyState): string => (typeof st.title =
  *  terms once the 300 floated are gone), so the lesson can always be completed. */
 export const investTarget = (_s: EconomyState): MerchantId => "pema";
 const ownsShares = (s: EconomyState): boolean => MERCHANT_IDS.some((id) => s.player.shares[id] > 0);
+
+/** What the player can do right now about Pema's rent, from her till, shelf and price (offline and on NEAR alike). */
+export function nightAdvice(s: EconomyState): string {
+  const p = s.merchants.pema, till = Math.floor(p.cash), short = p.rent - till;
+  if (p.status !== "open") return "Her shutters are already down: bring mangoes to reopen her.";
+  if (short <= 0) return `Her till holds ${till} c for ${p.rent} c rent at 21:00. Paying for stock comes out of the till, so it can still slip.`;
+  const price = quote(s, "pema", "mango").price, n = Math.ceil(short / Math.max(1, price));
+  const mangoes = (k: number): string => `${k} ${k === 1 ? "mango" : "mangoes"}`;
+  const coming = s.shipments.filter((x) => x.to === "pema" && x.good === "mango" && x.status === "transit").reduce((k, x) => k + x.qty, 0);
+  if (coming > 0 && p.stock.mango < n + 3) return `Her harbor crates (${mangoes(coming)}) are on their way. Stock alone won't pay rent: she needs ${short} c by 21:00, from shoppers or from you buying ${mangoes(n)} at ${price} c.`;
+  if (p.stock.mango >= n + 3) return `Her shelf has ${mangoes(p.stock.mango)}; what she lacks is coins. Buying ${mangoes(n)} from her at ${price} c puts ${n * price} c in her till. Or trust street shoppers to buy enough before rent at 21:00.`;
+  return `Her shelf is nearly bare (${mangoes(p.stock.mango)}), so shoppers have little to buy. Bring her mangoes (free at the Orchard in the morning, cheap at Tomas) and buy from her if you can spare coins.`;
+}
 
 export const STEPS: readonly Step[] = [
   {
@@ -77,6 +90,19 @@ export const STEPS: readonly Step[] = [
     reward: "You're a partner now: part of every sale that stall makes comes to you.",
   },
   {
+    // Rent Night is the first day's climax: fast-forward stays locked until the player has seen how it ends.
+    id: "night", target: "pema",
+    title: (s) => {
+      const out = s.flags["night.outcome"];
+      if (out) return out === "kept" ? "Pema made rent. Go and see her" : "Pema's stall closed. Go and see her";
+      const short = s.merchants.pema.rent - Math.floor(s.merchants.pema.cash);
+      return short > 0 ? `Rent night: Pema is ${short} c short` : "Rent night: keep Pema's till above rent";
+    },
+    detail: (s) => s.flags["night.outcome"] ? "Hear how her night went at her stall." : nightAdvice(s),
+    done: (s) => f(s, "night.heard") || s.flags["night.start"] === undefined,
+    reward: "",
+  },
+  {
     id: "week", title: "Fast-forward a week", target: null,
     detail: (s) => chainLive(s)
       ? "Press T for a forecast: a week of the city in a minute, run from today's real market. See what your shares could earn."
@@ -101,7 +127,7 @@ export const inTutorial = (s: EconomyState): boolean => stepIndex(s) < STEPS.len
 /** Feature gates: things a new player meets one at a time. */
 export const unlocked = (s: EconomyState, what: "haggle" | "invest" | "week" | "rent"): boolean => {
   const i = stepIndex(s);
-  return what === "haggle" ? i >= 4 : what === "invest" ? i >= 5 : i >= 6;
+  return what === "haggle" ? i >= 4 : what === "invest" ? i >= 5 : what === "week" ? i >= 7 : i >= 6;
 };
 
 /** The standing objective once every goal is done: carry mangoes from the cheap stall to the stall that pays most. */
@@ -153,7 +179,7 @@ function nightObjective(s: EconomyState, c: Clock): Objective | null {
   return {
     title: short > 0 ? `Keep Pema open: ${short} c short of rent` : "Keep Pema open through rent", target: "pema", label: "The night Pema almost closed", stake: live(n),
     detail: short > 0
-      ? "Coins reach her till when her mangoes sell: stock on her shelves for street shoppers (the Orchard gives free mangoes each morning), customers buying from her, partners buying share packs. Nothing is decided until the rent is charged."
+      ? `${nightAdvice(s)} Nothing is decided until the rent is charged.`
       : "Her till covers the rent today, if nothing drains it first. Nothing is decided until the rent is charged.",
   };
 }

@@ -99,6 +99,20 @@ Dev relayer with real testnet keys, NEAR AI and ElevenLabs keys blanked (`near-w
 | Not live: no Chronicle, bond or decision has been written on testnet/production Redis; a real Jev decision has still not reached a confirmed transaction | NEEDS AUTHORIZATION | Deploy (with the closed-bid fix) + one delivery to Pema + one scheduler turn |
 | Live: one scheduler turn with agents enabled (testnet transactions + paid Jev calls + signature reads), the chat model live, Vercel Cron, production env | NOT RUN: needs the owner's authorization | Prepared: `scripts/near/agents.ts turn` (dry run by default, `--yes` sends one turn); cron line for `vercel.json`: `"crons": [{ "path": "/api/near/market-turn", "schedule": "*/5 * * * *" }]` (Vercel plan must allow it) |
 
+### Rent Night journey pass (2026-11-13, local, offline play in the browser)
+
+| Item | Status | Evidence |
+|---|---|---|
+| Played the first day as a new player ("Rin"): goal card + gold marker -> Pema's story -> buy from Tomas -> the choice at Pema (her 4 c, friend's 3 c, or Arin 6 c) -> haggle -> invest -> Rent Night at 21:00 -> evening report -> Pema's epilogue | PLAYED | `docs/evidence/rentnight-*.jpg` |
+| Blocker found: following the tutorial exactly closed Pema every time (investing pays her harbor fee, till 15 -> 1 c; shoppers bought ~4 mangoes by 21:00, she ended at 20 c), while step 7 "Fast-forward a week" unlocked T so a player could skip the night, and the advice was generic ("stock on her shelves") when she held 33 mangoes and lacked only coins | FIXED | New step 7 "Rent night" before the fast-forward (T unlocks after Pema's epilogue); advice from her real till, shelf, price and crates in transit ("Buying 4 mangoes from her at 5 c puts 20 c in her till"). Run A: followed it, she paid rent and kept 10 c; Run B: didn't, she closed 1 c short and reopened next morning on full shelves |
+| Evening report did not mention the night's stake | FIXED | "Pema's night" section first: Rent paid / Shutters down, her till, the player's part (mangoes sold, coins spent) |
+| Rent Night camera looked over the plaza tree: 3 of 4 merchants occluded (raycast), no bubble visible | FIXED | Camera on Pema's stall from the avenue: her bubble, the Closed sign and Arin's line in frame (`rentnight-b1-cinematic-shutters.jpg`; before: `rentnight-before-camera-fix.jpg`) |
+| Player name ignored: "You saved my morning, Kavi!" after naming yourself | FIXED | Lines use the chosen name; the recorded voice line still plays for the default name |
+| Epilogue said "The shutters are down" after she had reopened on her own | FIXED | Closed-then-reopened variant |
+| Hint "Press T to fast-forward a week" showed while T was locked | FIXED | Keyed to the step id |
+| Residents (Lin, Dev) and real NEAR settlement in this journey | NOT PLAYED | Residents only act in on-chain market turns; a connected run writes to the shared testnet market (production) and needs the owner's approval |
+| At 800x600 the trade panel covers the objective card's rent meter | OPEN | Seen in `rentnight-a1-choice-at-pema.jpg`; not checked at 1080p |
+
 ## Market v3: fresh economy and verification (2026-11-09)
 
 The testnet ledger was reset in place (`scripts/near/reset-state.ts`). Before the reset it held 212 state keys: 46 balances

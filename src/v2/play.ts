@@ -101,6 +101,8 @@ const nextRent = (minute: number): number => {
   const day = Math.floor(minute / MINUTES_PER_DAY) * MINUTES_PER_DAY;
   return minute < day + RENT_MINUTE ? day + RENT_MINUTE : day + MINUTES_PER_DAY + RENT_MINUTE;
 };
+/** The name the player chose on the title screen; Kavi (the hero) when none was given. */
+const playerName = (s: EconomyState): string => (typeof s.flags.name === "string" && s.flags.name.trim() ? s.flags.name.trim() : "Kavi");
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 const goodName = (g: Good, n: number): string => (g === "mango" ? plural(n, "mango", "mangoes") : g === "lemon" ? plural(n, "lemon", "lemons") : plural(n, "lassi", "lassis"));
 
@@ -172,8 +174,10 @@ const pemaEpilogue = (s: EconomyState, outcome: NightOutcome, connected: boolean
   const kept = s.merchants.pema.status === "open"
     ? `Rent's paid${connected ? ", it's on the market ledger" : ""}. ${Math.floor(s.merchants.pema.cash)} c left in the till.`
     : `I made rent that night. But a later rent caught me short, and the shutters are down again.${gap > 0 ? ` ${gap} more ${gap === 1 ? "mango" : "mangoes"} and I reopen.` : ""}`;
-  const shut = `The shutters are down. ${connected ? "The market charged the rent and" : "At nine,"} my till came up short.${gap > 0 ? ` ${gap} more ${gap === 1 ? "mango" : "mangoes"} on my shelves and I open again. I'll pay for every one.` : ""}`;
-  const why = helped ? `Kavi, ${thanks}.` : elsewhere ? `You sold your mangoes to ${elsewhere[0].toUpperCase()}${elsewhere.slice(1)}. Fair is fair: it was your trade to make.` : "You were busy elsewhere. I noticed.";
+  const shut = s.merchants.pema.status === "open"
+    ? `${connected ? "The market charged the rent and" : "At nine,"} my till came up short, and the shutters came down. My shelves were full, so I opened again.`
+    : `The shutters are down. ${connected ? "The market charged the rent and" : "At nine,"} my till came up short.${gap > 0 ? ` ${gap} more ${gap === 1 ? "mango" : "mangoes"} on my shelves and I open again. I'll pay for every one.` : ""}`;
+  const why = helped ? `${playerName(s)}, ${thanks}.` : elsewhere ? `You sold your mangoes to ${elsewhere[0].toUpperCase()}${elsewhere.slice(1)}. Fair is fair: it was your trade to make.` : "You were busy elsewhere. I noticed.";
   return {
     npcId: "pema", name: "Auntie Pema", role: "Fruit seller", accent: "#f39a2c",
     entry: () => "result",
@@ -289,7 +293,7 @@ export async function createPlay(game: Game): Promise<Play> {
     if (state.shipments.some((s) => s.status === "held")) lines.push("Pema's crates are still stuck at the harbor.");
     if (landed) lines.push("The harbor crates just came in!");
     if ((dayOf(state.minute) - 1) % 2 === 0) lines.push("Rent is due tonight at nine.");
-    if (state.player.shares.pema > 0) lines.push("Kavi owns part of Pema's stall now.");
+    if (state.player.shares.pema > 0) lines.push(`${playerName(state)} owns part of Pema's stall now.`);
     const nightOut = state.flags["night.outcome"];
     if (nightOut === "kept") lines.push(Number(state.flags["help.pema.sold"] ?? 0) > 0 ? "Pema made rent. The new courier brought her mangoes." : "Pema made rent, just about.");
     if (nightOut === "closed" && state.merchants.pema.status !== "open") lines.push("Pema's shutters are down. She needs mangoes to reopen.");
@@ -998,8 +1002,8 @@ export async function createPlay(game: Game): Promise<Play> {
       state.flags.deliveredPema = true;
       const cost = Number(state.flags.tutCost ?? total);
       const gaveUp = offered !== null ? (offered - dealUnit(h)) * h.qty : 0;
-      say = gaveUp > 0 ? (total >= cost ? `You made ${total - cost} c and left ${gaveUp} c in my till? Kavi. Look at my shelves!` : `${cost - total} c out of your own pocket, for my shelves? I won't forget this.`) : `Bought for ${cost} c, sold for ${total} c: you made ${total - cost} c. And look at my shelves!`;
-      market.say("pema", "You saved my morning, Kavi!", 4);
+      say = gaveUp > 0 ? (total >= cost ? `You made ${total - cost} c and left ${gaveUp} c in my till? ${playerName(state)}. Look at my shelves!` : `${cost - total} c out of your own pocket, for my shelves? I won't forget this.`) : `Bought for ${cost} c, sold for ${total} c: you made ${total - cost} c. And look at my shelves!`;
+      market.say("pema", `You saved my morning, ${playerName(state)}!`, 4); // recorded voice for the default name; other names are spoken by the voice route or not at all
     }
     if (h.mode === "buy" && h.moves > 0) { state.flags.haggled = true; if (out.gain > 0) say = `${out.gain} c cheaper than the first offer. Nicely done.`; }
     if (h.mode === "sell" && h.merchant === "arin") state.flags.soldArin = true;
@@ -1340,6 +1344,19 @@ export async function createPlay(game: Game): Promise<Play> {
   const showReport = (title: string, from: Snapshot, week: boolean): void => openCard((card) => {
     const days = Math.max(1, Math.round((state.minute - from.minute) / MINUTES_PER_DAY));
     card.append(el("h2", "", title), el("div", "sub", week ? `${days} days of trading, Day ${dayOf(from.minute)} to Day ${dayOf(state.minute)}` : clockOf(state.minute)));
+    // 0. the story's rent night, when this report covers it (offline clock; on NEAR the chain's own charge decides)
+    const nightOut = state.flags["night.outcome"] as NightOutcome | undefined, nightDue = Number(state.flags["night.due"] ?? -1);
+    if (!week && nightOut && state.flags["night.mode"] === "local" && nightDue > from.minute && nightDue <= state.minute + 1e-6) {
+      const pema = state.merchants.pema, sold = Number(state.flags["help.pema.sold"] ?? 0), paid = Number(state.flags["help.pema.paid"] ?? 0);
+      const yours = [sold > 0 ? `${goodName("mango", sold)} sold to her` : "", paid > 0 ? `${paid} c spent at her stall` : ""].filter(Boolean).join(", ");
+      const gap = reopenGap(state, "pema");
+      const sec = el("section"); sec.append(el("h4", "", "Pema's night"));
+      sec.append(el("div", `big ${nightOut === "kept" ? "pos" : "neg"}`, nightOut === "kept" ? "Rent paid" : "Shutters down"));
+      sec.append(el("p", "", nightOut === "kept"
+        ? `She paid ${pema.rent} c rent and keeps ${Math.floor(pema.cash)} c.${yours ? ` Your part: ${yours}.` : " Street trade carried her."}`
+        : `Her till came up short of the ${pema.rent} c rent and the stall closed.${yours ? ` Your part (${yours}) wasn't enough.` : ""} ${gap > 0 ? `${gap} more ${gap === 1 ? "mango" : "mangoes"} on her shelves and she reopens.` : "Her shelves are stocked, so she can open again in the morning."}`));
+      card.append(sec);
+    }
     // 1. the city
     const city = el("section"); city.append(el("h4", "", "In the city"));
     const lines: string[] = [];
@@ -1431,7 +1448,7 @@ export async function createPlay(game: Game): Promise<Play> {
   const showWelcome = (): void => openCard((card) => {
     card.append(el("h2", "", "Welcome to NEAR City"));
     const s = el("section");
-    s.append(el("p", "", `You're ${typeof state.flags.name === "string" ? state.flags.name : "Kavi"}, new in town with ${STARTER_COINS} coins in your pocket.`));
+    s.append(el("p", "", `You're ${playerName(state)}, new in town with ${STARTER_COINS} coins in your pocket.`));
     s.append(el("p", "", "The market square ahead runs on trade. Four merchants buy and sell all day, each with their own till. Prices move with every crate."));
     s.append(el("p", "", "Auntie Pema's fruit stall is in trouble. Go and see her."));
     card.append(s);
@@ -1486,16 +1503,19 @@ export async function createPlay(game: Game): Promise<Play> {
     void audio.sfx("rent_bell");
   };
   const rentEye = new THREE.Vector3(), rentAt = new THREE.Vector3();
+  const RENT_EYE = new THREE.Vector3(7, 4, -2), RENT_LOOK = new THREE.Vector3(0, 1.9, 2);
   game.onUpdate.push((dt) => { // runs after the rig: it owns the camera while the stalls are lit up
     if (rentHold <= 0) return;
     rentHold -= dt;
-    const stalls = market.npcs.filter((n) => (TRADERS as readonly string[]).includes(n.id));
-    rentAt.set(0, 0, 0);
-    for (const n of stalls) rentAt.add(n.root.position);
-    rentAt.divideScalar(Math.max(1, stalls.length)).setY(1.4);
-    rentEye.copy(rentAt).add(new THREE.Vector3(0, 6.5, 15));
-    rig.camera.position.copy(rentEye);
-    rig.camera.lookAt(rentAt);
+    // Pema's stall from the avenue: her bubble and Arin's next door are unoccluded from here (raycast-checked; the old
+    // view over the middle of the four stalls had three of them behind awnings and the plaza tree)
+    const pema = market.npcs.find((n) => n.id === "pema");
+    if (pema) {
+      rentAt.copy(pema.root.position).add(RENT_LOOK);
+      rentEye.copy(pema.root.position).add(RENT_EYE);
+      rig.camera.position.copy(rentEye);
+      rig.camera.lookAt(rentAt);
+    }
     if (rentHold <= 0 && rentDone) { const d = rentDone; rentDone = null; player.frozen = false; d(); }
   });
   /** Where an objective points: a merchant at their stall, or the Mango Orchard sign. */
@@ -1628,7 +1648,8 @@ export async function createPlay(game: Game): Promise<Play> {
     if (mode.kind !== "walk" || ff) return null;
     if (i === 0 && playTime < 25) return "W A S D to walk · Shift to run · drag the mouse to look around";
     if (i === 3 && Number(state.flags.bagHint ?? 0) > playTime) return "B opens your bag";
-    if (i === 6) return "Press T to fast-forward a week";
+    if (STEPS[i]?.id === "week") return "Press T to fast-forward a week";
+    if (STEPS[i]?.id === "night" && !state.flags["night.outcome"]) return state.minute % MINUTES_PER_DAY < RENT_MINUTE ? "Rent is charged at 21:00" : null;
     return null;
   };
   let hintKey = "";
@@ -2038,7 +2059,7 @@ export async function createPlay(game: Game): Promise<Play> {
       if (!npc) return;
       if (npc.id === "pema" && stepIndex(state) <= 1) { state.flags.nearPema = true; openTalk(npc, PEMA_INTRO); return; }
       const nightOut = state.flags["night.outcome"] as NightOutcome | undefined;
-      if (npc.id === "pema" && nightOut && !state.flags["night.heard"] && !inTutorial(state)) {
+      if (npc.id === "pema" && nightOut && !state.flags["night.heard"] && (!inTutorial(state) || STEPS[stepIndex(state)].id === "night")) {
         openTalk(npc, pemaEpilogue(state, nightOut, state.flags["night.mode"] === "chain", reopenGap(state, "pema"))); return;
       }
       if (!TRADERS.includes(npc.id as MerchantId)) { openTalk(npc); return; }
