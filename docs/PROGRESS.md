@@ -129,6 +129,34 @@ Offline or isolated only (mocked RPC, mocked NEAR AI, or offline browser play):
 | Residents (Lin, Dev) and real NEAR settlement in this journey | NOT PLAYED | Residents only act in on-chain market turns; a connected run writes to the shared testnet market (production) and needs the owner's approval |
 | At 800x600 the trade panel covers the objective card's rent meter | OPEN | Seen in `rentnight-a1-choice-at-pema.jpg`; not checked at 1080p |
 
+## Phase 6: live production acceptance (2026-11-14, authorized)
+
+**Verdict: NO-GO for `55a4121` as deployed; fixes are in local `d8443ba`, not deployed (needs approval).** The connected
+game works end to end on real services, but players saw chain and AI evidence in the game (decision card with model,
+confidence and signature on Arin's lassi tab, transaction links, "confirmed on NEAR" labels) and some Rent Night lines
+were silent. Both fixed in `d8443ba`; deploying it and re-checking those screens is the remaining release step.
+
+Deployed `55a4121` to vivolith.world from a clean worktree (13/13 checks, typecheck, build, voice check). Env for the
+run: `ELEVENLABS_API_KEY` added (kept), `NEAR_TEST_TURNS=16`, `NEAR_TEST_TXS=220`, `NEAR_TEST_RUN=accept-1114`,
+`NEAR_AGENT_MERCHANTS=arin`, `NEAR_AI_DAILY_DECISIONS=1`, `NEAR_AI_DAILY_VERIFIES=3`, `CRON_SECRET`, chats 3 -> 10.
+After the run every test setting was removed, chats set back to 3, and `55a4121` redeployed: status shows no caps, no
+agents, `market-turn` 401. Rollback target: `vivolith-jneb85v3k` (c2ace0b) via `vercel rollback`.
+
+| Item | Result | Evidence |
+|---|---|---|
+| Transaction budget added before going live (`5054b6a`): a market turn can sign up to 35 transactions (settle, rent, Guild, 15 order updates, 8 merchant buys, 8 resident transactions, operator), so a turn cap alone did not bound them; `NEAR_TEST_TXS` reserves 35 per turn and refunds the rest | VERIFIED (mocked + live) | Mocked: most seen 15/turn; a 70 budget stopped after 3 turns, 44 signed. Live: 10 turns, 99 transactions counted exactly (turn 1: 9 signed, budget 9) |
+| Reused guest `g57825b9cb629b178` (registered, 40 c); no new account | VERIFIED | `is_registered` true, balances read before play |
+| Player transactions through the production UI, all final `SuccessValue`: buy 3 from Tomas 12 c `6tuATCUo`; buy from Pema `5R2RadH2`, `2CxSydiv`, `96f8zXTL`; sell 2 to Pema `9CR78mM4`; 1-mango delivery reopened her `8bUHgThh`; haggled buy 3 from Tomas at 9 c (lowball, relayer replay accepted) `CSqGfMuz`; 15 Pema shares `47eaGrvR` | VERIFIED on testnet | Game wallet = chain after every step (final 2 c, 8 mangoes, 15 shares) |
+| Real Rent Night: Pema 0 c at the start; my purchases and street sales brought her to 15 c; the market's rent turn (day 2990998) closed her, Tomas used his one recovery grace, Arin paid 30 c; one delivery reopened Pema; Mira reopened later. All four stalls open at the end | VERIFIED on testnet | rent tx `HjoN9ZEi`; Chronicle 24 events, all confirmed, 0 duplicate ids or tx |
+| Residents live: Lin sold to closed Tomas (reopened him), sold to and ate at Arin | VERIFIED on testnet | `7SxXqG3e`, `GK3NYbH9`, `4ry3mrJP` |
+| Live NEAR AI chat (2 calls, gemini-2.5-flash-lite through `talk`): Pema "I owe the Market Guild 163 coins. And yes, your mangoes helped a little" (chain: debt 163); Arin "I do not recall deciding the mango bid... I buy mango at 6 coins, up to 2" (no invented memory; matches his order) | VERIFIED | `source: ai`, 1.37-1.44 s, signed speech tokens per sentence |
+| Live agent: one scheduler turn, agents scope, Arin only: Jev `typesafe/jev-1.13-20260917` lowered his mango bid 6 -> 5 c (confidence 0.68), order `D49EMCL4` final, signature check **signed**, decision in Redis with tx hash, `live` true; 1 decision, 1 verify used | VERIFIED | One agent, one decision: the other five are not live-verified |
+| ElevenLabs on production: unrecorded lines and AI answers voiced, 0.7-2.6 s per sentence; Esc mid-answer stopped the voice, aborted the pending sentence, no further request; arbitrary text 403. About 17 generations | VERIFIED | Defect: 3 Rent Night lines refused (403) and played silent; fixed in `d8443ba` |
+| Save and resume on production: reload restored wallet, bag, shares and step; 45 resources, about 12 MB, 0 failed; about 7.9 s to playable | VERIFIED | |
+| Visible-browser FPS (pane in view, 120 Hz display): 1280x720 market 119 fps (p50 8.3, p95 8.4, max 16.7 ms); 1920x1080 market, walking, avenue 120 fps (p95 8.4 ms); night 21:00 120 fps; heap 180-192 MB over the session | MEASURED | Display-capped at 120 Hz |
+| Defects found live, fixed in `d8443ba` (not deployed): chain/AI evidence on player screens (decision card on Arin's lassi tab, signature and model text, tx links, "confirmed on NEAR", "Saved · see N for the record", raw refusal text); connected rent result hidden behind tutorial steps 5-6; epilogue said "my shelves were full, so I opened again" after the player's delivery reopened her; step 4 told the player Pema "needs stock" while her shelves were full and she had no coins; Rent Night lines 403; "after 1 mangoes" | FIXED locally | Ledger (balances, tx, decisions, money trail) only with `?ledger` |
+| Not resolved | OPEN | One market turn reported 1 refused transaction (function logs not retained; balances consistent). Chronicle decision events keep "pending" after the signature is verified (ledger only now). Pema's buy was 1 unit per trade while her posted ask was 1. Ask box sits behind "Why N c?" |
+
 ## Phase 6: gameplay, game feel and production review (2026-11-14)
 
 **Status: IMPLEMENTATION COMPLETE (local, offline play).** Played in the browser pane with real key events

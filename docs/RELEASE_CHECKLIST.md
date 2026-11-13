@@ -4,7 +4,12 @@ Carried over from Phase 2 (closed 2026-11-13, see [PROGRESS.md](PROGRESS.md)). E
 explicit approval before it runs: each one writes to testnet, production Redis or the live site, or spends NEAR AI
 credits. Record evidence in `docs/evidence/` and the result in PROGRESS.md.
 
-Production today: `c2ace0b`. Local commits not deployed: `86cf4be` (Lin grounding), `16ed7a5` (relayer bundle),
+**2026-11-14:** live acceptance ran on `55a4121` (PROGRESS.md "Phase 6: live production acceptance"). Next release step:
+deploy `d8443ba` (player never sees the chain; Rent Night voice lines; early rent result) and re-check the trade panels,
+Town tab and Rent Night on vivolith.world. Done in that run: connected playthrough (§1), one live agent turn (§2), Redis
+decisions/Chronicle (§3), live voice and chat (§4).
+
+Production before that run: `c2ace0b`. Local commits not deployed: `86cf4be` (Lin grounding), `16ed7a5` (relayer bundle),
 `f781fb2` (Rent Night journey), the Phase 3 voice commits (`30e1fff`, live voice and hardening), the Phase 4 characters commit, plus docs.
 
 ## 1. Connected playthrough (testnet)
