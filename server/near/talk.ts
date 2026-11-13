@@ -81,6 +81,7 @@ export function factsFor(st: EconomyState, id: MerchantId, offers: readonly Offe
     `Your stall is ${m.status === "open" ? "open" : "closed because rent went unpaid"}.`,
     `Your till holds ${Math.floor(m.cash)} coins. Rent is ${m.rent} coins every ${m.rentEveryDays} market days.`,
     `On your shelves: ${m.stock.mango} mangoes, ${m.stock.lemon} lemons, ${m.stock.lassi} lassi.`,
+    ...(Number(st.flags[`debt.${id}`] ?? 0) > 0 ? [`You owe the Market Guild ${Number(st.flags[`debt.${id}`])} coins and repay it a little at a time from what you earn above your rent.`] : []),
     `Your price for a ${good} today is ${q.price} coins.${reasons.length ? ` Why: ${reasons.join("; ")}.` : " It is a normal day."}`,
     ...mine.map((o) => `You ${o.side === "ask" ? "sell" : "buy"} ${o.token_id} at ${o.price} coins, up to ${o.qty}.`),
     ...receipts.slice(-3).map((r) => `Recently you ${r.kind} ${r.qty} ${r.token_id} at ${r.price} coins with ${r.counterparty.split(".")[0]}.`),

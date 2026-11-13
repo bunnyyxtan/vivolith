@@ -22,6 +22,7 @@ import { verifyDecision } from "./verify.ts";
 import type { ChainReceipt, MemoryRow, Snapshot } from "./memory.ts";
 import { addBond, bondFacts, chronicle, putDealRef, readBonds, readChronicle, takeDealRef } from "./ledger.ts";
 import { changedSince, decisionEvent, eventId, lastDecisionAt, type ChronicleEvent } from "../../src/economy/chronicle.ts";
+import { GRACE_DAYS, guildFillTo, guildPlan, rentToCharge, touristUnits } from "../../src/economy/recovery.ts";
 import { ORCHARD_PICK, bidFor, dealBounds, planMerchantTrades, quote } from "../../src/economy/pricing.ts";
 import { newcomerPrice, verifyDealUnit } from "../../src/economy/haggle.ts";
 import { closingNeed, shopperWant } from "../../src/economy/sim.ts";
@@ -53,13 +54,9 @@ const GUEST_FUNDING = "0.01"; // account + key storage; guests never pay gas (me
 /** One on-chain market day settles every 10 real minutes (fast-forward previews run in the client sim). */
 export const MARKET_DAY_MS = 10 * 60 * 1000;
 /** The Market Guild fund: minted once when the contract opens (`new`); it only lends what it holds, records every
- *  loan as the stall's debt, and is repaid (then refilled by dues) from healthy tills. deploy-contract.ts seeds it. */
-export const GUILD_FUND = 200;
-/** A till under this borrows up to it (covers one tutorial delivery: 3 mangoes at 6 c). */
-const GUILD_FLOAT = 18;
-/** A till over this repays its loan, then pays dues while the fund is below GUILD_FUND (at most GUILD_DUES a day). */
-const GUILD_HEALTHY = 80;
-const GUILD_DUES = 10;
+ *  loan as the stall's debt, and is repaid (then refilled by dues) from earning tills. deploy-contract.ts seeds it.
+ *  The lending and collection rules are in src/economy/recovery.ts. */
+export { GUILD_FUND } from "../../src/economy/recovery.ts";
 /** Tomas pays the harbor this per mango on his standing contract (the offline sim charges the same). */
 const HARBOR_COST = 2;
 
@@ -392,6 +389,11 @@ async function recordPlayerDeal(cfg: Config, d: DecodedDelegate, player: string,
     if (ref?.closed && side === "sell") {
       const { provider } = account(cfg);
       const stalls = await view<{ merchant: string; open: boolean }[]>(provider, cfg.contractId, "get_stalls", {}).catch(() => []);
+      if (stalls.find((s) => s.merchant === merchant)?.open) {
+        // the market turn reads these for the one-time rent grace and so does not announce this reopening twice
+        await kv(cfg, ["SET", `vivolith:stall:${merchant}`, "open"]).catch(() => null);
+        await kv(cfg, ["SET", `vivolith:reopened:${merchant}`, String(day)]).catch(() => null);
+      }
       if (stalls.find((s) => s.merchant === merchant)?.open) events.push({ id: eventId(at + 1, "reopened"), at: at + 1, day, kind: "reopened", actors: [merchant], player, text: `${name}'s stall reopened after a delivery.`, changes: [], status: "confirmed", txHash: r.txHash, decision: null, since: [] });
     }
   }
@@ -749,30 +751,27 @@ const coinMove = (from: string, to: string, amount: number, reason: string): Cal
 async function guildTurn(cfg: Config, provider: JsonRpcProvider, st: EconomyState, day: number, log: string[]): Promise<Call[]> {
   const guild = await view<string>(provider, cfg.contractId, "get_guild", {});
   const rows = await view<[string, string][]>(provider, cfg.contractId, "get_balances", { account_id: guild });
-  let fund = Number(rows.find(([t]) => t === "coin")?.[1] ?? 0);
-  let lent = MERCHANTS.reduce((n, id) => n + Number(st.flags[`debt.${id}`] ?? 0), 0);
+  const fund = Number(rows.find(([t]) => t === "coin")?.[1] ?? 0);
+  // the rules live in src/economy/recovery.ts (the market model simulates the same ones): loans up to DEBT_CAP, capped
+  // repayment from any till above rent + reserve, dues that may rebuild a fund emptied by loans to closed stalls
+  const debt = Object.fromEntries(MERCHANTS.map((id) => [id, Number(st.flags[`debt.${id}`] ?? 0)]));
+  // A closed stall can only reopen if it can pay for the mangoes brought to it: the Guild covers that gap if it can.
+  const rescueOf = (id: MerchantId): number => st.merchants[id].status === "open" ? 0 : Number(st.flags[`reopenNeed.${id}`] ?? 0) * (bidFor(st, id, "mango")?.price ?? 0);
+  const fillTo = guildFillTo(st, MERCHANTS, debt);
   const calls: Call[] = [];
-  for (const id of MERCHANTS) {
-    const m = st.merchants[id], debt = Number(st.flags[`debt.${id}`] ?? 0);
-    // A closed stall can only reopen if it can pay for the mangoes players bring: the Guild covers that whole gap.
-    const rescue = m.status === "open" ? 0 : Number(st.flags[`reopenNeed.${id}`] ?? 0) * (bidFor(st, id, "mango")?.price ?? 0);
-    const float = Math.max(GUILD_FLOAT, rescue);
-    if (m.cash < float && fund > 0) {
-      // Loans may come every merchant turn (ticks run at most once a minute): a till that fell short mid-day, e.g.
-      // Pema after paying for a delivery, can pay the next player within a minute, not the next market day.
-      const amount = Math.min(float - m.cash, fund);
-      calls.push(actions.functionCall("guild_lend", { merchant: id, amount: String(amount) }, TICK_GAS, 0n));
-      fund -= amount; lent += amount; m.cash += amount;
-      log.push(`market guild lent ${id} ${amount} c (fund ${fund} c, ${id} owes ${debt + amount} c)`);
-    } else if (m.cash > GUILD_HEALTHY) {
-      // the contract's own rule (guild_collect): repayment first, then dues only while held + lent < GUILD_FUND
-      const repay = Math.min(debt, m.cash - GUILD_HEALTHY);
-      const dues = Math.max(0, Math.min(m.cash - GUILD_HEALTHY - repay, GUILD_DUES, GUILD_FUND - (fund + lent)));
-      if (repay + dues <= 0) continue; // nothing owed and the Guild is full: send nothing
-      if (!(await hit(cfg, `guild:${id}:${day}`, 1, Math.ceil(MARKET_DAY_MS / 1000)))) continue;
-      calls.push(actions.functionCall("guild_collect", { merchant: id, amount: String(repay + dues), fill_to: String(GUILD_FUND) }, TICK_GAS, 0n));
-      fund += repay + dues; lent -= repay; m.cash -= repay + dues;
-      log.push(`${id} ${repay ? `repaid the market guild ${repay} c` : ""}${repay && dues ? " and " : ""}${dues ? `paid ${dues} c guild dues` : ""} (fund ${fund} c)`);
+  for (const g of guildPlan(st, MERCHANTS, fund, debt, rescueOf, () => true)) {
+    const m = st.merchants[g.merchant];
+    if (g.kind === "lend") {
+      // Loans may come every merchant turn (ticks run at most once a minute): a till that fell short mid-day can pay
+      // the next delivery within a minute, not the next market day.
+      calls.push(actions.functionCall("guild_lend", { merchant: g.merchant, amount: String(g.amount) }, TICK_GAS, 0n));
+      m.cash += g.amount;
+      log.push(`market guild lent ${g.merchant} ${g.amount} c (${g.merchant} owes ${debt[g.merchant] + g.amount} c)`);
+    } else {
+      if (!(await hit(cfg, `guild:${g.merchant}:${day}`, 1, Math.ceil(MARKET_DAY_MS / 1000)))) continue; // once a market day
+      calls.push(actions.functionCall("guild_collect", { merchant: g.merchant, amount: String(g.amount), fill_to: String(fillTo) }, TICK_GAS, 0n));
+      m.cash -= g.amount;
+      log.push(`${g.merchant} ${g.repaid ? `repaid the market guild ${g.repaid} c` : ""}${g.repaid && g.dues ? " and " : ""}${g.dues ? `paid ${g.dues} c guild dues` : ""}`);
     }
   }
   return calls;
@@ -946,15 +945,38 @@ async function tick(cfg: Config, env: RelayEnv, trusted = false, scope: "market"
   }
   // Rent, on chain: due every `rentEveryDays` market days; a stall that cannot pay closes until deliveries of
   // `closingNeed` mangoes reopen it. Idempotent per stall and day in the contract.
+  // Reopenings (contract deliveries reopen a stall silently): a stall last seen closed and open now reopened today. The
+  // day is kept for the one-time rent grace (src/economy/recovery.ts) and told in the Chronicle.
+  const reopenedDay: Record<string, number | null> = {};
+  if (full) for (const id of MERCHANTS) {
+    const open = st.merchants[id].status === "open";
+    const was = await kv(cfg, ["GET", `vivolith:stall:${id}`]).catch(() => null);
+    if (was === "closed" && open) {
+      await kv(cfg, ["SET", `vivolith:reopened:${id}`, String(day)]).catch(() => null);
+      const at = Date.now();
+      events.push({ id: `reopened-${id}-${day}`, at, day, kind: "reopened", actors: [id], player: null, text: `${st.merchants[id].name}'s stall is open again: enough mangoes were delivered.`, changes: [], status: "confirmed", txHash: null, decision: null, since: [] });
+    }
+    if (was !== (open ? "open" : "closed")) await kv(cfg, ["SET", `vivolith:stall:${id}`, open ? "open" : "closed"]).catch(() => null);
+    const r = await kv(cfg, ["GET", `vivolith:reopened:${id}`]).catch(() => null);
+    reopenedDay[id] = r !== null && Number.isFinite(Number(r)) ? Number(r) : null;
+  }
   const rentCalls: Call[] = [], rentEvents: ChronicleEvent[] = [];
   for (const id of MERCHANTS) {
     const m = st.merchants[id];
     if (!full || m.status !== "open" || day % m.rentEveryDays !== 0 || Number(st.flags[`lastRent.${id}`]) >= day) continue;
     if (!(await hit(cfg, `rent:${id}:${day}`, 1, Math.ceil(MARKET_DAY_MS / 1000) * 2))) continue;
     const need = closingNeed(st, id);
-    rentCalls.push(actions.functionCall("charge_rent", { day, merchant: id, rent: String(m.rent), reopen_need: String(need) }, TICK_GAS, 0n));
+    // one rent waived per reopening, only for a stall that reopened within GRACE_DAYS and cannot pay (once-guarded)
+    const rd = reopenedDay[id] ?? null;
+    const eligible = rd !== null && day - rd >= 0 && day - rd <= GRACE_DAYS && m.cash < m.rent;
+    const unused = eligible ? await claimOnce(cfg, `grace:${id}:${rd}`, 3 * Math.ceil(MARKET_DAY_MS / 1000) * (GRACE_DAYS + 1)) : false;
+    const charge = rentToCharge(m, day, rd, () => unused);
+    rentCalls.push(actions.functionCall("charge_rent", { day, merchant: id, rent: String(charge.rent), reopen_need: String(need) }, TICK_GAS, 0n));
     const at = Date.now(), name = st.merchants[id].name;
-    if (m.cash >= m.rent) {
+    if (charge.grace) {
+      rentEvents.push({ id: eventId(at, "rent"), at, day, kind: "rent", actors: [id], player: null, text: `${name}'s rent was waived once: the stall reopened ${day - rd!} market day${day - rd! === 1 ? "" : "s"} ago and has ${Math.floor(m.cash)} c (recovery grace, once per reopening).`, changes: [], status: "pending", txHash: null, decision: null, since: [] });
+      log.push(`${id} rent waived once (recovery grace)`);
+    } else if (m.cash >= m.rent) {
       rentEvents.push({ id: eventId(at, "rent"), at, day, kind: "rent", actors: [id], player: null, text: `${name} paid ${m.rent} c rent.`, changes: [{ who: id, good: "coin", delta: -m.rent }], status: "pending", txHash: null, decision: null, since: [] });
       m.cash -= m.rent; log.push(`${id} paid ${m.rent} c rent`);
     } else {
@@ -1073,8 +1095,13 @@ async function tick(cfg: Config, env: RelayEnv, trusted = false, scope: "market"
     const m = st.merchants[id];
     if (m.status !== "open") continue; // shutters down: no shoppers
     for (const good of m.sells) {
-      // residents now buy part of the lassi the street used to: tourists take only the rest
-      const units = Math.max(0, Math.min(m.stock[good], Math.floor(shopperWant(st, id, good) * TICK_HOURS)) - (ate[`${id}:${good}`] ?? 0));
+      // residents now buy part of the lassi the street used to: tourists take only the rest. The fraction of a shopper
+      // carries to the next turn (before, floor() per turn dropped every fruit sale: src/economy/recovery.ts)
+      const key = `vivolith:carry:${id}:${good}`;
+      const carried = Number(await kv(cfg, ["GET", key]).catch(() => null) ?? 0);
+      const sold = touristUnits(shopperWant(st, id, good) * TICK_HOURS - (ate[`${id}:${good}`] ?? 0), Number.isFinite(carried) ? carried : 0, m.stock[good]);
+      await kv(cfg, ["SET", key, String(sold.carry)]).catch(() => null);
+      const units = sold.units;
       if (units > 0) op.push(actions.functionCall("street_sale", { merchant: id, token_id: good, qty: String(units), unit_price: String(quote(st, id, good, false).price) }, TICK_GAS, 0n));
       if (units > 0) log.push(`tourists bought ${units} ${good} from ${id}`);
     }

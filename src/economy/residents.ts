@@ -53,7 +53,9 @@ export function executableOffers(offers: readonly Offer[], stalls: Readonly<Reco
   const out: Offer[] = [];
   for (const o of offers) {
     const m = stalls[o.merchant], price = Number(o.price), qty = Number(o.qty);
-    if (!m || m.status !== "open" || !(price > 0) || !(qty > 0)) continue;
+    // a closed stall sells nothing, but its funded bid is real: the contract lets anyone sell into it, and those
+    // deliveries are how it reopens (recovery.ts)
+    if (!m || (m.status !== "open" && o.side !== "bid") || !(price > 0) || !(qty > 0)) continue;
     const fill = o.side === "bid" ? Math.min(qty, Math.floor(m.cash / price)) : o.side === "ask" ? Math.min(qty, Math.floor(m.stock[o.token_id] ?? 0)) : 0;
     if (fill >= 1) out.push({ ...o, qty: String(fill) });
   }

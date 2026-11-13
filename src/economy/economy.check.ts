@@ -38,10 +38,11 @@ assert.equal(shut.flags["reopenNeed.pema"], undefined);
   assert.equal(broke.sell, null); assert.equal(broke.eat, null); assert.equal(broke.hungry, 3);
   const partial = planResident(picker, [o("arin", "bid", "mango", 2, 6)], 0, 6);
   assert.equal(partial.sell?.qty, 2, "never sells more than the bid takes");
-  // only what an open stall can fill reaches the planner and the model: closed stalls, empty tills and empty shelves are dropped
-  const stalls = { arin: { status: "open", cash: 14, stock: { lassi: 3 } }, mira: { status: "closed", cash: 14, stock: {} }, pema: { status: "open", cash: 4, stock: {} }, tomas: { status: "open", cash: 12, stock: { lassi: 0 } } };
-  const live = executableOffers([o("mira", "bid", "mango", 1, 5), o("pema", "bid", "mango", 5, 5), o("arin", "bid", "mango", 9, 5), o("arin", "ask", "lassi", 8, 2), o("tomas", "ask", "lassi", 5, 2), o("ghost", "bid", "mango", 1, 1)], stalls);
-  assert.deepEqual(live.map((x) => `${x.merchant}:${x.side}:${x.qty}`), ["arin:bid:2", "arin:ask:3"], "closed, broke, out-of-stock and unknown stalls are excluded; quantities cut to till and shelf");
+  // only what a stall can fill reaches the planner and the model: a closed stall's asks, empty tills and empty shelves are
+  // dropped; a closed stall's funded bid stays (selling into it is legal on chain and is how it reopens)
+  const stalls = { arin: { status: "open", cash: 14, stock: { lassi: 3 } }, mira: { status: "closed", cash: 14, stock: { mango: 4 } }, pema: { status: "open", cash: 4, stock: {} }, tomas: { status: "open", cash: 12, stock: { lassi: 0 } } };
+  const live = executableOffers([o("mira", "bid", "mango", 1, 5), o("mira", "ask", "mango", 4, 5), o("pema", "bid", "mango", 5, 5), o("arin", "bid", "mango", 9, 5), o("arin", "ask", "lassi", 8, 2), o("tomas", "ask", "lassi", 5, 2), o("ghost", "bid", "mango", 1, 1)], stalls);
+  assert.deepEqual(live.map((x) => `${x.merchant}:${x.side}:${x.qty}`), ["mira:bid:1", "arin:bid:2", "arin:ask:3"], "closed asks, broke, out-of-stock and unknown stalls are excluded; quantities cut to till and shelf");
 }
 
 const hours = (h: number) => h * 60;
