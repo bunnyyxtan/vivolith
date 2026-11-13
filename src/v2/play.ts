@@ -479,7 +479,9 @@ export async function createPlay(game: Game): Promise<Play> {
     inFlight++;
     ledgerEpoch++;
     // in-world: a trade needs no status line while it settles (the panel shows the merchant shaking on it)
-    void tx.then((o) => {
+    // A rejection (e.g. the expired-sign-in fallback losing the network) is an unknown outcome, never a stuck one: without
+    // this, inFlight stays above 0, the panel waits forever and every later wallet read is dropped.
+    void tx.catch((): TxOutcome => ({ status: "unknown", message: "no answer" })).then((o) => {
       inFlight--;
       ledgerEpoch++;
       Object.assign(r, { status: o.status === "unknown" ? "unconfirmed" : o.status, txHash: o.txHash, message: o.message, accountId: playerId() ?? undefined });
@@ -2051,7 +2053,7 @@ export async function createPlay(game: Game): Promise<Play> {
     hud.acct.innerHTML = "";
     const who = el("div", "who");
     const name = typeof state.flags.name === "string" ? state.flags.name : null; // display only, never an account
-    who.append(el("b", "", !id ? name ?? "Offline" : label || name || "Guest"), el("span", "", id ? (label ? " · saved to your account" : " · saved in this browser") : " · trades stay here"));
+    who.append(el("b", "", !id ? name ?? "Offline" : label || name || "Guest"), el("span", "", READ_ONLY ? " · read-only, nothing saved" : id ? (label ? " · saved to your account" : " · saved in this browser") : " · trades stay here"));
     hud.acct.append(who);
     if (!id || (!label && !socialAvailable())) return; // sign-in appears once Google/email login is configured
     if (label) return; // signed in: sign-out is in the menu (Esc), behind a confirmation
@@ -2145,6 +2147,7 @@ export async function createPlay(game: Game): Promise<Play> {
     renderAcct();
     if (!id) return;
     void syncMerchants();
+    void refreshTown(); // Town news at once (a GET), not only after the first market turn answers
     await syncPlayer(id); // NEAR is authoritative: the save only mirrors what the account holds
     if (redirected) { await afterSignIn(redirected); return; }
     if (!playerLabel() || entered) return;
