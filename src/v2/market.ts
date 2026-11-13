@@ -104,6 +104,7 @@ const LANTERN_GLOW = 2.6; // full-night strength: above the bloom threshold, so 
 const MAX_CRATES = 9;
 
 const SHUTTER_TOP = 1.6, SHUTTER_BOTTOM = 0.55, SLAT_M = 0.1, SHUTTER_STRUGGLING = 0.45;
+const SHUTTER_EASE = 6; // 1/s: how quickly a shutter rolls to its new height
 /** Counter width each stall's shutter spans (the tea house counter is wider than the fruit stalls'). */
 const SHUTTER_W: Record<string, number> = { arin: 4.2 };
 const SHUTTER_W_DEFAULT = 3.0;
@@ -194,7 +195,8 @@ function makeCrateGeometry(): THREE.BufferGeometry {
 }
 
 /** Crate pile, closed shutter and upgrade dressing beside a stall; meshes are created once and toggled. */
-function makeStallDressing(scene: THREE.Scene, post: Post, y: number, id: string): (s: StallState) => void {
+interface Dressing { set(s: StallState): void; tick(dt: number, serving: boolean): void }
+function makeStallDressing(scene: THREE.Scene, post: Post, y: number, id: string): Dressing {
   const side = Math.sign(post.stall.x - post.npc.x) || 1; // +1: customers stand on +X of the counter
   const front = (post.npc.x + post.stall.x) / 2; // the canopy's customer-facing edge
   const face = side > 0 ? Math.PI / 2 : -Math.PI / 2;
@@ -258,15 +260,27 @@ function makeStallDressing(scene: THREE.Scene, post: Post, y: number, id: string
     t += 1;
     setGlowBase(lampMat, LANTERN_GLOW * (t % 7 === 0 || t % 11 === 0 ? 0.25 : 0.7));
   }, 140);
-  return (s) => {
+  let level = 0, base = 0;
+  const set = (s: StallState): void => {
     const n = Math.min(MAX_CRATES, Math.ceil(s.stock / CRATE_UNITS));
     crates.forEach((c, i) => { c.visible = i < n; });
     mood = s.open ? s.mood ?? null : null; open = s.open;
     // closed: rolled all the way down; struggling: half down, the stall trading under it; open: rolled up in its housing
-    shutter.set(!s.open ? 1 : mood === "struggling" ? SHUTTER_STRUGGLING : 0);
+    base = !s.open ? 1 : mood === "struggling" ? SHUTTER_STRUGGLING : 0;
     banner.visible = mood === "recovering";
     up.visible = s.upgraded;
     setGlowBase(lampMat, s.open ? LANTERN_GLOW : 0);
+  };
+  return {
+    set,
+    // A struggling merchant lifts the half shutter while serving the player (it hid their face in conversation) and
+    // lets it back down after; a closed stall stays shut. Eased, about half a second.
+    tick(dt, serving) {
+      const want = serving && open && mood === "struggling" ? 0 : base;
+      if (Math.abs(want - level) < 1e-3) { if (level !== want) { level = want; shutter.set(level); } return; }
+      level += (want - level) * (1 - Math.exp(-SHUTTER_EASE * dt));
+      shutter.set(level);
+    },
   };
 }
 
@@ -373,7 +387,7 @@ export async function createMarket(scene: THREE.Scene, colliders: Box[]): Promis
   const townSpawn = spawnObj ? spawnObj.getWorldPosition(new THREE.Vector3()) : null;
   const folk = town ? await loadFolk(scene) : [];
   const floor: FloorHeight = createFloor(scene);
-  const dressing = new Map<string, (s: StallState) => void>();
+  const dressing = new Map<string, Dressing>();
   const npcs = await Promise.all(NPC_IDS.map(async (id): Promise<Npc> => {
     const post = posts[id];
     const character = await loadNpcModel(id);
@@ -406,7 +420,7 @@ export async function createMarket(scene: THREE.Scene, colliders: Box[]): Promis
     cast: [...npcs.map((n) => n.character), ...folk.map((f) => f.c)],
     boards: npcs.flatMap((n) => (n.board ? [n.board.mesh] : [])),
     bind: (body, camera) => life.bind(body, camera),
-    setStall(id, st) { dressing.get(id)?.(st); life.setPull(id, st.pull); },
+    setStall(id, st) { dressing.get(id)?.set(st); life.setPull(id, st.pull); },
     say(id, text, sec, mood) {
       const n = npcs.find((x) => x.id === id);
       if (!n) return;
@@ -450,6 +464,7 @@ export async function createMarket(scene: THREE.Scene, colliders: Box[]): Promis
         n.character.setSpeed(0, 1, 2);
         n.character.update(dt);
         n.head.copy(n.root.position).setY(n.root.position.y + HEIGHT[n.id] * 0.92);
+        dressing.get(n.id)?.tick(dt, n.listening);
       }
       life.update(dt);
     },

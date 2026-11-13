@@ -50,8 +50,6 @@ recordings, alignment, in-game first audio 1.70 s, streaming comparison, route h
       speech-token secret); Upstash Redis configured, otherwise the shared `voice:chars` budget is per instance only.
 - [ ] On the deployed site: an arbitrary line to `/api/near/voice` answers 403 "not a line of this game", and so does a new
       sentence made of game words (Phase 4: approved sentences, `server/near/lines.json`, replaced the word list).
-- [ ] With the pane visible: a merchant's mouth moves while their voice plays and stops while they listen (Phase 4
-      changed the merchant animation loop; not re-observed with audio).
 - [ ] Connected: a real Lin or Dev sale walks them to the buyer with the goods (Phase 4 only exercised a scripted errand).
 
 ## 5. Production release
