@@ -5,7 +5,7 @@ explicit approval before it runs: each one writes to testnet, production Redis o
 credits. Record evidence in `docs/evidence/` and the result in PROGRESS.md.
 
 Production today: `c2ace0b`. Local commits not deployed: `86cf4be` (Lin grounding), `16ed7a5` (relayer bundle),
-`f781fb2` (Rent Night journey), plus docs.
+`f781fb2` (Rent Night journey), the Phase 3 voice commit, plus docs.
 
 ## 1. Connected playthrough (testnet)
 
@@ -30,7 +30,19 @@ Production today: `c2ace0b`. Local commits not deployed: `86cf4be` (Lin groundin
 - [ ] Chronicle events, bonds, decisions and memory rows written by a live turn survive a cold start.
 - [ ] No duplicate events by id or transaction; decision rows carry their tx hash and signature status.
 
-## 4. Production release
+## 4. Live voice (Phase 3; paid ElevenLabs and NEAR AI calls)
+
+- [ ] `node --env-file=.env.local scripts/audio/generate.ts --account` (free) to see credits, then generate the 30 missing
+      static lines (`--run voice`, about $0.20 at published prices). The 4 `sdf58f4d1` ("We're open again") jobs duplicate
+      the recorded `reopen.mp3` and can be skipped.
+- [ ] One dynamic line per economic character through `/api/near/voice` (Pema, Tomas, Mira, Arin, Lin, Dev): listen for
+      timbre continuity with the recorded opener, Arin's delivery (no breathiness), Lin and Dev for the first time.
+- [ ] Moods heard live: Pema worried, relieved, down, grateful; soften a tag in `MOOD_TAG` if one is exaggerated.
+- [ ] Latency with the pane visible: talk round trip, then Ask to first audio (target about 2 s); record in PROGRESS.md.
+- [ ] Confirm `alignment` arrives and lights words in step with the voice (with-timestamps on `eleven_v4`).
+- [ ] Production env: `ELEVENLABS_API_KEY` set; `VIVOLITH_VOICE_MOCK` unset.
+
+## 5. Production release
 
 - [ ] Deploy from a clean worktree (`npm run deploy`; uncommitted audio not shipped); page meta matches the commit.
 - [ ] 12/12 checks, client typecheck, build; API bundle built from the same tree.
