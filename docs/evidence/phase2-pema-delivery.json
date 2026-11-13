@@ -1,0 +1,145 @@
+{
+ "at": "2026-11-13T08:45:39.179Z",
+ "before": {
+  "stall": {
+   "merchant": "pema",
+   "open": false,
+   "since_day": 2990846,
+   "need": "1",
+   "delivered": "0",
+   "holders": 9,
+   "supply": "300",
+   "treasury": "150",
+   "pack": "15",
+   "pack_price": "5",
+   "pack_backing": "4",
+   "reserve": "40",
+   "vault": "39",
+   "revenue": "0",
+   "arrears": "0",
+   "debt": "163",
+   "last_settled": 2990845,
+   "last_rent": 2990846,
+   "total_declared": "132",
+   "total_funded": "132",
+   "total_paid": "93"
+  },
+  "pema": {
+   "coin": 1,
+   "mango": 13,
+   "share:pema": 150
+  }
+ },
+ "guest": {
+  "account": "g88b8a3081b294900.bunnyy-nearworld.testnet",
+  "txHashes": [
+   "TDjoMdKfgYUCfMbVoxkd1NArekSsNRE51NzDqR865ZP",
+   "3pdnjvSyTqXZEUxnANy14ZLGGQX82cD5yGsYCcpgUqL6"
+  ]
+ },
+ "pick": {
+  "txHash": "AwkBvFpLUB1vvCBxJQbnuXtLmH7Pwx9Lq5aWkHYPUFKc",
+  "qty": 3,
+  "guest": {
+   "coin": 40,
+   "mango": 3
+  }
+ },
+ "sale": {
+  "http": 200,
+  "status": "onchain",
+  "txHash": "9capJiHjpz5mG9ynbA7YUXbWapMUUtMuWeHcvRgHsas1",
+  "accountId": "g88b8a3081b294900.bunnyy-nearworld.testnet",
+  "contractId": "market.bunnyy-nearworld.testnet"
+ },
+ "after": {
+  "pema": {
+   "mango": 14,
+   "share:pema": 150
+  },
+  "stall": {
+   "merchant": "pema",
+   "open": true,
+   "since_day": null,
+   "need": "0",
+   "delivered": "0",
+   "holders": 9,
+   "supply": "300",
+   "treasury": "150",
+   "pack": "15",
+   "pack_price": "5",
+   "pack_backing": "4",
+   "reserve": "40",
+   "vault": "39",
+   "revenue": "0",
+   "arrears": "0",
+   "debt": "163",
+   "last_settled": 2990845,
+   "last_rent": 2990846,
+   "total_declared": "132",
+   "total_funded": "132",
+   "total_paid": "93"
+  },
+  "guest": {
+   "coin": 41,
+   "mango": 2
+  },
+  "txStatus": "SuccessValue",
+  "explorer": "https://testnet.nearblocks.io/txns/9capJiHjpz5mG9ynbA7YUXbWapMUUtMuWeHcvRgHsas1",
+  "chronicle": [
+   {
+    "id": "mweqf8ch-trade-0",
+    "at": 1794559552001,
+    "day": 2990932,
+    "kind": "trade",
+    "actors": [
+     "pema"
+    ],
+    "player": "g88b8a3081b294900.bunnyy-nearworld.testnet",
+    "text": "A player sold 1 mango to Pema at 1 c.",
+    "changes": [
+     {
+      "who": "pema",
+      "good": "mango",
+      "delta": 1
+     },
+     {
+      "who": "pema",
+      "good": "coin",
+      "delta": -1
+     },
+     {
+      "who": "player",
+      "good": "mango",
+      "delta": -1
+     },
+     {
+      "who": "player",
+      "good": "coin",
+      "delta": 1
+     }
+    ],
+    "status": "confirmed",
+    "txHash": "9capJiHjpz5mG9ynbA7YUXbWapMUUtMuWeHcvRgHsas1",
+    "decision": null,
+    "since": []
+   },
+   {
+    "id": "mweqf8ci-reopened-1",
+    "at": 1794559552002,
+    "day": 2990932,
+    "kind": "reopened",
+    "actors": [
+     "pema"
+    ],
+    "player": "g88b8a3081b294900.bunnyy-nearworld.testnet",
+    "text": "Pema's stall reopened after a delivery.",
+    "changes": [],
+    "status": "confirmed",
+    "txHash": "9capJiHjpz5mG9ynbA7YUXbWapMUUtMuWeHcvRgHsas1",
+    "decision": null,
+    "since": []
+   }
+  ]
+ }
+}
