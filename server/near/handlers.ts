@@ -17,7 +17,7 @@ import { gameLine, speechToken, speechTokenOk, synthesize, voiceSecret, voiceTex
 import { MAX_QUESTION, answer, factsFor, moodOf, playerFacts, residentFacts, type Exchange, type Ledger, type Receipt } from "./talk.ts";
 import { readMemory } from "./memory.ts";
 import { LEVERS, agentConfig, applyLivePrices, attachTx, claimBidSend, decideBid, decideResident, decisionFor, livePrices, priceMoved, recentDecisions, releaseBidSend, type AgentConfig, type Decision, type DecisionStore } from "./agent.ts";
-import { agentsHalted, fromScheduler, opsConfig, spend, takeTestTurn, testTurnKey, usage } from "./ops.ts";
+import { agentsHalted, fromScheduler, opsConfig, refundTestTxs, reserveTestTxs, spend, takeTestTurn, testTurnKey, testTxKey, usage } from "./ops.ts";
 import { AGENTS, memoriesFor, recordMemories, verifyPass } from "./autonomy.ts";
 import { verifyDecision } from "./verify.ts";
 import type { ChainReceipt, MemoryRow, Snapshot } from "./memory.ts";
@@ -160,8 +160,8 @@ export function decisionStore(cfg: Config): DecisionStore {
       setNx: async (k, v, ttl) => (await cmd(["SET", k, v, "NX", "EX", String(ttl)])) === "OK",
       set: async (k, v, ttl) => { await cmd(["SET", k, v, "EX", String(ttl)]); },
       del: async (k) => { await cmd(["DEL", k]); },
-      incr: async (k, ttl) => {
-        const r = await fetch(`${cfg.redisUrl}/pipeline`, { method: "POST", headers: { authorization: `Bearer ${cfg.redisToken}`, "content-type": "application/json" }, body: JSON.stringify([["INCR", k], ["EXPIRE", k, String(ttl)]]) });
+      incr: async (k, ttl, by = 1) => {
+        const r = await fetch(`${cfg.redisUrl}/pipeline`, { method: "POST", headers: { authorization: `Bearer ${cfg.redisToken}`, "content-type": "application/json" }, body: JSON.stringify([["INCRBY", k, String(by)], ["EXPIRE", k, String(ttl)]]) });
         if (!r.ok) throw new Error("decision store unavailable");
         const n = Number(((await r.json()) as [{ result: unknown }])[0]?.result);
         if (!Number.isFinite(n)) throw new Error("decision store gave no count");
@@ -175,7 +175,7 @@ export function decisionStore(cfg: Config): DecisionStore {
     setNx: async (k, v, ttl) => { if (live(k) !== null) return false; agentMemory.set(k, { v, until: Date.now() + ttl * 1000 }); return true; },
     set: async (k, v, ttl) => { agentMemory.set(k, { v, until: Date.now() + ttl * 1000 }); },
     del: async (k) => { agentMemory.delete(k); },
-    incr: async (k, ttl) => { const n = Number(live(k) ?? 0) + 1; agentMemory.set(k, { v: String(n), until: Date.now() + ttl * 1000 }); return n; },
+    incr: async (k, ttl, by = 1) => { const n = Number(live(k) ?? 0) + by; agentMemory.set(k, { v: String(n), until: Date.now() + ttl * 1000 }); return n; },
   };
 }
 
@@ -247,6 +247,7 @@ async function status(cfg: Config, env: RelayEnv): Promise<Response> {
     agents: { enabled, halted: await agentsHalted(ops, store), usedToday: await usage(store) },
     // bounded playtest: the cap and how many market turns it has used (null = no cap)
     testTurns: ops.testTurns === null ? null : { run: ops.testRun, limit: ops.testTurns, used: Number(await store.get(testTurnKey(ops.testRun)).catch(() => null) ?? 0) },
+    testTxs: ops.testTxs === null ? null : { run: ops.testRun, limit: ops.testTxs, used: Number(await store.get(testTxKey(ops.testRun)).catch(() => null) ?? 0), worstPerTurn: maxTxPerTurn() },
     lastTick: last ? (JSON.parse(last) as unknown) : null,
     configured: configured(cfg),
     network: "testnet",
@@ -897,6 +898,14 @@ export async function residentTurn(cfg: Config, provider: JsonRpcProvider, relay
   return ate;
 }
 
+/** The most transactions one market turn can sign: settle, rent and Guild (1 each); one per changed order (every ask
+ *  and the mango and lemon bids of each stall); one per merchant-to-merchant buy (a bid per buyer and fruit); a
+ *  resident's mint, sale, meal and burn; one operator batch. Checked against every turn in turn.check.ts. */
+export function maxTxPerTurn(): number {
+  const orders = MERCHANTS.reduce((n, id) => n + initialEconomy().merchants[id].sells.length + 2, 0);
+  return 3 + orders + MERCHANTS.length * 2 + RESIDENTS.length * 4 + 1;
+}
+
 /** One market turn. `trusted` = called by the scheduler route with its secret: only such turns may ask NEAR AI (and
  *  only within the daily budget); browser-driven turns replay a decision already made today, else use the rule. With
  *  NEAR_MARKET_DRIVER=scheduler, browser requests do not move the market at all. */
@@ -910,6 +919,10 @@ async function tick(cfg: Config, env: RelayEnv, trusted = false, scope: "market"
   // bounded playtest (NEAR_TEST_TURNS): checked before any chain read or signature, for browser and scheduler turns alike
   const cap = await takeTestTurn(ops, decisionStore(cfg));
   if (!cap.ok) return json(200, { status: "capped", message: "the playtest's market turns are used up", run: ops.testRun, limit: ops.testTurns, used: cap.used });
+  // and its transactions: the turn's worst case is reserved before anything is signed, the unused part refunded after
+  const worst = maxTxPerTurn();
+  const txCap = await reserveTestTxs(ops, decisionStore(cfg), worst);
+  if (!txCap.ok) return json(200, { status: "capped", message: "the playtest's transaction budget cannot cover another turn", run: ops.testRun, txLimit: ops.testTxs, txUsed: txCap.used, worst });
   const secret = (env.NEAR_MERCHANT_SECRET ?? "").trim();
   if (!secret) throw new HttpError(503, "merchant keys not configured");
   const { provider, relayer } = account(cfg);
@@ -1153,6 +1166,7 @@ async function tick(cfg: Config, env: RelayEnv, trusted = false, scope: "market"
   }
 
   // The proof screen shows when the city last moved (scheduled turns keep it moving with nobody playing).
+  await refundTestTxs(ops, agentStore, worst - txs.length);
   const last = { at: Date.now(), day, txs: txs.length, failed: log.filter((l) => /FAILED/.test(l)).length, by: trusted ? "scheduler" : "players" };
   await kv(cfg, ["SET", LAST_TICK, JSON.stringify(last)]).catch(() => null);
   return json(200, { status: "onchain", txHashes: txs, log, driver: trusted ? "scheduler" : "players", agents: { halted, enabled: [...agentCfg.enabled], replayOnly: !trusted } });

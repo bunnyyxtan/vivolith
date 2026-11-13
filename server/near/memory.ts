@@ -10,8 +10,8 @@ export interface DecisionStore {
   setNx(key: string, value: string, ttlSec: number): Promise<boolean>;
   set(key: string, value: string, ttlSec: number): Promise<void>;
   del(key: string): Promise<void>;
-  /** INCR key, setting its expiry; returns the new count (budgets, ops.ts). */
-  incr(key: string, ttlSec: number): Promise<number>;
+  /** INCRBY key by (default 1, may be negative), setting its expiry; returns the new count (budgets, ops.ts). */
+  incr(key: string, ttlSec: number, by?: number): Promise<number>;
 }
 
 /** Rows kept per agent: enough for a week of market days (10 real minutes each) and a compact model prompt. */

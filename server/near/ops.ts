@@ -23,6 +23,8 @@ export interface OpsConfig {
    *  a cap that was meant to be set never turns into "unlimited". */
   readonly testTurns: number | null;
   readonly testRun: string;
+  /** Transaction budget for the same run (NEAR_TEST_TXS): market turns together never sign more than this. null = none. */
+  readonly testTxs: number | null;
 }
 
 const int = (v: string | undefined, d: number): number => {
@@ -42,7 +44,30 @@ export function opsConfig(env: Record<string, string | undefined>): OpsConfig {
     dailyVerifies: int(env.NEAR_AI_DAILY_VERIFIES, 200),
     testTurns: (env.NEAR_TEST_TURNS ?? "").trim() ? int(env.NEAR_TEST_TURNS, 0) : null,
     testRun: ((env.NEAR_TEST_RUN ?? "").trim().replace(/[^a-z0-9-]/gi, "").slice(0, 40)) || "playtest",
+    testTxs: (env.NEAR_TEST_TXS ?? "").trim() ? int(env.NEAR_TEST_TXS, 0) : null,
   };
+}
+
+export const testTxKey = (run: string): string => `vivolith:test:txs:${run}`;
+const TEST_TTL = 7 * 24 * 3600;
+
+/** Reserves a turn's worst-case transaction count from the run's budget before it signs anything, so the run's total
+ *  can never pass NEAR_TEST_TXS and no turn stops half-way. Over budget, or a store that cannot count: refused. */
+export async function reserveTestTxs(ops: OpsConfig, store: DecisionStore, worst: number): Promise<{ readonly ok: boolean; readonly used: number | null }> {
+  if (ops.testTxs === null) return { ok: true, used: null };
+  if (ops.testTxs <= 0) return { ok: false, used: null };
+  try {
+    const used = await store.incr(testTxKey(ops.testRun), TEST_TTL, worst);
+    if (used <= ops.testTxs) return { ok: true, used };
+    await store.incr(testTxKey(ops.testRun), TEST_TTL, -worst).catch(() => undefined); // give the reservation back
+    return { ok: false, used: used - worst };
+  } catch { return { ok: false, used: null }; }
+}
+
+/** Returns the part of a reservation the turn did not sign. A failed refund leaves the budget over-counted (safe). */
+export async function refundTestTxs(ops: OpsConfig, store: DecisionStore, unused: number): Promise<void> {
+  if (ops.testTxs === null || unused <= 0) return;
+  await store.incr(testTxKey(ops.testRun), TEST_TTL, -unused).catch(() => undefined);
 }
 
 export const testTurnKey = (run: string): string => `vivolith:test:turns:${run}`;

@@ -29,6 +29,7 @@ function reset(over: Partial<Record<(typeof ids)[number], { open?: boolean; coin
 }
 let registeredResidents = true;
 
+let txCount = 0, worstSeen = 0; // signed transactions (a batch of actions is one)
 const sent: { signer: string; receiver: string; method: string; args: Record<string, string> }[] = [];
 type ChatBody = { model: string; messages: { role: string; content: string }[] };
 const chatCalls: ChatBody[] = [];
@@ -54,6 +55,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (method === "query" && params.request_type === "view_access_key") return res({ nonce: 1, permission: "FullAccess", block_height: 1, block_hash: b58 });
     if (method === "block") return res({ header: { height: 1000 + sent.length, hash: b58, timestamp: 1 }, chunks: [] });
     if (method === "send_tx" || method === "broadcast_tx_commit") {
+      txCount++;
       const raw = (params as { signed_tx_base64?: string }).signed_tx_base64 ?? String((params as unknown as string[])[0]);
       const tx = deserialize(SCHEMA.SignedTransaction, Buffer.from(raw, "base64")) as { transaction: { signerId: string; receiverId: string; actions: { functionCall?: { methodName: string; args: Uint8Array } }[] } };
       for (const a of tx.transaction.actions) if (a.functionCall) {
@@ -95,7 +97,9 @@ const turn = async (e: Record<string, string | undefined> = {}, scheduler = fals
   const req = scheduler
     ? new Request("http://localhost/api/near/market-turn", { method: "POST", headers: { authorization: "Bearer cron-test-secret" }, body: "{}" })
     : new Request("http://localhost/api/near/tick", { method: "POST", body: "{}" });
+  const before = txCount;
   const r = await handle(scheduler ? "market-turn" : "tick", req, { ...env, ...e });
+  worstSeen = Math.max(worstSeen, txCount - before);
   return (await r.json()) as Record<string, unknown>;
 };
 const calls = (method: string, filter: (a: Record<string, string>) => boolean = () => true) => sent.filter((s) => s.method === method && filter(s.args));
@@ -225,5 +229,29 @@ const calls = (method: string, filter: (a: Record<string, string>) => boolean = 
   assert.deepEqual(st.testTurns, { run: "check-run", limit: 2, used: 4 }, "status reports the cap and every attempt counted");
   nextDay(); reset(); sent.length = 0;
   assert.equal((await turn()).status, "onchain", "no cap set: today's behaviour");
+}
+// 8. transaction budget: NEAR_TEST_TXS reserves a turn's worst case before it signs; the run's total never passes it
+{
+  const { maxTxPerTurn } = await import("./handlers.ts");
+  const worst = maxTxPerTurn();
+  assert.ok(worstSeen <= worst, `every turn in this suite signed at most ${worst} transactions (most: ${worstSeen})`);
+  // a busy market: every stall stocked and funded, residents registered, orders all changing
+  const budget = 2 * worst, txEnv = { NEAR_TEST_TXS: String(budget), NEAR_TEST_RUN: "tx-run" };
+  const start = txCount, statuses: unknown[] = [];
+  for (let k = 0; k < 12; k++) {
+    nextDay(); reset({}, 50); const before = txCount;
+    const t = await turn(txEnv, k % 2 === 1);
+    statuses.push(t.status);
+    if (t.status === "capped") assert.equal(txCount, before, "a refused turn signed nothing");
+  }
+  const total = txCount - start;
+  assert.ok(total <= budget, `the run signed ${total} of a ${budget} budget`);
+  assert.ok(statuses.includes("capped"), "the budget stopped the run");
+  const st = (await (await handle("status", new Request("http://localhost/api/near/status"), { ...env, ...txEnv })).json()) as { testTxs: { used: number; limit: number; worstPerTurn: number } };
+  assert.equal(st.testTxs.used, total, "after refunds the budget counts exactly the transactions signed");
+  assert.equal(st.testTxs.worstPerTurn, worst);
+  nextDay(); reset();
+  assert.equal((await turn({ NEAR_TEST_TXS: String(worst - 1), NEAR_TEST_RUN: "tiny" })).status, "capped", "a budget under one worst-case turn allows none");
+  console.log(`tx budget: worst case ${worst}/turn, most seen ${worstSeen}; ${statuses.filter((s) => s === "onchain").length} turns signed ${total} of ${budget}`);
 }
 console.log("market turn handler checks passed");
