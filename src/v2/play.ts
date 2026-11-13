@@ -25,7 +25,7 @@ const ORCHARD_REACH_M = 4;
 /** Money trail: how many payments the proof screen lists, and how long the gold arc stays up. */
 const TRAIL_ROWS = 10, TRAIL_SEC = 10;
 const STEP_EVERY_M = 1.4, MARKET_SOUND_M = 24, CAR_SOUND_M = 9, CAR_QUIET_SEC = 5;
-import { applyTactic, closeDeal, dealTotal, dealUnit, isLocked, lockKey, openHaggle, thoughts, tickPatience, modeFor, PERSONALITY, TACTICS, type HaggleSession, type Tactic } from "../economy/haggle";
+import { applyTactic, closeDeal, dealTotal, dealUnit, isLocked, lockKey, LOT as HAGGLE_LOT, openHaggle, thoughts, tickPatience, modeFor, PERSONALITY, TACTICS, type HaggleSession, type Tactic } from "../economy/haggle";
 import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
 import {
@@ -618,7 +618,8 @@ export async function createPlay(game: Game): Promise<Play> {
 
   /** The same trade at the other stalls, from their live posted prices and tills: the choice the player is making. */
   const first = (x: MerchantId): string => PERSONALITY[x].name.replace(/^Auntie /, "").split(" ")[0];
-  const compareLine = (id: MerchantId, tab: Tab, unit: number): HTMLElement | null => {
+  /** One line that decides the trade (is a better offer elsewhere?) and the fuller comparison for the Details fold. */
+  const compareOf = (id: MerchantId, tab: Tab, unit: number): { verdict: string; details: string[] } | null => {
     if (tab === "invest") return null;
     const rows: { x: MerchantId; p: number; note: string }[] = [];
     for (const x of TRADERS) {
@@ -628,23 +629,22 @@ export async function createPlay(game: Game): Promise<Play> {
         const p = sellPrice(x);
         if (p === null) continue;
         const can = Math.floor(m.cash / p);
-        rows.push({ x, p, note: can < Math.min(3, state.player.inventory.mango) ? ` (till pays for ${can})` : "" });
+        rows.push({ x, p, note: can < Math.min(3, state.player.inventory.mango) ? ` (can pay for ${can})` : "" });
       } else if (x !== "arin" && m.status === "open" && m.stock.mango > 0) rows.push({ x, p: buyUnit(x), note: "" });
     }
-    const d = el("div", "tp-text tp-compare");
     const best = rows.slice().sort((a, b) => (tab === "sell" ? b.p - a.p : a.p - b.p))[0];
-    const verdict = !best ? "No other stall is " + (tab === "sell" ? "buying mangoes right now." : "selling mangoes right now.")
+    const verdict = !best ? `Nobody else is ${tab === "sell" ? "buying" : "selling"} mangoes right now.`
       : (tab === "sell" ? best.p > unit : best.p < unit) ? `${first(best.x)} ${tab === "sell" ? "pays" : "asks"} ${Math.abs(best.p - unit)} c ${tab === "sell" ? "more" : "less"} each.`
-      : best.p === unit ? `${first(best.x)} ${tab === "sell" ? "pays" : "asks"} the same.` : `The best ${tab === "sell" ? "bid" : "price"} in the market is here.`;
-    d.append(el("b", "", verdict));
-    if (rows.length) d.append(document.createTextNode(` Elsewhere: ${rows.map((r) => `${first(r.x)} ${r.p} c${r.note}`).join(" · ")}.`));
+      : best.p === unit ? `${first(best.x)} ${tab === "sell" ? "pays" : "asks"} the same.` : `The best ${tab === "sell" ? "offer" : "price"} in the market.`;
+    const details: string[] = [];
+    if (rows.length) details.push(`Elsewhere: ${rows.map((r) => `${first(r.x)} ${r.p} c${r.note}`).join(" · ")}.`);
     const pema = state.merchants.pema;
-    if (id !== "pema" && tab === "sell" && pema.status === "open" && pema.cash < pema.rent && state.flags["night.start"] && !state.flags["night.outcome"]) d.append(el("div", "", `Pema is ${pema.rent - Math.floor(pema.cash)} c short of rent and her shelves hold ${pema.stock.mango}.`));
+    if (id !== "pema" && tab === "sell" && pema.status === "open" && pema.cash < pema.rent && state.flags["night.start"] && !state.flags["night.outcome"]) details.push(`Pema is ${pema.rent - Math.floor(pema.cash)} c short of rent.`);
     if (id === "pema" && tab === "sell" && pema.status === "open" && pema.cash < pema.rent) {
       const ask = priceOf(state, "pema").price, margin = ask - unit;
-      d.append(el("div", "", `Her till: ${Math.floor(pema.cash)} c of the ${pema.rent} c rent. Your mangoes cost her ${unit} c each now and sell on at ${ask} c: ${margin > 0 ? `${margin} c back per mango, once shoppers buy them` : "she earns nothing on them"}.`));
+      details.push(`Her till: ${Math.floor(pema.cash)} of ${pema.rent} c rent. She sells these on at ${ask} c: ${margin > 0 ? `${margin} c back per mango, once shoppers buy them` : "she earns nothing on them"}.`);
     }
-    return d;
+    return { verdict, details };
   };
   /** After a confirmed deal: how it moved this stall's price, and why (stock is the main lever, see pricing.ts). */
   let moved: { id: MerchantId; text: string } | null = null;
@@ -667,21 +667,26 @@ export async function createPlay(game: Game): Promise<Play> {
       hud.panel.append(t);
     }
     if (tab === "invest") { renderInvestBody(id); return; }
+    // the mission is with someone else: say who and where, without leaving this conversation
+    const goal = guide.current(state);
+    if (goal?.target && goal.target !== id && goal.target !== "orchard") hud.panel.append(el("div", "tp-goal", `Goal: ${goal.title}. ${first(goal.target)}'s stall is ${goal.target === "tomas" || id === "tomas" ? "across the square" : "along this row"}.`));
+    // 1. what is on offer: the product, how many, its price, and the one line that decides the trade
     if (tab !== "sell" && state.player.inventory.mango > 0 && sellPrice(id) === null && (id === "arin" || id === "pema" || m.status !== "open")) {
-      hud.panel.append(el("div", "tp-text tp-note", `${PERSONALITY[id].name.split(" ").pop()} isn't buying mangoes this minute: ${id === "arin" ? "the kitchen is stocked" : "the shelves are full"}. Bids come back as stock sells; try again in a few minutes or sell elsewhere.`));
+      hud.panel.append(el("div", "tp-text tp-note", `${first(id)} isn't buying mangoes right now.`));
     }
     const good = goodFor(id, tab);
     const unit = tab === "buy" ? buyUnit(id) : sellPrice(id) ?? 0;
     const max = maxQty(id, tab);
     const item = el("div", "tp-item");
     const left = el("div");
-    left.append(el("b", "", good === "lassi" ? "Lassi" : "Mango"), el("span", "", tab === "buy" ? `${m.stock[good]} on the stall` : `You have ${state.player.inventory.mango} · ${PERSONALITY[id].name.split(" ").pop()} has ${Math.floor(m.cash)} c`));
+    left.append(el("b", "", good === "lassi" ? "Lassi" : "Mango"), el("span", "", tab === "buy" ? `${m.stock[good]} on the stall` : `You have ${state.player.inventory.mango}`));
     const price = el("div", "price");
     price.append(el("b", "", `${unit} c`), el("span", "", tab === "buy" ? "each" : "paid each"));
     item.append(el("i", `ico ${good}`), left, price);
     hud.panel.append(item);
-    if (mode.done > 0 && moved?.id === id) hud.panel.append(el("div", "tp-text tp-note", moved.text));
-    else if (good === "mango") { const c = compareLine(id, tab, unit); if (c) hud.panel.append(c); }
+    const cmp = good === "mango" ? compareOf(id, tab, unit) : null;
+    if (mode.done > 0 && moved?.id === id) hud.panel.append(el("div", "tp-verdict", moved.text));
+    else if (cmp) hud.panel.append(el("div", "tp-verdict", cmp.verdict));
     void refreshDecision(id);
     { // only where it applies and while it is true: a bid decision on the Sell tab of its good, an ask on the Buy tab,
       // and only while that order is still posted today (an old mango-bid card sat on Arin's lassi tab)
@@ -689,34 +694,19 @@ export async function createPlay(game: Game): Promise<Play> {
       const [side, dGood] = d ? d.lever.split(":") : [];
       if (d && d.live && dGood === good && (side === "bid" ? tab === "sell" : tab === "buy")) hud.panel.append(decisionCard(d));
     }
-    if (tab === "buy") {
-      const why = button(mode.why ? "Hide the reasons" : `Why ${unit} c?`, "tp-why", () => { if (mode.kind === "trade") { mode = { ...mode, why: !mode.why }; renderTrade(); } });
-      hud.panel.append(why);
-      if (mode.why) {
-        const ul = el("ul", "tp-reasons");
-        for (const r of reasonsOf(priceOf(state, id))) ul.append(el("li", "", r));
-        if (!ul.children.length) ul.append(el("li", "", "A normal day: the usual price."));
-        hud.panel.append(ul);
-        // The merchant answers the player's own question in their own words, from facts read on NEAR, their decisions
-        // and their memory (NEAR AI phrases it when available, else a scripted line from the same facts).
-        if (asking === id) hud.panel.append(thinking());
-        else if (asked?.id === id) {
-          hud.panel.append(subtitle(asked.line));
-        }
-        const here = (): boolean => mode.kind === "trade" && mode.id === id;
-        hud.panel.append(askBox(id, PERSONALITY[id].name.split(" ").pop() ?? id, () => { if (here()) renderTrade(); }, here));
-      }
-    }
+    // 2. how many, and what it does to your purse
     const total = unit * mode.qty;
     const after = tab === "buy" ? state.player.coins - total : state.player.coins + total;
     if (max > 0 && mode.done <= 0) { // hidden while a result shows: "coins after" would describe the next deal
       const q = el("div", "tp-qty");
-      q.append(button("−", "", () => setQty(-1)), el("b", "", String(mode.qty)), button("+", "", () => setQty(1)));
-      const note = el("span", "", `${tab === "buy" ? "Pay" : "Get"} ${total} c\nYour coins after: ${after} c`);
-      note.style.whiteSpace = "pre-line";
-      q.append(note);
+      const minus = button("−", "", () => setQty(-1)), plus = button("+", "", () => setQty(1));
+      minus.disabled = mode.qty <= 1; plus.disabled = mode.qty >= max;
+      const sum = el("div", "tp-sum");
+      sum.append(el("b", "", `${tab === "buy" ? "−" : "+"}${total} c`), el("span", "", `you'll have ${after} c`));
+      q.append(minus, el("b", "", String(mode.qty)), plus, sum);
       hud.panel.append(q);
     }
+    // 3. the actions
     const acts = el("div", "tp-acts");
     // at a lower price the stall's till can take more than at its bid: the friend's offer has its own quantity
     const fp = tab === "sell" && mode.done <= 0 ? friendPrice(id) : null;
@@ -734,13 +724,30 @@ export async function createPlay(game: Game): Promise<Play> {
         const lesson = stepIndex(state) === HAGGLE_STEP && id === tutorSeller(state); // the tutorial's haggle is always playable
         const room = lesson || (!("error" in probe) && (probe.mode === "buy" ? Math.floor(probe.limit + 1e-6) < probe.open : Math.ceil(probe.limit - 1e-6) > probe.open));
         const why = "error" in probe || probe.mode === "sell" ? `${first(id)} can't pay more and still sell them on` : `${first(id)} won't go below what restocking costs`;
-        const hb = button("Haggle", "full", () => startHaggle(), String(acts.querySelectorAll("button").length + 1), shut ? "not again today: you pushed too hard" : room ? "try for a better price" : why);
+        const hb = button("Haggle", "full", () => startHaggle(), String(acts.querySelectorAll("button").length + 1), shut ? "not again today: you pushed too hard" : room ? `for ${goodName("mango", HAGGLE_LOT)}: try for a better price` : why);
         hb.disabled = shut || !room;
         acts.append(hb);
       }
     }
     acts.append(button("Leave", "ghost full", () => endPanel(), "Esc"));
     hud.panel.append(acts);
+    // 4. on request: the comparison, why the price is what it is, and a question of your own
+    const more = el("details", "tp-more");
+    if (mode.why) more.open = true;
+    more.addEventListener("toggle", () => { if (mode.kind === "trade") mode = { ...mode, why: more.open }; });
+    more.append(el("summary", "", "Details"));
+    for (const line of cmp?.details ?? []) more.append(el("p", "", line));
+    if (tab === "buy") {
+      const ul = el("ul", "tp-reasons");
+      for (const r of reasonsOf(priceOf(state, id))) ul.append(el("li", "", r));
+      if (!ul.children.length) ul.append(el("li", "", "A normal day: the usual price."));
+      more.append(el("p", "", `Why ${unit} c:`), ul);
+    }
+    if (asking === id) more.append(thinking());
+    else if (asked?.id === id) more.append(subtitle(asked.line));
+    const here = (): boolean => mode.kind === "trade" && mode.id === id;
+    more.append(askBox(id, first(id), () => { if (here()) renderTrade(); }, here));
+    hud.panel.append(more);
   };
 
   // A merchant's NEAR AI price decision (server/near/agent.ts): shown only as what it is (real AI or rule fallback), and
@@ -883,12 +890,10 @@ export async function createPlay(game: Game): Promise<Play> {
     const max = maxQty(id, "invest"), canSell = sharesToSell(id), supply = shareSupply(state, id);
     const pct = (k: number, of = supply): string => `${((k / of) * 100).toFixed(1).replace(/\.0$/, "")}%`;
     const packs = (n: number): string => `${n} ${n === 1 ? "share" : "shares"}`;
-    hud.panel.append(el("div", "tp-text", `Half of every sale ${m.shop} makes is shared out, at that moment, over all ${supply} shares: you earn only from sales made while you hold. A pack of ${per} costs ${price} c: ${backing} c is held in the stall's reserve, so you can always sell the pack back for ${backing} c, and ${price - backing} c goes into the till.`));
+    hud.panel.append(el("div", "tp-text", `Own part of ${m.shop}: you earn from every sale it makes while you hold.`));
     const facts = el("div", "tp-facts");
     const fact = (label: string, value: string): void => { const d = el("div"); d.append(el("span", "", label), el("b", "", value)); facts.append(d); };
     fact("Price", `${price} c per ${per}`);
-    fact("Sells back for", `${backing} c per ${per}`);
-    fact("Your coins", `${coins} c`);
     fact("You own", `${own} of ${supply} · ${pct(own)}${own >= UPGRADE_AT ? " · upgraded" : ""}`);
     // what ownership has really paid: NEAR's dividend receipts from this stall (connected), the local ledger offline
     const me = playerId(), paidOut = me ? divPaid.get(id) : Number(state.flags[`div.${id}`] ?? 0);
@@ -898,9 +903,12 @@ export async function createPlay(game: Game): Promise<Play> {
     const f = forecastPerShare(id) * per;
     fact("Forecast per pack", m.status !== "open" ? "0 c while closed" : `about ${f < 1 ? f.toFixed(1) : Math.round(f)} c a day`);
     hud.panel.append(facts);
-    if (own > 0 || mode.done <= 0) hud.panel.append(el("div", "tp-text tp-note", m.status === "open"
+    // the rules and the forecast's limits, on request
+    const rules = el("details", "tp-more");
+    rules.append(el("summary", "", "How shares work"), el("p", "", `Half of every sale ${m.shop} makes is shared out, at that moment, over all ${supply} shares: you earn only from sales made while you hold. A pack of ${per} costs ${price} c: ${backing} c is held in the stall's reserve, so you can always sell the pack back for ${backing} c, and ${price - backing} c goes into the till.`), el("p", "", `Sells back for ${backing} c per ${per}.`), el("p", "", m.status === "open"
       ? `The forecast is today's street sales at today's prices, not a promise: slow days pay less, and a missed rent pays nothing until the stall reopens. Selling back returns ${backing} c a pack, ${price - backing} c less than a pack costs.`
       : `${m.shop} is closed: it pays no dividends until deliveries reopen it. Selling back still returns ${backing} c a pack, ${price - backing} c less than it costs.`));
+
     const acts = el("div", "tp-acts");
     if (mode.done > 0) { /* the result line is showing */ }
     else if (max <= 0) acts.append(el("div", "tp-text full", `A pack of ${per} costs ${price} c and you have ${coins} c. Sell some goods first, then come back.`));
@@ -948,6 +956,7 @@ export async function createPlay(game: Game): Promise<Play> {
     if (mode.done <= 0 && canSell > 0) acts.append(button(`Sell ${packs(canSell)} back for ${shareRefund(id, canSell)} c`, "full", () => cashOut(id, canSell), "2"));
     acts.append(button("Leave", "ghost full", () => endPanel(), "Esc"));
     hud.panel.append(acts);
+    hud.panel.append(rules);
   };
 
   const renderHaggleBody = (h: HaggleSession): void => {
@@ -1965,8 +1974,11 @@ export async function createPlay(game: Game): Promise<Play> {
       for (const x of recent) {
         if (first) { past.push(`${r.name}, ${ago(age(x) ?? 0)}: ${tradeText(x)}.${chose(x)}`); continue; }
         const mer = x.counterparty.split(".")[0], qty = Number(x.qty), price = Number(x.price);
-        if (x.kind === "sold") market.life.errand(who, mer, `${r.name}: ${qty} ${x.token_id === "mango" ? (qty === 1 ? "mango" : "mangoes") : qty === 1 ? x.token_id : `${x.token_id}s`} for ${nameOf(x.counterparty)}. +${qty * price} c${chose(x)}`, true); // the goods go with them
-        else market.life.errand(who, mer, `${r.name}: one ${x.token_id}, ${price} c. Lunch!${chose(x)}`);
+        // what they say is speech; what changed hands is a separate small marker over the merchant
+        const goods = goodName(x.token_id as Good, qty), firstName = nameOf(x.counterparty).replace(/^Auntie /, "").split(" ")[0];
+        const shut = state.merchants[mer as MerchantId]?.status !== "open"; // a shut stall takes delivery at its side
+        if (x.kind === "sold") market.life.errand(who, mer, qty === 1 ? `Here you go, ${firstName}, one fresh ${x.token_id}.` : `Here you go, ${firstName}: ${goods}.`, true, { tag: `+${goods} · ${qty * price} c paid`, side: shut });
+        else market.life.errand(who, mer, `One ${x.token_id}, please. Lunch time!`, false, { tag: `+${price} c` });
       }
     }));
     if (past.length) hud.toast(past.join("  ·  "));
@@ -1976,7 +1988,7 @@ export async function createPlay(game: Game): Promise<Play> {
     for (const line of Array.isArray(t.log) ? (t.log as string[]) : []) {
       const m = /^resident (\w+) could not afford (\w+) at (\d+) c$/.exec(line);
       const who = m ? RESIDENTS.findIndex((r) => r.id === m[1]) : -1;
-      if (m && who >= 0) market.life.errand(who, "arin", `${RESIDENTS[who].name}: a ${m[2]} is ${m[3]} c and I can't afford it.`);
+      if (m && who >= 0) market.life.errand(who, "arin", `A ${m[2]} is ${m[3]} c? Not today.`);
     }
   };
   let signingIn = false;

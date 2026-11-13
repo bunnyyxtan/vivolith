@@ -56,6 +56,7 @@ export interface MerchantRef {
   /** While serving: true on the merchant's turn to speak (the customer speaks on the other turns). */
   serveTalk: boolean;
 }
+interface Errand { mer: string; line: string; carry: boolean; tag?: string; side?: boolean }
 export interface FolkChar { c: AnimatedCharacter; root: THREE.Group }
 
 interface Spot {
@@ -77,7 +78,7 @@ interface Ent extends Pedestrian {
   /** View culling: drawn this frame, animation time owed while off screen, ink/shadow detail (near only). */
   onScreen: boolean; lag: number; near: boolean; inks: THREE.Object3D[]; bodies: THREE.Mesh[];
   /** Residents: confirmed trades to act out (walk to the stall, then say it), and the line being walked to now. */
-  errands: { mer: string; line: string; carry: boolean }[]; errand: string | null;
+  errands: Errand[]; errand: string | null; errandTag: string | null;
   /** Townsfolk: index into FOLK_VOICES. startled: seconds left on the startled clip before it is released. */
   voice: number; startled: number;
   /** Walking and pushable (separation yields to everyone else: standing, seated, queuing and merchants never move for it). */
@@ -120,7 +121,9 @@ export interface Life {
   /** A shipment landed at the Harbor Depot: up to `crates` crates appear on the dock for porters to carry. */
   deliver(crates: number): void;
   /** Townsperson `who` walks to merchant `mer`'s stall and says `line` there (a resident's confirmed trade). */
-  errand(who: number, mer: string, line: string, carry?: boolean): void;
+  /** A resident walks to a merchant for a confirmed trade: `line` is what they say, `tag` the trade marker shown over the
+   *  merchant (what changed hands), `side` hands over at the side of a shut stall instead of through its shutter. */
+  errand(who: number, mer: string, line: string, carry?: boolean, opts?: { tag?: string; side?: boolean }): void;
 }
 
 export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Object3D | null, mers: readonly MerchantRef[], folkChars: readonly FolkChar[], floor: FloorHeight = (_x, _z, g) => g): Life {
@@ -203,7 +206,7 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
     r: 0.33, fixed, cd: 0, svx: 0, svz: 0, stag: 0, head: new THREE.Vector3(),
     state: "idle", spot: null, slot: 0, path: [], pi: 0, speed: rnd(1.0, 1.5), spd: 0, t: 0, phase: 0, last: null, carrying: false,
     stuckT: 0, sx: 0, sz: 0, carry: null, mer: null, hx: root.position.x, hz: root.position.z, hy: root.position.y, by: root.position.y, jogLeft: 0, baseSpeed: 1.2,
-    onScreen: true, lag: 0, near: true, inks: [], bodies: [], errands: [], errand: null, voice: 0, startled: 0, mobile: false, sitHips: 0.9, sitFeet: 0.37, sitCal: false, sitDrop: 0.37,
+    onScreen: true, lag: 0, near: true, inks: [], bodies: [], errands: [], errand: null, errandTag: null, voice: 0, startled: 0, mobile: false, sitHips: 0.9, sitFeet: 0.37, sitCal: false, sitDrop: 0.37,
     gest: 0, vel: 0, px: root.position.x, pz: root.position.z, exit: false, home: null, work: false, handOver: false,
   });
   const merEnts = mers.map((m) => { const e = mkEnt(m.character, m.root, true); e.mer = m; return e; });
@@ -328,9 +331,12 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
     const m = job && mers.find((x) => x.id === job.mer);
     if (!job || !m) return false;
     const st = m.post.stall, np = m.post.npc;
-    const s: Spot = { kind: "wait", area: null, x: st.x, z: st.z, yaw: Math.atan2(np.x - st.x, np.z - st.z), cap: 1, users: 1, name: "errand", deep: false, mer: m, next: null, slots: [e, null], t: 0, turn: 0, has: false, crate: null };
+    // a shut stall takes goods at its side (beside the counter end), never through the shutter
+    // (where the crate pile stands while it trades; the chalkboard is at the other end)
+    const at = job.side ? { x: (np.x + st.x) / 2 + Math.sign(st.x - np.x) * 0.9, z: np.z - 2.3 } : { x: st.x, z: st.z };
+    const s: Spot = { kind: "wait", area: null, x: at.x, z: at.z, yaw: Math.atan2(np.x - at.x, np.z - at.z), cap: 1, users: 1, name: "errand", deep: false, mer: m, next: null, slots: [e, null], t: 0, turn: 0, has: false, crate: null };
     if (nav.nearestFree(s.x, s.z, cell)) { s.x = cell.x; s.z = cell.z; }
-    e.spot = s; e.slot = 0; e.errand = job.line; e.jogLeft = 0; e.speed = e.baseSpeed;
+    e.spot = s; e.slot = 0; e.errand = job.line; e.errandTag = job.tag ?? null; e.jogLeft = 0; e.speed = e.baseSpeed;
     // a confirmed sale: the goods go with them to the buyer (never shown for a trade that did not happen)
     e.handOver = job.carry; e.carrying = job.carry; if (e.carry) e.carry.visible = job.carry;
     if (goTo(e, s)) return true;
@@ -414,7 +420,8 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
     }
     if (e.errand) { // at the stall: the trade, as recorded on NEAR; the merchant turns to them
       e.t = 4; chat(e, e.errand, 4); e.errand = null;
-      if (s.mer) { s.mer.serving = true; s.mer.attend = new THREE.Vector3(e.x, 0, e.z); }
+      if (s.mer) { s.mer.serving = true; s.mer.attend = new THREE.Vector3(e.x, 0, e.z); if (e.errandTag) bubbles.say(s.mer.head, e.errandTag, 4, "tag"); }
+      e.errandTag = null;
     }
     if (e.work) e.t = rnd(14, 28);
   };
@@ -649,10 +656,10 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
     },
     setGossip(lines) { if (lines.length) gossip = lines; },
     deliver(crates) { stock("depot", crates); },
-    errand(who, mer, line, carry = false) {
+    errand(who, mer, line, carry = false, opts = {}) {
       const e = folk[who];
       if (!e) return;
-      e.errands.push({ mer, line, carry });
+      e.errands.push({ mer, line, carry, tag: opts.tag, side: opts.side });
       if (e.errand === null && e.state !== "stag") { release(e); e.carrying = false; if (e.carry) e.carry.visible = false; decide(e); }
     },
     say(at, text, sec = 3.2) { bubbles.say(at, text, sec); },

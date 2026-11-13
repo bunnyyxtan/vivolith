@@ -7,7 +7,7 @@ import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { loadGLB, prepareModel } from "../assets";
 import { loadCharacter, type AnimatedCharacter } from "../character";
 import { groundHeightAt, type Box } from "../physics/collision";
-import { applyToon, setGlowBase, trackGlow } from "./toon";
+import { applyToon, setGlowBase, smoothHull, trackGlow } from "./toon";
 import { installProps } from "./props";
 import { createLife, type FolkChar, type Life } from "./npc";
 import { audio } from "./audio";
@@ -103,7 +103,7 @@ const CRATE_UNITS = 4; // one crate on the pile per 4 units of stock
 const LANTERN_GLOW = 2.6; // full-night strength: above the bloom threshold, so open stalls glow after dark
 const MAX_CRATES = 9;
 
-const SHUTTER_TOP = 1.6, SHUTTER_BOTTOM = 0.55, SLAT_M = 0.1, SHUTTER_STRUGGLING = 0.45;
+const SHUTTER_TOP = 1.6, SHUTTER_BOTTOM = 0.55, SLAT_M = 0.1;
 const SHUTTER_EASE = 6; // 1/s: how quickly a shutter rolls to its new height
 /** Counter width each stall's shutter spans (the tea house counter is wider than the fruit stalls'). */
 const SHUTTER_W: Record<string, number> = { arin: 4.2 };
@@ -112,7 +112,7 @@ const NAVY = 0x2c3446;
 
 /** A stylised roller shutter in the stall's local frame (x along the counter, +z toward customers). set(level): 0 rolled
  *  up into the housing, 1 down to the counter base with the "Closed" card. */
-function makeShutter(width: number, glow: THREE.Material): { group: THREE.Group; set(level: number): void } {
+function makeShutter(width: number, glow: THREE.Material, withCard = true): { group: THREE.Group; set(level: number): void } {
   const group = new THREE.Group();
   const navy = new THREE.MeshToonMaterial({ color: NAVY });
   const housing = new THREE.Mesh(new THREE.BoxGeometry(width + 0.14, 0.2, 0.22), navy);
@@ -166,12 +166,53 @@ function makeShutter(width: number, glow: THREE.Material): { group: THREE.Group;
     tex.repeat.set(1, Math.max(1, Math.round(h / SLAT_M)));
     bar.position.y = SHUTTER_TOP - h;
     handle.position.set(0, SHUTTER_TOP - h, 0.045);
-    card.visible = level >= 1;
+    card.visible = withCard && level >= 1;
   };
   // rolled up from the start: the dressing only calls set() when the level changes, so an open stall that never changes
   // kept the default full curtain and its "Closed" card (Tomas looked shut while he traded)
   set(0);
   return { group, set };
+}
+
+/** The counter display (crates and fruit on the counter's customer half, 0.84-1.4 m) is baked into the stall model.
+ *  It is cut out into its own mesh (same material) so it can follow the stall's real stock; the rest of the stall keeps
+ *  its shelves and posts. The triangles are moved, not duplicated: the stall mesh draws everything else as before. */
+function splitDisplayGoods(stall: THREE.Mesh, customer: THREE.Vector3): THREE.Mesh {
+  const src = stall.geometry.index ? stall.geometry.toNonIndexed() : stall.geometry.clone();
+  const p = src.attributes.position, attrs = Object.keys(src.attributes);
+  const front = Math.sign(stall.worldToLocal(customer.clone()).x) || 1;
+  const keep: number[] = [], take: number[] = [];
+  for (let t = 0; t < p.count / 3; t++) {
+    let lo = Infinity, hi = -Infinity, cx = 0;
+    for (let k = 0; k < 3; k++) { const yv = p.getY(t * 3 + k); lo = Math.min(lo, yv); hi = Math.max(hi, yv); cx += p.getX(t * 3 + k) / 3; }
+    (lo > 0.84 && hi < 1.4 && cx * front > -0.35 ? take : keep).push(t);
+  }
+  const build = (tris: number[]): THREE.BufferGeometry => {
+    const g = new THREE.BufferGeometry();
+    for (const a of attrs) {
+      const at = src.attributes[a] as THREE.BufferAttribute, n = at.itemSize, out = new Float32Array(tris.length * 3 * n);
+      tris.forEach((t, i) => { for (let k = 0; k < 3 * n; k++) out[i * 3 * n + k] = at.array[t * 3 * n + k] as number; });
+      g.setAttribute(a, new THREE.BufferAttribute(out, n));
+    }
+    g.computeBoundingSphere();
+    return g;
+  };
+  const before = stall.geometry, kept = build(keep), cut = build(take);
+  stall.geometry = kept;
+  const goods = new THREE.Mesh(cut, stall.material);
+  // the ink outline is a child hull built from the stall geometry: split it the same way (else the cut-out crates
+  // would leave their dark outlines behind)
+  const hull = stall.children.find((c) => c.name === `${stall.name}_outline`) as THREE.Mesh | undefined;
+  if (hull) {
+    const hard = hull.geometry !== before;
+    hull.geometry = hard ? smoothHull(kept) : kept;
+    const gh = new THREE.Mesh(hard ? smoothHull(cut) : cut, hull.material);
+    gh.name = "goods_outline"; gh.castShadow = false; gh.receiveShadow = false;
+    goods.add(gh);
+  }
+  goods.castShadow = stall.castShadow; goods.receiveShadow = stall.receiveShadow;
+  stall.add(goods);
+  return goods;
 }
 
 let CRATE_GEO: THREE.BufferGeometry | null = null;
@@ -196,8 +237,8 @@ function makeCrateGeometry(): THREE.BufferGeometry {
 }
 
 /** Crate pile, closed shutter and upgrade dressing beside a stall; meshes are created once and toggled. */
-interface Dressing { set(s: StallState): void; tick(dt: number, serving: boolean): void }
-function makeStallDressing(scene: THREE.Scene, post: Post, y: number, id: string): Dressing {
+interface Dressing { set(s: StallState): void; tick(dt: number): void }
+function makeStallDressing(scene: THREE.Scene, post: Post, y: number, id: string, goods: THREE.Mesh | null): Dressing {
   const side = Math.sign(post.stall.x - post.npc.x) || 1; // +1: customers stand on +X of the counter
   const front = (post.npc.x + post.stall.x) / 2; // the canopy's customer-facing edge
   const face = side > 0 ? Math.PI / 2 : -Math.PI / 2;
@@ -239,21 +280,8 @@ function makeStallDressing(scene: THREE.Scene, post: Post, y: number, id: string
   shutter.group.position.set(front + side * 0.15, y, post.npc.z);
   shutter.group.rotation.y = face;
   scene.add(shutter.group);
-  // Recovering: a hand-painted "Open again" banner hung under the canopy for the day after a reopening.
-  const bc = document.createElement("canvas");
-  bc.width = 512; bc.height = 96;
-  const bx = bc.getContext("2d")!;
-  bx.fillStyle = "#f4ead2"; bx.fillRect(0, 0, 512, 96);
-  bx.fillStyle = "#00a86b"; bx.fillRect(0, 0, 512, 10); bx.fillRect(0, 86, 512, 10);
-  bx.fillStyle = "#1a2238"; bx.font = "700 52px Inter, system-ui, sans-serif"; bx.textAlign = "center"; bx.textBaseline = "middle";
-  bx.fillText("Open again", 256, 50);
-  const btex = new THREE.CanvasTexture(bc);
-  btex.colorSpace = THREE.SRGBColorSpace;
-  const banner = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 0.24), new THREE.MeshBasicMaterial({ map: btex, side: THREE.DoubleSide }));
-  banner.position.set(front + side * 0.5, y + 1.48, post.npc.z); // under the canopy edge, below the shop sign
-  banner.rotation.y = face;
-  banner.visible = false;
-  scene.add(banner);
+  // Reopening shows itself in the world: the shutter rolls up and the merchant is back at the counter (no extra board:
+  // the old "Open again" banner hung over the stall's own sign)
   applyToon(g, 0.008, undefined, true);
   let mood: StallState["mood"] = null, open = true, t = 0;
   window.setInterval(() => { // a struggling stall's light gutters: cheap, and only this one material
@@ -263,21 +291,22 @@ function makeStallDressing(scene: THREE.Scene, post: Post, y: number, id: string
   }, 140);
   let level = 0, base = 0;
   const set = (s: StallState): void => {
-    const n = Math.min(MAX_CRATES, Math.ceil(s.stock / CRATE_UNITS));
+    // goods follow the real stock: the pile beside the stall and the counter display; a shut stall has them inside
+    const n = s.open ? Math.min(MAX_CRATES, Math.ceil(s.stock / CRATE_UNITS)) : 0;
     crates.forEach((c, i) => { c.visible = i < n; });
+    if (goods) goods.visible = s.open && s.stock > 0;
     mood = s.open ? s.mood ?? null : null; open = s.open;
-    // closed: rolled all the way down; struggling: half down, the stall trading under it; open: rolled up in its housing
-    base = !s.open ? 1 : mood === "struggling" ? SHUTTER_STRUGGLING : 0;
-    banner.visible = mood === "recovering";
+    // closed: rolled all the way down; open (struggling or not): rolled up. A half shutter on a stall that trades read
+    // as closed (residents seemed to hand goods through it); a struggling till shows in its guttering lantern instead
+    base = !s.open ? 1 : 0;
     up.visible = s.upgraded;
     setGlowBase(lampMat, s.open ? LANTERN_GLOW : 0);
   };
   return {
     set,
-    // A struggling merchant lifts the half shutter while serving the player (it hid their face in conversation) and
-    // lets it back down after; a closed stall stays shut. Eased, about half a second.
-    tick(dt, serving) {
-      const want = serving && open && mood === "struggling" ? 0 : base;
+    // eased, about half a second: the shutter rolls down when the stall closes and up when it reopens
+    tick(dt) {
+      const want = base;
       if (Math.abs(want - level) < 1e-3) { if (level !== want) { level = want; shutter.set(level); } return; }
       level += (want - level) * (1 - Math.exp(-SHUTTER_EASE * dt));
       shutter.set(level);
@@ -423,6 +452,9 @@ export async function createMarket(scene: THREE.Scene, colliders: Box[]): Promis
   const folk = town ? await loadFolk(scene) : [];
   const floor: FloorHeight = createFloor(scene);
   const dressing = new Map<string, Dressing>();
+  const stallMeshes: THREE.Mesh[] = [];
+  town?.traverse((o) => { if ((o as THREE.Mesh).isMesh && o.name === "stall_fruit") stallMeshes.push(o as THREE.Mesh); });
+  const stallAt = (x: number, z: number): THREE.Mesh | null => stallMeshes.find((m) => { const w = m.getWorldPosition(new THREE.Vector3()); return Math.hypot(w.x - x, w.z - z) < 1.2; }) ?? null;
   const npcs = await Promise.all(NPC_IDS.map(async (id): Promise<Npc> => {
     const post = posts[id];
     const character = await loadNpcModel(id);
@@ -444,10 +476,28 @@ export async function createMarket(scene: THREE.Scene, colliders: Box[]): Promis
       board.mesh.userData.npc = id;
       scene.add(board.mesh);
     }
-    if (id !== "engineer" && id !== "harbor") dressing.set(id, makeStallDressing(scene, post, y, id));
+    if (id !== "engineer" && id !== "harbor") {
+      const stall = stallAt(post.npc.x, post.npc.z);
+      dressing.set(id, makeStallDressing(scene, post, y, id, stall ? splitDisplayGoods(stall, post.stall) : null));
+    }
     return { id, root, character, post, board, head: new THREE.Vector3(), talking: false, serving: false, serveTalk: false, attend: null, listening: false, gest: 0 };
   }));
 
+  // A stall model with no merchant behind it (Orchard Row) is not a business: no goods, its shutter down without a
+  // "Closed" card, and no shop sign advertising fruit nobody sells
+  for (const m of stallMeshes) {
+    const w = m.getWorldPosition(new THREE.Vector3());
+    if (npcs.some((n) => Math.hypot(n.post.npc.x - w.x, n.post.npc.z - w.z) < 1.2)) continue;
+    const toAisle = new THREE.Vector3(w.x > 0 ? w.x - 3 : w.x + 3, w.y, w.z);
+    splitDisplayGoods(m, toAisle).visible = false;
+    const side = Math.sign(toAisle.x - w.x) || 1;
+    const sh = makeShutter(SHUTTER_W_DEFAULT, new THREE.MeshStandardMaterial({ color: "#3a2a18" }), false);
+    sh.group.position.set(w.x + side * 1.15, w.y, w.z);
+    sh.group.rotation.y = side > 0 ? Math.PI / 2 : -Math.PI / 2;
+    sh.set(1);
+    scene.add(sh.group);
+    town?.traverse((o) => { if (/^sign_stall_fruit/.test(o.name)) { const p = o.getWorldPosition(new THREE.Vector3()); if (Math.hypot(p.x - w.x, p.z - w.z) < 2) o.visible = false; } });
+  }
   const life: Life = createLife(scene, colliders, town, npcs, folk, floor);
   const toP = new THREE.Vector3();
   return {
@@ -499,7 +549,7 @@ export async function createMarket(scene: THREE.Scene, colliders: Box[]): Promis
         n.character.setSpeed(0, 1, 2);
         n.character.update(dt);
         n.head.copy(n.root.position).setY(n.root.position.y + HEIGHT[n.id] * 0.92);
-        dressing.get(n.id)?.tick(dt, n.listening);
+        dressing.get(n.id)?.tick(dt);
       }
       life.update(dt);
     },

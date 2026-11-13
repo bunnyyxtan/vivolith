@@ -256,25 +256,24 @@ function renderCardInto(card: HTMLElement, c: Objective): void {
   if (done) { const bar = el("div", "prog"), fill = el("i"); fill.style.width = `${Math.min(100, (done[0] / Math.max(1, done[1])) * 100)}%`; bar.append(fill); card.append(bar); }
   card.append(el("div", "title", c.title));
   // the next action, set apart from the mission title so it reads as "do this now"
-  const next = el("p", "desc");
-  if (c.label === "First day" || c.label === "Goal") next.append(el("b", "nx", "Next"));
-  next.append(document.createTextNode(c.detail));
-  card.append(next);
+  // the next action, under the mission title (no extra labels: the title is the mission, this line is what to do now)
+  card.append(el("p", "desc", c.detail));
   const n = c.stake;
   if (!n) return;
+  // the stake in plain words, one glance: whose rent, when it is due, how much is there, what is missing
   const short = n.rent - n.till;
   const panel = el("div", `stake${short > 0 ? " short" : ""}`);
   const top = el("div", "sh");
-  top.append(el("span", "k", "Live · Pema's rent"), el("span", "when", `Charged ${n.when}`));
+  top.append(el("b", "", "Pema's rent"), el("span", "when", `due ${n.when}`));
   const meter = el("div", "meter"), fill = el("i");
   fill.style.width = `${Math.max(2, Math.min(100, (n.till / Math.max(1, n.rent)) * 100))}%`;
   meter.append(fill);
   const nums = el("div", "nums");
-  nums.append(el("b", "", `${n.till} c`), el("span", "", ` in her till · rent ${n.rent} c`), el("em", "", short > 0 ? `${short} c short` : "covered"));
+  nums.append(el("span", "", `${n.till} of ${n.rent} c in her till`), el("em", "", short > 0 ? `${short} c short` : "covered"));
   panel.append(top, meter, nums);
   // the stock the player sold her: it cost her till coins and pays rent only once shoppers buy it (without this line,
   // helping her read as "she is now further from rent")
-  if (short > 0 && n.shelf > 0) panel.append(el("div", "shelf", `${n.shelf} ${n.shelf === 1 ? "mango" : "mangoes"} on her shelf: coins only once shoppers buy them`));
+  if (short > 0 && n.shelf > 0) panel.append(el("div", "shelf", `${n.shelf} ${n.shelf === 1 ? "mango" : "mangoes"} on her shelf turn into coins as shoppers buy`));
   card.append(panel);
 }
 

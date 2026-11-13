@@ -65,7 +65,7 @@ const BID_STRETCH = 1.3;
 const PATIENCE_HIT = 14;
 const PATIENCE_FAIL = 34;
 export const PATIENCE_DRAIN_PER_SEC = 3.5;
-const LOT = 3;
+export const LOT = 3; // a haggle is always over this many (the relayer replays it with the same lot)
 const log = (s: EconomyState, text: string): void => {
   s.log.push({ minute: s.minute, kind: "player", text });
   if (s.log.length > 60) s.log.splice(0, s.log.length - 60);

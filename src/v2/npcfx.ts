@@ -7,6 +7,8 @@ const CSS = `
 .npc-bubble { position:fixed; left:0; top:0; z-index:4; pointer-events:none; font:600 14px "Inter Tight",system-ui,sans-serif;
   color:#1d2433; background:#fffaf1; padding:7px 12px; border-radius:12px; box-shadow:0 6px 18px rgba(24,36,60,.18); white-space:nowrap; display:none; }
 .npc-bubble::after { content:""; position:absolute; left:50%; bottom:-6px; width:12px; height:12px; margin-left:-6px; background:#fffaf1; transform:rotate(45deg); border-radius:2px; }
+.npc-bubble.tag { font:700 12.5px "Inter Tight",system-ui,sans-serif; color:#0f6b4a; background:#e6f7ef; padding:4px 9px; border-radius:999px; }
+.npc-bubble.tag::after { display:none; }
 body.in-menu .npc-bubble { display:none !important; }
 `;
 
@@ -17,7 +19,8 @@ interface Bubble { el: HTMLDivElement; head: THREE.Vector3 | null; t: number }
 
 export interface Bubbles {
   /** Show `text` above `head` (live vector, top of the head) for `secs`. */
-  say(head: THREE.Vector3, text: string, secs?: number): void;
+  /** kind "tag": a small trade marker (what changed hands), distinct from speech. */
+  say(head: THREE.Vector3, text: string, secs?: number, kind?: "tag"): void;
   update(dt: number, camera: THREE.Camera): void;
 }
 
@@ -33,9 +36,9 @@ export function createBubbles(pool = 5): Bubbles {
   });
   const v = new THREE.Vector3();
   return {
-    say(head, text, secs = 1.8) {
+    say(head, text, secs = 1.8, kind) {
       const b = bubbles.find((x) => x.t <= 0 || x.head === head) ?? bubbles.reduce((a, c) => (c.t < a.t ? c : a));
-      b.head = head; b.t = secs; b.el.textContent = text;
+      b.head = head; b.t = secs; b.el.textContent = text; b.el.className = kind === "tag" ? "npc-bubble tag" : "npc-bubble";
     },
     update(dt, camera) {
       for (const b of bubbles) {

@@ -120,7 +120,7 @@ function inkFor(mat: THREE.Material, ink: string): THREE.Color {
 
 /** Outline hull geometry with one averaged normal per position, so hard-edged props (split normals)
  *  get a closed ink line instead of cracks at every sharp edge. */
-function smoothHull(src: THREE.BufferGeometry): THREE.BufferGeometry {
+export function smoothHull(src: THREE.BufferGeometry): THREE.BufferGeometry {
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", src.getAttribute("position"));
   if (src.index) g.setIndex(src.index);
