@@ -13,7 +13,7 @@ import { Account, JsonRpcProvider, KeyPairSigner, PublicKey, SCHEMA, actions, ne
 import { MERCHANTS, keyPairFromSeed, merchantKey, residentKey, type MerchantId } from "./keys.ts";
 import { RESIDENTS, executableOffers, planResident, type Offer } from "../../src/economy/residents.ts";
 import { synthesize } from "./voice.ts";
-import { MAX_QUESTION, answer, factsFor, playerFacts, residentFacts, type Exchange, type Receipt } from "./talk.ts";
+import { MAX_QUESTION, answer, factsFor, playerFacts, residentFacts, type Exchange, type Ledger, type Receipt } from "./talk.ts";
 import { readMemory } from "./memory.ts";
 import { LEVERS, agentConfig, applyLivePrices, attachTx, claimBidSend, decideBid, decideResident, decisionFor, livePrices, priceMoved, recentDecisions, releaseBidSend, type AgentConfig, type Decision, type DecisionStore } from "./agent.ts";
 import { agentsHalted, fromScheduler, opsConfig, spend, usage } from "./ops.ts";
@@ -1199,7 +1199,7 @@ async function talk(cfg: Config, req: Request, env: RelayEnv): Promise<Response>
   const recalled = bondFacts(bonds, noun);
   // the speaker's recent confirmed market events from the Chronicle (reopening, rent, trades), as facts it may mention
   const town = (await readChronicle(store).catch(() => [])).filter((e) => e.actors.includes(id) && (e.status === "confirmed" || e.status === "recorded")).slice(-3).map((e) => `Recently in the market: ${e.text}`);
-  let built: { facts: string[]; script: string; topics: Record<string, string> };
+  let built: { facts: string[]; script: string; topics: Record<string, string>; ledger: Ledger };
   if (resident) {
     const held = Object.fromEntries((await view<[string, string][]>(provider, cfg.contractId, "get_balances", { account_id: npcAccount }).catch(() => [])).map(([t, v]) => [t, Number(v)]));
     const st = await chainEconomy(provider, cfg);
@@ -1217,7 +1217,7 @@ async function talk(cfg: Config, req: Request, env: RelayEnv): Promise<Response>
   const ops = opsConfig(env);
   const ai = { key: (env.NEAR_AI_KEY ?? "").trim() || null, model: (env.NEAR_AI_CHAT_MODEL ?? env.NEAR_AI_MODEL ?? "").trim() || null };
   const allowed = async (): Promise<boolean> => !(await agentsHalted(ops, store)) && (await spend(ops, store, "chat"));
-  const r = await answer({ ai, id, facts: built.facts, script: built.script, topics: built.topics, question, history: Array.isArray(history) ? history : [], allowed });
+  const r = await answer({ ai, id, facts: built.facts, script: built.script, topics: built.topics, ledger: built.ledger, question, history: Array.isArray(history) ? history : [], allowed });
   if (question) await store.set(histKey, JSON.stringify([...(Array.isArray(history) ? history : []), { q: question, a: r.line }].slice(-3)), 3600).catch(() => undefined);
   return json(200, { ...r, conv });
 }

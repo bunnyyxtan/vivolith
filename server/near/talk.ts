@@ -68,7 +68,7 @@ export function playerFacts(receipts: readonly Receipt[], npcAccount: string): s
 }
 
 /** Facts for a merchant: the chain, the readable pricing rules (src/economy/pricing.ts), decision, memory, the player. */
-export function factsFor(st: EconomyState, id: MerchantId, offers: readonly Offer[], receipts: readonly Receipt[], extra: { decision?: Decision | null; memory?: readonly MemoryRow[]; player?: readonly string[] } = {}): { facts: string[]; script: string; topics: Record<string, string> } {
+export function factsFor(st: EconomyState, id: MerchantId, offers: readonly Offer[], receipts: readonly Receipt[], extra: { decision?: Decision | null; memory?: readonly MemoryRow[]; player?: readonly string[] } = {}): { facts: string[]; script: string; topics: Record<string, string>; ledger: Ledger } {
   const m = st.merchants[id];
   const good = id === "arin" ? "lassi" : "mango";
   const q = quote(st, id, good, true);
@@ -99,28 +99,38 @@ export function factsFor(st: EconomyState, id: MerchantId, offers: readonly Offe
   if (mFacts.length) topics.past = firstPerson(mFacts[0]);
   const traded = (extra.player ?? []).filter((f) => f.startsWith("This customer"));
   if (traded.length) topics.you = traded[traded.length - 1].replace(/^This customer (\w+) (.+) (from|to) you/, (_, k: string, what: string, dir: string) => `You ${k} ${what} ${dir} me`);
-  return { facts, script: price, topics };
+  return { facts, script: price, topics, ledger: { held: { mango: m.stock.mango, lemon: m.stock.lemon, lassi: m.stock.lassi } } };
 }
 
-/** Facts for a resident (Lin, Dev): purse and goods on chain, the bids for their work, their meal, their plan, memory. */
-export function residentFacts(r: Resident, held: Readonly<Record<string, number>>, offers: readonly Offer[], names: Readonly<Record<string, string>>, extra: { decision?: Decision | null; memory?: readonly MemoryRow[] } = {}): { facts: string[]; script: string; topics: Record<string, string> } {
+/** "1 mango", "65 mangoes", "2 lemons", "5 lassi". */
+export const goodsOf = (good: string, n: number): string => `${n} ${n === 1 || good === "lassi" ? good : good === "mango" ? "mangoes" : `${good}s`}`;
+
+/** Facts for a resident (Lin, Dev): purse and goods on chain, the bids for their work, their meal, their plan, memory.
+ *  Each quantity is labelled with its role (held now, picked per day, what one order takes) so the chat model cannot
+ *  swap them; `ledger` lets `grounded` check the same roles in the reply. */
+export function residentFacts(r: Resident, held: Readonly<Record<string, number>>, offers: readonly Offer[], names: Readonly<Record<string, string>>, extra: { decision?: Decision | null; memory?: readonly MemoryRow[] } = {}): { facts: string[]; script: string; topics: Record<string, string>; ledger: Ledger } {
   const bids = offers.filter((o) => o.side === "bid" && o.token_id === r.good && Number(o.qty) > 0).sort((a, b) => Number(b.price) - Number(a.price));
   const meals = offers.filter((o) => o.side === "ask" && o.token_id === r.food && Number(o.qty) > 0).sort((a, b) => Number(a.price) - Number(b.price));
   const who = (id: string): string => names[id] ?? id;
   const dFacts = decisionFacts(extra.decision ?? null), mFacts = memoryFacts(extra.memory ?? [], r.good, 2);
+  const have = held[r.good] ?? 0, shown = bids.slice(0, 3);
+  const takes = shown.reduce((n, o) => n + Number(o.qty), 0);
   const facts = [
-    `You are ${r.name}, ${/^[aeiou]/i.test(r.job) ? "an" : "a"} ${r.job} in Saltlight Market. Each market day you earn ${r.perDay} ${r.good}s from ${r.reason}, sell them to a stall, then buy a ${r.food} to eat.`,
-    `You hold ${held.coin ?? 0} coins, ${held[r.good] ?? 0} ${r.good}s and ${held[r.food] ?? 0} ${r.food}.`,
-    ...bids.slice(0, 3).map((o) => `${who(o.merchant)} pays ${o.price} coins a ${r.good}, for up to ${o.qty}.`),
+    `You are ${r.name}, ${/^[aeiou]/i.test(r.job) ? "an" : "a"} ${r.job} in Saltlight Market. You sell what you gather to the stalls, then buy a ${r.food} to eat.`,
+    `Your daily work: each market day you gather ${goodsOf(r.good, r.perDay)} from ${r.reason}. That is what you add each day, not what you have.`,
+    `What you hold right now, in total: ${goodsOf(r.good, have)}, ${held.coin ?? 0} coins and ${goodsOf(r.food, held[r.food] ?? 0)}.`,
+    ...shown.map((o) => `${who(o.merchant)} has an order to buy at most ${goodsOf(r.good, Number(o.qty))} from you, at ${o.price} coins each.`),
+    ...(shown.length && takes < have ? [`Together these orders take at most ${goodsOf(r.good, takes)} of your ${goodsOf(r.good, have)}; nobody buys your whole stock today.`] : []),
     ...meals.slice(0, 2).map((o) => `${who(o.merchant)} sells a ${r.food} for ${o.price} coins.`),
     ...dFacts, ...mFacts,
   ];
   const best = bids[0], meal = meals[0];
   const script = best ? `${who(best.merchant)} pays best today, ${best.price} coins a ${r.good}.${meal ? ` Lunch is a ${r.food} at ${meal.price}.` : ""}` : `Nobody is buying ${r.good}s right now, so I'm holding mine.`;
-  const topics: Record<string, string> = { price: script, stock: `I've got ${held[r.good] ?? 0} ${r.good}s and ${held.coin ?? 0} coins.` };
+  const topics: Record<string, string> = { price: script, stock: `I've got ${goodsOf(r.good, have)} and ${held.coin ?? 0} coins.` };
   if (dFacts.length) topics.decision = firstPerson(dFacts[0]);
   if (mFacts.length) topics.past = firstPerson(mFacts[0]);
-  return { facts, script, topics };
+  const ledger: Ledger = { held: { [r.good]: have, [r.food]: held[r.food] ?? 0 }, perDay: { [r.good]: r.perDay }, takes: { [r.good]: takes }, each: { [r.good]: Math.max(0, ...shown.map((o) => Number(o.qty))) } };
+  return { facts, script, topics, ledger };
 }
 
 /** "Today you raised your ..." -> "Today I raised my ...": the scripted answer reads in the speaker's own voice. */
@@ -147,11 +157,48 @@ const TENS: Record<string, number> = { thirty: 30, forty: 40, fifty: 50, sixty: 
 const spelled = (s: string): string => s.replace(/\b[a-z]+\b/gi, (w) => { const k = w.toLowerCase(); const i = WORDS.indexOf(k); return i >= 2 ? String(i) : TENS[k] !== undefined ? String(TENS[k]) : w; });
 const numbers = (s: string): string[] => spelled(s).match(/\d+(?:\.\d+)?/g) ?? [];
 
+/** Goods quantities by role, from chain balances and posted orders, so a true number on the wrong thing is caught. */
+export interface Ledger {
+  /** goods the speaker holds now */
+  readonly held: Readonly<Record<string, number>>;
+  /** goods the speaker gathers each market day (residents) */
+  readonly perDay?: Readonly<Record<string, number>>;
+  /** at most this many of a good can be sold into today's shown orders, all together (residents) */
+  readonly takes?: Readonly<Record<string, number>>;
+  /** the largest quantity one of those orders takes (residents) */
+  readonly each?: Readonly<Record<string, number>>;
+}
+
+const PER_DAY = /\b(a day|per day|each day|every day|daily|pick|picks|picked|picking|gather|gathered|this morning|each morning|every morning)\b/i;
+const HAVE = /\b(i've got|i have|i've|i hold|i'm holding|i am holding|i'm carrying|i am carrying|i carry|i still have|on my shelves|in my basket|my stock|in stock)\b/i;
+const BUY = /\b(buys?|buying|bought|takes?|taking|pays?|paying|wants?)\b/i;
+const WHOLE = /\b(them|all of them|them all|all my|all of my|every one|everything|the lot|my whole)\b/i;
+// "<n> [up to two describing words] <good>"; a price ("6 coins a mango") is not a count of goods
+const COUNT = /\b(\d+)\s+((?:(?!coins?\b|c\b|for\b|at\b|a\b|an\b|per\b|each\b)[a-z'-]+\s+){0,2}?)(mango(?:e?s)?|lemons?|lassis?)\b/gi;
+const goodWord = (w: string): string => (w.toLowerCase().startsWith("mango") ? "mango" : w.toLowerCase().startsWith("lemon") ? "lemon" : "lassi");
+
+/** Role check for one clause: a count said with "I have" must be what is held, one said with "a day"/"picked" the daily
+ *  amount, one a buyer takes no more than the orders take; "they'll buy them" cannot cover more than the orders take. */
+function rolesOk(clause: string, ledger: Ledger): boolean {
+  for (const m of clause.matchAll(COUNT)) {
+    const n = Number(m[1]), good = goodWord(m[3]);
+    if (PER_DAY.test(clause)) { if (ledger.perDay?.[good] !== n) return false; }
+    else if (HAVE.test(clause)) { if ((ledger.held[good] ?? 0) !== n) return false; }
+    else if (ledger.each && BUY.test(clause) && n > (ledger.each[good] ?? 0)) return false;
+  }
+  if (ledger.takes && BUY.test(clause) && WHOLE.test(clause)) {
+    if (Object.entries(ledger.takes).some(([good, t]) => (ledger.held[good] ?? 0) > t)) return false;
+  }
+  return true;
+}
+
 /** True if every number in `line` (digits or words from two upward) is one of the facts' numbers: the model may not
- *  invent a price, stock or sum. */
-export function grounded(line: string, facts: readonly string[]): boolean {
+ *  invent a price, stock or sum. With a ledger, every count of goods must also match its role (held, per day, orders). */
+export function grounded(line: string, facts: readonly string[], ledger?: Ledger): boolean {
   const known = new Set(facts.flatMap(numbers));
-  return numbers(line).every((n) => known.has(n));
+  if (!numbers(line).every((n) => known.has(n))) return false;
+  if (!ledger) return true;
+  return spelled(line).split(/[.,;:!?]|\band\b|\bbut\b|\bor\b|\bwhile\b/i).every((c) => rolesOk(c, ledger));
 }
 
 const OFF_WORLD = /\b(blockchain|crypto|token|wallet|nft|smart contract|language model|as an ai|ai model|chatgpt|openai|llm)\b/i;
@@ -182,6 +229,8 @@ export interface AskInput {
   readonly topics?: Readonly<Record<string, string>>;
   readonly question: string;
   readonly history?: readonly Exchange[];
+  /** Goods counts by role for the reply check (`grounded`); without it only the numbers themselves are checked. */
+  readonly ledger?: Ledger;
   /** Kill switch and daily chat budget (ops.ts); false = the scripted line, no model call. */
   readonly allowed?: () => Promise<boolean>;
   readonly fetchImpl?: typeof fetch;
@@ -197,7 +246,7 @@ export async function answer(i: AskInput): Promise<TalkReply> {
   const system = [
     `You are ${p.name}, in Saltlight Market, a cosy anime city. How you talk: ${p.voice}.`,
     "Answer the customer's question in one to three short spoken sentences, in character, in plain words.",
-    "Use only the facts below. Never state a number that is not in them. If the facts do not answer the question, say so in character and talk about what you do know.",
+    "Use only the facts below. Never state a number that is not in them. Keep each number with what it describes: what you hold now, what you gather each day and how many one order takes are different numbers. If the facts do not answer the question, say so in character and talk about what you do know.",
     "Never mention blockchains, wallets, tokens, contracts or AI. No lists, no markdown, no emoji, no stage directions.",
     "Facts:", ...i.facts.map((f) => `- ${f}`),
   ].join("\n");
@@ -212,7 +261,7 @@ export async function answer(i: AskInput): Promise<TalkReply> {
     if (!r.ok) return fallback;
     const j = (await r.json()) as { choices?: { message?: { content?: string } }[] };
     const line = clean(j.choices?.[0]?.message?.content ?? "");
-    if (!line || line.length > MAX_LINE || OFF_WORLD.test(line) || !grounded(line, i.facts)) return fallback;
+    if (!line || line.length > MAX_LINE || OFF_WORLD.test(line) || !grounded(line, i.facts, i.ledger)) return fallback;
     return reply("ai", i.id, line);
   } catch {
     return fallback; // timeout or network: the game never waits on the model

@@ -261,6 +261,60 @@ const noBytes: FetchLike = async () => { calls++; return { ok: true, status: 200
   assert.match(rf.script, /^Mira Sol pays best today, 5 coins a mango\. Lunch is a lassi at 3\./);
   assert.ok(rf.facts[0].startsWith("You are Lin, a orchard picker") || rf.facts[0].startsWith("You are Lin"));
 
+  // Live failure 2026-11-13: Lin held 65 mangoes, picks 6 a day, and each of three stalls bid for 1. The model said
+  // "I've got six lovely mangos" and "Arin will buy them": true numbers on the wrong things. Facts now label each role
+  // and the ledger check catches a count on the wrong role.
+  const live = [
+    { merchant: "arin", token_id: "mango", side: "bid", qty: "1", price: "6" }, { merchant: "tomas", token_id: "mango", side: "bid", qty: "1", price: "5" },
+    { merchant: "mira", token_id: "mango", side: "bid", qty: "1", price: "5" }, { merchant: "arin", token_id: "lassi", side: "ask", qty: "3", price: "4" },
+  ];
+  const names = { arin: "Arin Okoye", tomas: "Tomas Vell", mira: "Mira Sol" };
+  const lf = residentFacts(lin, { coin: 181, mango: 65 }, live, names);
+  assert.ok(lf.facts.includes("What you hold right now, in total: 65 mangoes, 181 coins and 0 lassi."), "holdings labelled, from the balances given");
+  assert.ok(lf.facts.some((x) => x.startsWith("Your daily work: each market day you gather 6 mangoes") && x.includes("not what you have")), "daily amount labelled apart from holdings");
+  assert.ok(lf.facts.includes("Arin Okoye has an order to buy at most 1 mango from you, at 6 coins each."), "bid price and order quantity both explicit");
+  assert.ok(lf.facts.includes("Together these orders take at most 3 mangoes of your 65 mangoes; nobody buys your whole stock today."));
+  assert.deepEqual(lf.ledger, { held: { mango: 65, lassi: 0 }, perDay: { mango: 6 }, takes: { mango: 3 }, each: { mango: 1 } });
+  const liveLine = "The morning pick was good, I've got six lovely mangos right here! Arin Okoye will buy them for six coins each, or Tomas Vell and Mira Sol will pay five.";
+  assert.ok(grounded(liveLine, lf.facts), "the old check (numbers only) let the live line through");
+  assert.ok(!grounded(liveLine, lf.facts, lf.ledger), "the role check rejects it");
+  assert.ok(!grounded("I've got 6 mangoes.", lf.facts, lf.ledger), "daily amount said as holdings");
+  assert.ok(!grounded("Arin Okoye will buy them all at 6 coins.", lf.facts, lf.ledger), "a buyer taking the whole stock");
+  assert.ok(!grounded("Arin Okoye wants 3 mangoes at 6 coins each.", lf.facts, lf.ledger), "one order takes 1, not 3");
+  assert.ok(!grounded("I pick 65 mangoes a day.", lf.facts, lf.ledger), "holdings said as the daily amount");
+  for (const ok of [
+    "I picked six mangoes this morning, and I'm carrying 65 mangoes in total.",
+    "Arin Okoye pays 6 coins for 1 mango, Tomas Vell and Mira Sol pay 5.",
+    "I have 65 mangoes, but each stall only takes 1 mango today.",
+    "Arin Okoye pays best, 6 coins a mango.",
+  ]) assert.ok(grounded(ok, lf.facts, lf.ledger), `correct roles pass: ${ok}`);
+  for (const line of [lf.script, ...Object.values(lf.topics)]) assert.ok(grounded(line, lf.facts, lf.ledger), `Lin's scripted lines pass the role check: ${line}`);
+  const say = (content: string): typeof fetch => (async () => new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 })) as typeof fetch;
+  const linBase = { ai: { key: "k", model: "fast-chat" }, id: "picker", facts: lf.facts, script: lf.script, topics: lf.topics, ledger: lf.ledger, question: "What are you carrying, and who could you sell it to?" };
+  assert.equal((await answer({ ...linBase, fetchImpl: say(liveLine) })).source, "script", "the live line now falls back");
+  assert.equal((await answer({ ...linBase, fetchImpl: say("I'm carrying 65 mangoes. Arin Okoye pays 6 coins for 1 mango.") })).source, "ai");
+  // inventory changes: the facts and the check follow the balances, nothing is fixed at 65
+  const later = residentFacts(lin, { coin: 187, mango: 70 }, live, names);
+  assert.ok(later.facts.includes("What you hold right now, in total: 70 mangoes, 187 coins and 0 lassi."));
+  assert.ok(!grounded("I've got 65 mangoes.", later.facts, later.ledger) && grounded("I've got 70 mangoes.", later.facts, later.ledger));
+  const sold = residentFacts(lin, { coin: 197, mango: 2 }, live, names);
+  assert.ok(!sold.facts.some((x) => x.startsWith("Together these orders")), "no whole-stock warning when the orders can take it all");
+  assert.ok(grounded("Arin Okoye will buy them at 6 coins.", sold.facts, sold.ledger), "with 2 left and 3 wanted, 'buy them' is true");
+  // Dev: lemons, the same roles
+  const dev = RESIDENTS.find((r) => r.id === "porter")!;
+  const df = residentFacts(dev, { coin: 12, lemon: 9 }, [{ merchant: "tomas", token_id: "lemon", side: "bid", qty: "2", price: "3" }], names);
+  assert.ok(grounded("I'm carrying 9 lemons.", df.facts, df.ledger), "Dev's holdings");
+  assert.ok(grounded(`I gather ${dev.perDay} lemons a day.`, df.facts, df.ledger) && !grounded(`I gather 9 lemons a day.`, [...df.facts], df.ledger), "Dev's daily amount");
+  assert.ok(!grounded("Tomas Vell will take them all.", df.facts, df.ledger), "one order of 2 cannot take 9");
+  // merchants: a count of goods said as held must be the shelf; Pema's and Arin's live lines still pass
+  assert.deepEqual(f.ledger.held, { mango: st.merchants.pema.stock.mango, lemon: st.merchants.pema.stock.lemon, lassi: st.merchants.pema.stock.lassi });
+  assert.ok(grounded(`I have ${st.merchants.pema.stock.mango} mangoes.`, f.facts, f.ledger));
+  assert.ok(!grounded(`I have ${st.merchants.pema.stock.mango + 1} mangoes.`, [...f.facts, String(st.merchants.pema.stock.mango + 1)], f.ledger), "a wrong shelf count fails even when the number exists elsewhere");
+  const pemaLive = "Oh, hello dear! Yes, the stall is open again. We just needed to get some fresh fruit in. As for the Guild, I still owe them 163 coins, but we'll chip away at it, don't you worry.";
+  assert.ok(grounded(pemaLive, [...f.facts, "You owe the Market Guild 163 coins."], f.ledger), "Pema's live line still passes");
+  const arinLive = "The market is always a bit of a dance, isn't it? I'm focusing on selling the lassi we have left, as there are only five available.";
+  assert.ok(grounded(arinLive, ["On your shelves: 5 mangoes, 0 lemons, 5 lassi."], { held: { mango: 5, lemon: 0, lassi: 5 } }), "Arin's live line still passes");
+
   // the model only phrases: invented numbers, off-world words or a refused budget give the scripted line
   const chat = (content: string): typeof fetch => (async () => new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 })) as typeof fetch;
   const base = { ai: { key: "k", model: "fast-chat" }, id: "pema", facts: f.facts, script: f.script, topics: f.topics, question: "Why so pricey?" };
