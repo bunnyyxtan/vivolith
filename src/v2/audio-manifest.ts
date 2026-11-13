@@ -87,7 +87,9 @@ export const spokenText = (text: string): string => text.replace(/\b(\d+)\s?c\b/
 
 /** Fixed one-off lines spoken in the economy flow (the rest of that flow is live figures, voiced by an opener plus the server). */
 const EVENT_LINES: Record<string, string[]> = {
-  pema: ["Oh, a new face! I'm Pema. Don't look at my shelves, dear: 3 mangoes left, and rent is coming.", "You saved my morning, Kavi!", "A partner! I've paid the harbor. My crates are coming!"],
+  // "Oh, a new face! I'm Pema." is the fixed opening of her live greeting (its shelf count varies): recorded alone, it
+  // plays whatever her stock, and the figures follow from the server (audio.ts opener)
+  pema: ["Oh, a new face! I'm Pema.", "Oh, a new face! I'm Pema. Don't look at my shelves, dear: 3 mangoes left, and rent is coming.", "You saved my morning, Kavi!", "A partner! I've paid the harbor. My crates are coming!"],
   tomas: ["There you go. Don't tell Pema where you got them."],
   mira: [], arin: [],
 };

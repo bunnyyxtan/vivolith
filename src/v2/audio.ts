@@ -7,7 +7,7 @@
 // sentence is requested when the previous one starts, so the first is heard as soon as it is ready and an abandoned
 // reply never generates more than one sentence ahead.
 import type { MerchantId } from "../economy/state";
-import { VOICES, loopUrl, recordedUrl, sfxUrl, spokenText, type AmbienceId, type LineId, type Mood, type MusicId, type SfxFile } from "./audio-manifest";
+import { STATIC_LINES, VOICES, loopUrl, recordedUrl, sfxUrl, spokenText, type AmbienceId, type LineId, type Mood, type MusicId, type SfxFile } from "./audio-manifest";
 
 export interface Levels { music: number; voice: number; sfx: number; muted: boolean }
 type Synth = "click" | "coin" | "pay" | "error" | "step";
@@ -132,11 +132,11 @@ function ttsClip(speaker: string, text: string, mood: Mood = "neutral", signal?:
 }
 const fileClip = (url: string): Promise<Clip | null> => fetchBuffer(url).then((buf) => (buf ? { buf } : null));
 
-/** The longest recorded line of this merchant that the text starts with (an opener such as "Ha! Not a chance."). */
+/** The longest recorded line of this speaker that the text starts with: a merchant phrase ("Ha! Not a chance.") or a
+ *  fixed static line ("Oh, a new face! I'm Pema." before her live shelf count). */
 function opener(speaker: string, text: string): string | null {
-  const v = VOICES[speaker as MerchantId];
-  if (!v) return null;
-  return Object.values(v.lines).filter((l) => text.startsWith(`${l} `)).sort((a, b) => b.length - a.length)[0] ?? null;
+  const lines = [...Object.values(VOICES[speaker as MerchantId]?.lines ?? {}), ...(STATIC_LINES[speaker] ?? [])];
+  return lines.filter((l) => text.startsWith(`${l} `)).sort((a, b) => b.length - a.length)[0] ?? null;
 }
 
 export interface LineOptions {
@@ -212,7 +212,8 @@ async function speakLine(speaker: string, parts: readonly string[], o: LineOptio
     const op = whole || token ? null : opener(speaker, text); // a signed sentence is voiced whole, as signed
     if (whole) pieces.push({ words: count(text), free: true, get: () => fileClip(whole).then((c) => c ?? ttsClip(speaker, text, o.mood, ac.signal)) });
     else if (op) {
-      pieces.push({ words: count(op), free: true, get: () => fileClip(recordedUrl(speaker, op)!) });
+      // a missing opener file is voiced by the server like the rest, never skipped
+      pieces.push({ words: count(op), free: true, get: () => fileClip(recordedUrl(speaker, op)!).then((c) => c ?? ttsClip(speaker, op, o.mood, ac.signal)) });
       const rest = text.slice(op.length).trim();
       if (!o.openerOnly) pieces.push({ words: count(rest), free: false, get: () => ttsClip(speaker, rest, o.mood, ac.signal) });
     } else if (!o.openerOnly) pieces.push({ words: count(text), free: false, get: () => ttsClip(speaker, text, o.mood, ac.signal, token) });
