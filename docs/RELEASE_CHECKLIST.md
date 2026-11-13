@@ -5,7 +5,7 @@ explicit approval before it runs: each one writes to testnet, production Redis o
 credits. Record evidence in `docs/evidence/` and the result in PROGRESS.md.
 
 Production today: `c2ace0b`. Local commits not deployed: `86cf4be` (Lin grounding), `16ed7a5` (relayer bundle),
-`f781fb2` (Rent Night journey), the Phase 3 voice commits (`30e1fff`, live voice and hardening), plus docs.
+`f781fb2` (Rent Night journey), the Phase 3 voice commits (`30e1fff`, live voice and hardening), the Phase 4 characters commit, plus docs.
 
 ## 1. Connected playthrough (testnet)
 
@@ -48,7 +48,11 @@ recordings, alignment, in-game first audio 1.70 s, streaming comparison, route h
       still voiced.
 - [ ] Production env: `ELEVENLABS_API_KEY` set; `VIVOLITH_VOICE_MOCK` unset; `NEAR_MERCHANT_SECRET` set (also the
       speech-token secret); Upstash Redis configured, otherwise the shared `voice:chars` budget is per instance only.
-- [ ] On the deployed site: an arbitrary line to `/api/near/voice` answers 403 "not a line of this game".
+- [ ] On the deployed site: an arbitrary line to `/api/near/voice` answers 403 "not a line of this game", and so does a new
+      sentence made of game words (Phase 4: approved sentences, `server/near/lines.json`, replaced the word list).
+- [ ] With the pane visible: a merchant's mouth moves while their voice plays and stops while they listen (Phase 4
+      changed the merchant animation loop; not re-observed with audio).
+- [ ] Connected: a real Lin or Dev sale walks them to the buyer with the goods (Phase 4 only exercised a scripted errand).
 
 ## 5. Production release
 
