@@ -207,6 +207,23 @@ Silent dialogue and read-only inspection (2026-11-14, local, no deploy):
   it), then the live shelf sentence from the server; words 1-6 lit across the clip, then the rest; stop() at 1.2 s cut it
   at word 3 with no further audio.
 
+Production deploy of d483ee3 (authorized 2026-11-14, 21:3x UTC): `npm run deploy` from the clean release worktree
+(`vivolith-release`, detached at d483ee3, no untracked files), deployment `vivolith-mofecbv8l`, aliased to vivolith.world;
+rollback `vivolith-9eu9hcz07` (66907f3). Production env not changed (no VIVOLITH_READ_ONLY, no test caps, agents off).
+- Live checks without a browser: page meta d483ee3; bundle carries the read-only guard and the greeting line;
+  `sdc716855.mp3` 200 audio/mpeg 53 541 bytes (= the commit), plaza.glb, kavi.glb, roads.json, rent_ok and hello 200;
+  `sa43fc250.mp3` 404 (not generated: falls back to the server voice).
+- Read-only `?inspect=g3bb4d6aaa31fd20f...` on production, first load already inspected: about 5 min, network showed only
+  GET status and chronicle, 0 relayer transactions after 21:10:45 UTC (nearblocks), lastTick unchanged (day 2991003),
+  no console errors, no save written. Rent line from the real chain (market day 2991010, even, no turn since 2991003,
+  Mira 21 c of 30): "Mira's rent due now · 9 c short", at 1280x720 x 1067-1260 y 128-155 and 1920x1080 x 1707-1900
+  y 128-155, not clipped (`phase6d-prod-d483ee3-inspect-rent-1280x720.jpg`, `-1920x1080.jpg`; tutorial flags set in
+  the page only, to show a mid-game player). New player: no rent line on Day 1, as designed.
+- Defect: Town news still shows "Lin sold 2 mangos", "A player bought 3 mango": the chronicle stores text, all 26
+  entries predate the deploy (newest 20:31 UTC), and 5f039fd only fixes new events; they stay until 40 newer events
+  push them out. Also unfixed: "it reopens after 1 mangoes are delivered" (handlers.ts rent-closed event).
+  `phase6d-prod-d483ee3-town-news-old-plurals.jpg`. Minor: under ?inspect the account chip says "saved in this browser".
+
 Verified offline in the browser: open stocked stall (Tomas), closed stall with stock (Pema, no goods outside, Closed card), vacant stall, reopening at 08:00 (shutter up, goods back), resident delivery to an open stall and to a shut stall (state injected to close her: labelled), trade and haggle panels with the mission visible, panel open at 20:58 (clock holds while trading), 1280x720 and 1920x1080, day and night. Not verified: a live resident delivery to a closed stall on testnet; sold-out display (no stall reached 0 stock in play). 13/13 checks, voice check, typecheck, build.
 
 ## Phase 6: live production acceptance (2026-11-14, authorized)
