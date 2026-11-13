@@ -113,11 +113,11 @@ interface Clip { buf: AudioBuffer; words?: number[] }
  *  The request carries the spoken form ("15 coins" for "15 c"), word for word the subtitle. An aborted request is
  *  dropped from the cache, so a replay asks again (the server's own cache answers without a second paid call). */
 const tts = new Map<string, Promise<Clip | null>>();
-function ttsClip(speaker: string, text: string, mood: Mood = "neutral", signal?: AbortSignal): Promise<Clip | null> {
+function ttsClip(speaker: string, text: string, mood: Mood = "neutral", signal?: AbortSignal, token?: string): Promise<Clip | null> {
   const k = `${speaker}|${mood}|${text}`;
   let p = tts.get(k);
   if (!p) {
-    p = fetch("/api/near/voice", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ speaker, text: spokenText(text), mood }), signal })
+    p = fetch("/api/near/voice", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ speaker, text: spokenText(text), mood, token }), signal })
       .then((r) => (r.ok ? (r.json() as Promise<{ audio?: string; words?: unknown }>) : null))
       .then(async (j) => {
         if (!j?.audio || !ctx) return null;
@@ -148,6 +148,9 @@ export interface LineOptions {
   queue?: boolean;
   /** Speak only the recorded opener; the rest of the subtitle is interface detail (figures), not speech. */
   openerOnly?: boolean;
+  /** Speech tokens from the server, one per part (a validated conversation answer): the voice route speaks those parts
+   *  as they are. Parts without one must be made of the game's own words. */
+  tokens?: readonly (string | undefined)[];
   /** Delivery chosen by the game from real events (server voice only; recorded lines keep their take). */
   mood?: Mood;
   /** Subtitle pacing: how many words of the text have been spoken so far (provider timings when known, else spread
@@ -202,15 +205,17 @@ async function speakLine(speaker: string, parts: readonly string[], o: LineOptio
   // sentence ahead of playback)
   const pieces: { words: number; free: boolean; get: () => Promise<Clip | null> }[] = [];
   const count = (t: string): number => t.split(/\s+/).filter(Boolean).length;
-  for (const text of parts.map((p) => p.trim()).filter(Boolean)) {
+  for (const [i, raw] of parts.entries()) {
+    const text = raw.trim(), token = o.tokens?.[i];
+    if (!text) continue;
     const whole = recordedUrl(speaker, text);
-    const op = whole ? null : opener(speaker, text);
+    const op = whole || token ? null : opener(speaker, text); // a signed sentence is voiced whole, as signed
     if (whole) pieces.push({ words: count(text), free: true, get: () => fileClip(whole).then((c) => c ?? ttsClip(speaker, text, o.mood, ac.signal)) });
     else if (op) {
       pieces.push({ words: count(op), free: true, get: () => fileClip(recordedUrl(speaker, op)!) });
       const rest = text.slice(op.length).trim();
       if (!o.openerOnly) pieces.push({ words: count(rest), free: false, get: () => ttsClip(speaker, rest, o.mood, ac.signal) });
-    } else if (!o.openerOnly) pieces.push({ words: count(text), free: false, get: () => ttsClip(speaker, text, o.mood, ac.signal) });
+    } else if (!o.openerOnly) pieces.push({ words: count(text), free: false, get: () => ttsClip(speaker, text, o.mood, ac.signal, token) });
   }
   const asked: (Promise<Clip | null> | null)[] = pieces.map(() => null);
   const ask = (i: number): Promise<Clip | null> | null => (i < pieces.length ? (asked[i] ??= pieces[i].get()) : null);

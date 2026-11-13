@@ -12,7 +12,8 @@ import { deserialize } from "borsh";
 import { Account, JsonRpcProvider, KeyPairSigner, PublicKey, SCHEMA, actions, nearToYocto, teraToGas, type KeyPairString } from "near-api-js";
 import { MERCHANTS, keyPairFromSeed, merchantKey, residentKey, type MerchantId } from "./keys.ts";
 import { RESIDENTS, executableOffers, planResident, type Offer } from "../../src/economy/residents.ts";
-import { synthesize } from "./voice.ts";
+import { spokenText } from "../../src/v2/audio-manifest.ts";
+import { gameWords, speechToken, speechTokenOk, synthesize, voiceSecret, voiceText } from "./voice.ts";
 import { MAX_QUESTION, answer, factsFor, moodOf, playerFacts, residentFacts, type Exchange, type Ledger, type Receipt } from "./talk.ts";
 import { readMemory } from "./memory.ts";
 import { LEVERS, agentConfig, applyLivePrices, attachTx, claimBidSend, decideBid, decideResident, decisionFor, livePrices, priceMoved, recentDecisions, releaseBidSend, type AgentConfig, type Decision, type DecisionStore } from "./agent.ts";
@@ -75,6 +76,7 @@ const LIMITS = {
   talk: { max: 10, windowSec: 60 }, // per IP: "Ask why" (each may be one NEAR AI call)
   voice: { max: 30, windowSec: 60 }, // per IP: spoken lines without a recorded file (cached; daily budget in voice.ts)
   voiceDay: { max: 1500, windowSec: 24 * 3600 }, // global: voice requests a day across instances (counted before the cache)
+  voiceChars: { max: 20000, windowSec: 24 * 3600 }, // global: characters sent to the voice provider a day (about $1.60 at API prices)
   pick: { max: 6, windowSec: 3600 }, // per IP: orchard picks (each account also once per market day)
 } as const;
 
@@ -107,13 +109,13 @@ const configured = (c: Config): boolean => c.relayerId.endsWith(".testnet") && B
 
 const memory = new Map<string, { n: number; until: number }>();
 
-async function hit(cfg: Config, bucket: string, max: number, windowSec: number): Promise<boolean> {
+async function hit(cfg: Config, bucket: string, max: number, windowSec: number, n = 1): Promise<boolean> {
   const key = `vivolith:rl:${bucket}:${Math.floor(Date.now() / 1000 / windowSec)}`;
   if (cfg.redisUrl && cfg.redisToken) {
     const r = await fetch(`${cfg.redisUrl}/pipeline`, {
       method: "POST",
       headers: { authorization: `Bearer ${cfg.redisToken}`, "content-type": "application/json" },
-      body: JSON.stringify([["INCR", key], ["EXPIRE", key, String(windowSec + 5)]]),
+      body: JSON.stringify([["INCRBY", key, String(n)], ["EXPIRE", key, String(windowSec + 5)]]),
     });
     if (!r.ok) throw new Error("rate limiter unavailable");
     const [{ result }] = (await r.json()) as [{ result: number }];
@@ -123,10 +125,10 @@ async function hit(cfg: Config, bucket: string, max: number, windowSec: number):
   const now = Date.now();
   const e = memory.get(key);
   if (!e || e.until < now) {
-    memory.set(key, { n: 1, until: now + windowSec * 1000 });
-    return true;
+    memory.set(key, { n, until: now + windowSec * 1000 });
+    return n <= max;
   }
-  e.n += 1;
+  e.n += n;
   return e.n <= max;
 }
 
@@ -1223,7 +1225,10 @@ async function talk(cfg: Config, req: Request, env: RelayEnv): Promise<Response>
   const allowed = async (): Promise<boolean> => !(await agentsHalted(ops, store)) && (await spend(ops, store, "chat"));
   const r = await answer({ ai, id, facts: built.facts, script: built.script, topics: built.topics, ledger: built.ledger, question, history: Array.isArray(history) ? history : [], allowed });
   if (question) await store.set(histKey, JSON.stringify([...(Array.isArray(history) ? history : []), { q: question, a: r.line }].slice(-3)), 3600).catch(() => undefined);
-  return json(200, { ...r, conv, mood });
+  // each validated sentence may be voiced exactly as it is, by this speaker and mood (a short-lived speech token)
+  const secret = voiceSecret(env.NEAR_MERCHANT_SECRET);
+  const speech = r.sentences.map((t) => speechToken(secret, id, mood, spokenText(t)));
+  return json(200, { ...r, conv, mood, speech });
 }
 
 /** Pays a player the whole coins of dividends they are owed (the contract can only ever pay what is owed). Players'
@@ -1290,7 +1295,11 @@ export async function handle(route: string, req: Request, env: RelayEnv): Promis
       // every instance together: at most this many voice requests a day (cached answers count too: a conservative cap)
       if (!mock && !(await hit(cfg, "voice:day", LIMITS.voiceDay.max, LIMITS.voiceDay.windowSec))) return json(429, { status: "budget", message: "voice budget used for today" });
       const b = await readJson(req);
-      const r = await synthesize(String(b.speaker ?? ""), String(b.text ?? ""), e.ELEVENLABS_API_KEY?.trim(), { mood: typeof b.mood === "string" ? b.mood : undefined, mock });
+      const speaker = String(b.speaker ?? ""), text = voiceText(String(b.text ?? "")), mood = typeof b.mood === "string" ? b.mood : "neutral";
+      // only lines the server validated (speech token) or lines made of the game's own words: not a general TTS service
+      if (!speechTokenOk(voiceSecret(e.NEAR_MERCHANT_SECRET), b.token, speaker, mood, text) && !gameWords(text)) return json(403, { status: "error", message: "not a line of this game" });
+      const charge = (n: number): Promise<boolean> => hit(cfg, "voice:chars", LIMITS.voiceChars.max, LIMITS.voiceChars.windowSec, n);
+      const r = await synthesize(speaker, text, e.ELEVENLABS_API_KEY?.trim(), { mood, mock, charge });
       return json(r.status, r.body);
     }
     if (!configured(cfg)) return json(503, { status: "unconfigured", message: "NEAR relayer not configured (see docs/DEPLOY.md)" });

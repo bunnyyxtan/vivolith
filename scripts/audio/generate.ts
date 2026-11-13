@@ -10,7 +10,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
-import { AMBIENCE, CAST_BUMP, SPEAKERS, STATIC_LINES, staticUrl, FOLK_VOICES, MUSIC, MUSIC_STYLE, SFX, SFX_STYLE, VOICES, type LineId } from "../../src/v2/audio-manifest.ts";
+import { AMBIENCE, CAST_BUMP, SPEAKERS, STATIC_LINES, spokenText, staticUrl, FOLK_VOICES, MUSIC, MUSIC_STYLE, SFX, SFX_STYLE, VOICES, type LineId } from "../../src/v2/audio-manifest.ts";
 
 const OUT = path.resolve("public");
 const TTS_MODEL = "eleven_v4", SFX_MODEL = "eleven_text_to_sound_v3", MUSIC_MODEL = "music_v2_5";
@@ -24,23 +24,23 @@ for (const [id, v] of Object.entries(VOICES)) {
   for (const [line, text] of Object.entries(v.lines) as [LineId, string][]) {
     jobs.push({
       kind: "voice", file: `audio/voice/${id}/${line}.mp3`, detail: `${id}: "${text}"`, chars: text.length,
-      make: (c) => c.textToSpeech.convert(v.voiceId, { text: `${v.tag} ${text}`, modelId: TTS_MODEL, outputFormat: "mp3_44100_128" }),
+      make: (c) => c.textToSpeech.convert(v.voiceId, { text: `${v.tag} ${spokenText(text)}`, modelId: TTS_MODEL, outputFormat: "mp3_44100_128" }),
     });
   }
 }
 FOLK_VOICES.forEach((v, n) => v.bump.forEach((text, k) => jobs.push({
   kind: "voice", file: `audio/voice/folk${n}/bump_${k}.mp3`, detail: `folk${n}: "${text}"`, chars: text.length,
-  make: (c) => c.textToSpeech.convert(v.voiceId, { text: `${v.tag} ${text}`, modelId: TTS_MODEL, outputFormat: "mp3_44100_128" }),
+  make: (c) => c.textToSpeech.convert(v.voiceId, { text: `${v.tag} ${spokenText(text)}`, modelId: TTS_MODEL, outputFormat: "mp3_44100_128" }),
 })));
 for (const [id, lines] of Object.entries(CAST_BUMP)) lines.forEach((text, k) => jobs.push({
   kind: "voice", file: `audio/voice/${id}/bump_${k}.mp3`, detail: `${id}: "${text}"`, chars: text.length,
-  make: (c) => c.textToSpeech.convert(SPEAKERS[id].voiceId, { text: `${SPEAKERS[id].tag} ${text}`, modelId: TTS_MODEL, outputFormat: "mp3_44100_128" }),
+  make: (c) => c.textToSpeech.convert(SPEAKERS[id].voiceId, { text: `${SPEAKERS[id].tag} ${spokenText(text)}`, modelId: TTS_MODEL, outputFormat: "mp3_44100_128" }),
 }));
 for (const [id, lines] of Object.entries(STATIC_LINES)) for (const text of lines) {
   const file = staticUrl(id, text).replace(/^\//, "");
   jobs.push({
     kind: "voice", file, detail: `${id}: "${text}"`, chars: text.length,
-    make: (c) => c.textToSpeech.convert(SPEAKERS[id].voiceId, { text: `${SPEAKERS[id].tag} ${text}`, modelId: TTS_MODEL, outputFormat: "mp3_44100_128" }),
+    make: (c) => c.textToSpeech.convert(SPEAKERS[id].voiceId, { text: `${SPEAKERS[id].tag} ${spokenText(text)}`, modelId: TTS_MODEL, outputFormat: "mp3_44100_128" }),
   });
 }
 for (const [id, s] of Object.entries(SFX)) {

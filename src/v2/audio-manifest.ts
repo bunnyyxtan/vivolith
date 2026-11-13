@@ -87,11 +87,10 @@ export const spokenText = (text: string): string => text.replace(/\b(\d+)\s?c\b/
 
 /** Fixed one-off lines spoken in the economy flow (the rest of that flow is live figures, voiced by an opener plus the server). */
 const EVENT_LINES: Record<string, string[]> = {
-  pema: ["You saved my morning, Kavi!", "A partner! I've paid the harbor. My crates are coming!"],
+  pema: ["Oh, a new face! I'm Pema. Don't look at my shelves, dear: 3 mangoes left, and rent is coming.", "You saved my morning, Kavi!", "A partner! I've paid the harbor. My crates are coming!"],
   tomas: ["There you go. Don't tell Pema where you got them."],
   mira: [], arin: [],
 };
-const REOPEN_THANKS = "We're open again, thanks to you!";
 const fnv = (t: string): string => { let h = 0x811c9dc5; for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16).padStart(8, "0"); };
 /** Every static line of every conversation (read with the opening economy) plus the fixed event lines, per speaker.
  *  Lines whose text carries live numbers differ from these and are voiced by the server instead. */
@@ -102,7 +101,6 @@ export const STATIC_LINES: Record<string, string[]> = (() => {
     for (const n of Object.values(c.nodes)) { try { (out[id] ??= new Set()).add(n.text(eco)); } catch { /* node needs state this opening economy lacks */ } }
   }
   for (const [id, ls] of Object.entries(EVENT_LINES)) for (const l of ls) (out[id] ??= new Set()).add(l);
-  for (const id of ["pema", "tomas", "mira", "arin"]) (out[id] ??= new Set()).add(REOPEN_THANKS);
   return Object.fromEntries(Object.entries(out).map(([id, s]) => [id, [...s]]));
 })();
 export const staticUrl = (speaker: string, text: string): string => `/audio/voice/${speaker}/s${fnv(text)}.mp3`;

@@ -779,7 +779,7 @@ export async function createPlay(game: Game): Promise<Play> {
   // ---------------------------------------------------------------- speech ----
   // One place voices a character's line, paces its subtitle to the voice and lets the player skip or replay it (click
   // the line). The subtitle and the voice are the same text: nothing is spoken that is not shown.
-  let live: { speaker: string; line: string; sentences: readonly string[]; mood: Mood; words: number; total: number } | null = null;
+  let live: { speaker: string; line: string; sentences: readonly string[]; mood: Mood; speech: readonly string[]; words: number; total: number } | null = null;
   const wordsOf = (t: string): string[] => t.split(/\s+/).filter(Boolean);
   const spokenSoFar = (line: string): number => (live && live.line === line ? live.words : Number.MAX_SAFE_INTEGER);
   const paint = (): void => {
@@ -788,12 +788,12 @@ export async function createPlay(game: Game): Promise<Play> {
       box.querySelectorAll("span").forEach((w, i) => w.classList.toggle("on", i < n));
     }
   };
-  const voice = (speaker: string, sentences: readonly string[], mood: Mood = "neutral"): void => {
+  const voice = (speaker: string, sentences: readonly string[], mood: Mood = "neutral", speech: readonly string[] = []): void => {
     const line = sentences.join(" ");
-    const me = { speaker, line, sentences, mood, words: 0, total: wordsOf(line).length };
+    const me = { speaker, line, sentences, mood, speech, words: 0, total: wordsOf(line).length };
     live = me;
     paint();
-    void audio.reply(speaker, sentences, { mood, onWords: (n) => { if (live === me) { me.words = Math.min(n, me.total); paint(); } } });
+    void audio.reply(speaker, sentences, { mood, tokens: speech, onWords: (n) => { if (live === me) { me.words = Math.min(n, me.total); paint(); } } });
   };
   /** The spoken line as a subtitle: words light up as they are said (dimmed ahead, never hidden: reading ahead is fine). */
   const subtitle = (line: string): HTMLDivElement => {
@@ -804,7 +804,7 @@ export async function createPlay(game: Game): Promise<Play> {
     box.addEventListener("click", () => {
       if (!live || live.line !== line) return;
       if (live.words < live.total) { audio.stop(); live = { ...live, words: live.total }; paint(); } // skip
-      else voice(live.speaker, live.sentences, live.mood); // hear it again (cached: no new request)
+      else voice(live.speaker, live.sentences, live.mood, live.speech); // hear it again (cached: no new request)
     });
     return box;
   };
@@ -814,7 +814,7 @@ export async function createPlay(game: Game): Promise<Play> {
   // Lin and Dev (in the money trail). Connected, the relayer answers from NEAR facts (NEAR AI phrases it, checked
   // against the facts, else a scripted line); offline, or when it cannot answer, the same scripted rules run on this
   // game's own market. The validated sentences are exactly what is voiced. The draft survives a panel re-render.
-  let asked: { id: string; line: string; ai: boolean; sentences: readonly string[]; mood: Mood } | null = null, asking: string | null = null, askDraft = "";
+  let asked: { id: string; line: string; ai: boolean; sentences: readonly string[]; mood: Mood; speech?: readonly string[] } | null = null, asking: string | null = null, askDraft = "";
   const localAnswer = (id: string, question: string): { line: string; sentences: string[]; mood: Mood } => {
     if ((MERCHANT_IDS as readonly string[]).includes(id)) {
       const f = factsFor(state, id as MerchantId, [], []);
@@ -848,9 +848,9 @@ export async function createPlay(game: Game): Promise<Play> {
     const r = isOffline() ? null : await askMerchant(id, q);
     if (asking !== id || !still()) return; // closed, or someone else addressed, while it was coming: say nothing
     asking = null; askDraft = "";
-    asked = r ? { id, line: r.line, ai: r.ai, sentences: r.sentences, mood: toMood(r.mood) } : { id, ai: false, ...localAnswer(id, q) };
+    asked = r ? { id, line: r.line, ai: r.ai, sentences: r.sentences, mood: toMood(r.mood), speech: r.speech } : { id, ai: false, ...localAnswer(id, q) };
     rerender();
-    voice(id, asked.sentences, asked.mood);
+    voice(id, asked.sentences, asked.mood, asked.speech);
   };
 
   /** Closed stall: how far its shelves are from reopening (stock is the only thing that reopens it). */

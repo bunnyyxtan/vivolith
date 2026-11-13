@@ -1,7 +1,11 @@
 // Bundles the NEAR relayer Vercel Function (server/near/vercel.ts + near-api-js + the economy rules) into one
 // self-contained ESM file at api/near/[route].js. Vercel's Node runtime cannot resolve the repo's `.ts` imports.
 //   node scripts/build-api.mjs
+import { execFileSync } from "node:child_process";
 import { build } from "rolldown";
+
+// the voice route's closed vocabulary must match the game text being shipped
+execFileSync(process.execPath, ["scripts/audio/lexicon.ts"], { stdio: "inherit" });
 
 await build({
   input: "server/near/vercel.ts",

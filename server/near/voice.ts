@@ -7,7 +7,14 @@
 // or unavailable, the game shows subtitles without speech.
 // Mock mode (VIVOLITH_VOICE_MOCK=1, never on a production deployment): a locally synthesised placeholder voice with
 // exact word timings, so the whole pipeline can be played without credits. Responses say `mock: true`.
+// Who may spend: a line the server itself validated carries a short-lived speech token (HMAC over speaker, mood and
+// text, see speechToken); any other line must be made only of the game's own words (lexicon.json, numbers, one name),
+// so the route cannot be used as a general text-to-speech service. Spend is charged before the provider is called and
+// is only returned when the provider refused the request outright (4xx): a timeout or a broken answer may still be
+// billed, so it stays spent, and the same line is not retried for a minute.
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { SPEAKERS, MOODS, moodTag, type Mood } from "../../src/v2/audio-manifest.ts";
+import LEXICON from "./lexicon.json" with { type: "json" };
 
 const MODEL = "eleven_v4"; // the model every recorded line was made with: dynamic speech must sound the same
 export const MAX_TEXT = 240;
@@ -15,6 +22,10 @@ const TIMEOUT_MS = 9000;
 /** ponytail: per server instance and day; the handler adds a shared daily request cap (Redis) on top. */
 const DAILY_CHARS = 6000;
 const CACHE_MAX = 300;
+/** Provider calls running at once on this instance (ElevenLabs plans cap concurrency too). */
+const MAX_INFLIGHT = 4;
+const RETRY_AFTER_MS = 60_000;
+const TOKEN_TTL_MS = 15 * 60_000;
 
 export interface VoiceBody {
   status: string; message?: string; audio?: string; mime?: string;
@@ -28,10 +39,52 @@ export interface VoiceOptions {
   readonly mock?: boolean;
   readonly fetchImpl?: typeof fetch;
   readonly now?: () => number;
+  /** A shared spend counter (the handler's Redis budget): false refuses the call before it is made. */
+  readonly charge?: (chars: number) => Promise<boolean>;
+}
+
+/** Normal form of a line for signing and checking (what synthesize speaks). */
+export const voiceText = (raw: string): string => raw.replace(/\s+/g, " ").trim();
+
+/** A token for one line the server validated (a conversation answer): lets the browser have exactly this line voiced,
+ *  by this speaker and mood, for 15 minutes. */
+export function speechToken(secret: string, speaker: string, mood: string, text: string, now = Date.now()): string {
+  const exp = now + TOKEN_TTL_MS;
+  return `${exp}.${createHmac("sha256", secret).update(`${speaker}|${mood}|${exp}|${voiceText(text)}`).digest("base64url")}`;
+}
+export function speechTokenOk(secret: string, token: unknown, speaker: string, mood: string, text: string, now = Date.now()): boolean {
+  if (typeof token !== "string") return false;
+  const [exp, sig] = token.split(".");
+  if (!sig || !(Number(exp) > now) || Number(exp) > now + TOKEN_TTL_MS) return false;
+  const want = createHmac("sha256", secret).update(`${speaker}|${mood}|${exp}|${voiceText(text)}`).digest();
+  const got = Buffer.from(sig, "base64url");
+  return got.length === want.length && timingSafeEqual(got, want);
+}
+/** The signing secret: derived from the relayer's merchant secret; without one, random per instance (dev only). */
+let devSecret = "";
+export function voiceSecret(merchantSecret: string | undefined): string {
+  const s = merchantSecret?.trim();
+  if (s) return createHmac("sha256", s).update("vivolith-voice").digest("hex");
+  return (devSecret ||= randomBytes(32).toString("hex"));
+}
+
+const WORDS = new Set<string>(LEXICON as string[]);
+/** True when every word of the line is the game's own (string literals of the game's text), a number or a time, with
+ *  at most one other capitalised word (the player's chosen name). */
+export function gameWords(text: string): boolean {
+  let names = 0;
+  for (const raw of voiceText(text).split(/[\s/‐-—-]+/)) {
+    const w = raw.replace(/^[^\p{L}\p{N}']+|[^\p{L}\p{N}]+$/gu, "");
+    if (!w || /^\d{1,6}(?:[:.,]\d{1,3})?%?$/.test(w) || WORDS.has(w.toLowerCase())) continue;
+    if (/^[A-Z][a-z]{1,13}$/.test(w) && names++ === 0) continue;
+    return false;
+  }
+  return true;
 }
 
 const cache = new Map<string, VoiceBody>();
 const inflight = new Map<string, Promise<VoiceResult>>();
+const failed = new Map<string, number>();
 let day = "", spent = 0;
 
 /** Word start times from a character alignment: where each word of `text` begins in the aligned characters. */
@@ -46,10 +99,11 @@ export function wordStarts(text: string, chars: readonly string[], starts: reado
 
 export async function synthesize(speaker: string, raw: string, apiKey: string | undefined, o: VoiceOptions = {}): Promise<VoiceResult> {
   const v = SPEAKERS[speaker];
-  const text = raw.replace(/\s+/g, " ").trim().slice(0, MAX_TEXT);
+  const text = voiceText(raw);
   const mood: Mood = (MOODS as readonly string[]).includes(o.mood ?? "") ? (o.mood as Mood) : "neutral";
   if (!v) return { status: 400, body: { status: "error", message: "unknown speaker" } };
   if (!text) return { status: 400, body: { status: "error", message: "empty line" } };
+  if (text.length > MAX_TEXT) return { status: 413, body: { status: "error", message: "line too long" } };
   const key = `${speaker}|${mood}|${o.mock ? "mock" : "live"}|${text}`;
   const hit = cache.get(key);
   if (hit) return { status: 200, body: hit };
@@ -57,20 +111,30 @@ export async function synthesize(speaker: string, raw: string, apiKey: string | 
   if (running) return running; // the same line asked twice at once: one call
   if (o.mock) return remember(key, { status: "ok", mime: "audio/wav", ...mockVoice(speaker, text), mock: true });
   if (!apiKey) return { status: 503, body: { status: "unconfigured", message: "voice not configured" } };
-  const today = new Date((o.now ?? Date.now)()).toISOString().slice(0, 10);
+  const now = (o.now ?? Date.now)();
+  if ((failed.get(key) ?? 0) > now) return { status: 502, body: { status: "error", message: "voice failed for this line, try later" } };
+  if (inflight.size >= MAX_INFLIGHT) return { status: 503, body: { status: "busy", message: "voice busy" } };
+  const today = new Date(now).toISOString().slice(0, 10);
   if (today !== day) { day = today; spent = 0; }
   if (spent + text.length > DAILY_CHARS) return { status: 429, body: { status: "budget", message: "voice budget used for today" } };
   spent += text.length;
   const p = (async (): Promise<VoiceResult> => {
+    if (o.charge && !(await o.charge(text.length).catch(() => false))) { spent -= text.length; return { status: 429, body: { status: "budget", message: "voice budget used for today" } }; }
+    const fail = (message: string, refund: boolean): VoiceResult => {
+      if (refund) spent -= text.length; // the provider refused outright: nothing was generated
+      failed.set(key, now + RETRY_AFTER_MS);
+      return { status: 502, body: { status: "error", message } };
+    };
     const r = await (o.fetchImpl ?? fetch)(`https://api.elevenlabs.io/v1/text-to-speech/${v.voiceId}/with-timestamps?output_format=mp3_44100_64`, {
       method: "POST",
       headers: { "xi-api-key": apiKey, "content-type": "application/json" },
       body: JSON.stringify({ text: `${moodTag(speaker, mood)} ${text}`, model_id: MODEL }),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     }).catch(() => null);
-    if (!r || !r.ok) { spent -= text.length; return { status: 502, body: { status: "error", message: `voice service ${r?.status ?? "unreachable"}` } }; }
+    if (!r) return fail("voice service unreachable", false); // may have been generated (timeout): stays spent
+    if (!r.ok) return fail(`voice service ${r.status}`, r.status >= 400 && r.status < 500);
     const j = (await r.json().catch(() => null)) as { audio_base64?: string; alignment?: { characters?: string[]; character_start_times_seconds?: number[] } } | null;
-    if (!j?.audio_base64) { spent -= text.length; return { status: 502, body: { status: "error", message: "voice service gave no audio" } }; }
+    if (!j?.audio_base64) return fail("voice service gave no audio", false);
     const a = j.alignment;
     const words = a?.characters && a.character_start_times_seconds ? wordStarts(text, a.characters, a.character_start_times_seconds) : undefined;
     return remember(key, { status: "ok", mime: "audio/mpeg", audio: j.audio_base64, words });
