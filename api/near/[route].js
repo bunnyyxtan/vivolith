@@ -17564,7 +17564,7 @@ async function recordPlayerDeal(cfg, d, player, r) {
 		kind: "trade",
 		actors: [merchant],
 		player,
-		text: side === "sell" ? `A player sold ${qty} ${good} to ${name} at ${unit} c${reference !== null && unit < reference ? ` (${name}'s own bid was ${reference} c)` : ""}.` : `A player bought ${qty} ${good} from ${name} at ${unit} c.`,
+		text: side === "sell" ? `A player sold ${goodsText(good, qty)} to ${name} at ${unit} c${reference !== null && unit < reference ? ` (${name}'s own bid was ${reference} c)` : ""}.` : `A player bought ${goodsText(good, qty)} from ${name} at ${unit} c.`,
 		changes: [
 			{
 				who: merchant,
@@ -18243,7 +18243,7 @@ async function residentTurn(cfg, provider, relayer, secret, day, log, txs, agent
 			});
 			log.push(`resident ${r.id} sold ${plan.sell.qty} ${r.good} to ${plan.sell.merchant} at ${plan.sell.price} c${s.ok ? "" : ` FAILED: ${s.error}`}`);
 			const total = plan.sell.qty * plan.sell.price, mer = plan.sell.merchant;
-			resEvent("sell", `${r.name} sold ${plan.sell.qty} ${r.good}${plan.sell.qty > 1 ? "s" : ""} to ${stalls[mer]?.name ?? mer} at ${plan.sell.price} c.`, [
+			resEvent("sell", `${r.name} sold ${goodsText(r.good, plan.sell.qty)} to ${stalls[mer]?.name ?? mer} at ${plan.sell.price} c.`, [
 				{
 					who: r.id,
 					good: r.good,
@@ -18956,6 +18956,8 @@ async function settle(cfg) {
 		message: r.error
 	});
 }
+/** "1 mango", "2 mangoes", "3 lemons", "2 lassis": town news reads as English (was "2 mangos", "3 mango"). */
+const goodsText = (good, n) => `${n} ${n === 1 ? good : good === "mango" ? "mangoes" : `${good}s`}`;
 /** Entry point for both runtimes. `route` is the last path segment under /api/near/. */
 async function handle(route, req, env) {
 	const cfg = readConfig(env);

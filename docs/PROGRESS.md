@@ -131,6 +131,13 @@ Offline or isolated only (mocked RPC, mocked NEAR AI, or offline browser play):
 
 ## Phase 6: visual truth and trade UI correction (2026-11-14, local `db3c7a1`, offline play)
 
+**Deployed 2026-11-14 (authorized): `66907f3` on vivolith.world** from a clean worktree, no env change (status: driver players,
+no caps, no agents; `market-turn` 401; arbitrary voice 403). Re-checked live as the reused guest, no player trade: Arin's and
+Pema's Buy, Sell, Invest tabs and Details contain no chain, AI, signature, transaction or record wording; notebook tabs
+Goals, Bag, Town, How to play; N opens nothing without `?ledger`; Town is plain news; mission card compact beside the
+panel at 1280x720; Pema open with her counter goods (`phase6c-live-66907f3-pema-panel.jpg`). Found live: town news
+"Lin sold 2 mangos", "A player bought 3 mango" (server text): fixed locally, not deployed.
+
 Nine issues from live screenshots (`docs/evidence/phase6c-before-*`), each traced to its cause; after captures `phase6c-after-*`.
 
 | Issue | Cause | Kind | Fix |

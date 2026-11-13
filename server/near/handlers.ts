@@ -385,8 +385,8 @@ async function recordPlayerDeal(cfg: Config, d: DecodedDelegate, player: string,
   const events: ChronicleEvent[] = [{
     id: eventId(at, "trade"), at, day, kind: "trade", actors: [merchant], player,
     text: side === "sell"
-      ? `A player sold ${qty} ${good} to ${name} at ${unit} c${reference !== null && unit < reference ? ` (${name}'s own bid was ${reference} c)` : ""}.`
-      : `A player bought ${qty} ${good} from ${name} at ${unit} c.`,
+      ? `A player sold ${goodsText(good, qty)} to ${name} at ${unit} c${reference !== null && unit < reference ? ` (${name}'s own bid was ${reference} c)` : ""}.`
+      : `A player bought ${goodsText(good, qty)} from ${name} at ${unit} c.`,
     changes: [{ who: merchant, good, delta: sign * qty }, { who: merchant, good: "coin", delta: -sign * total }, { who: "player", good, delta: -sign * qty }, { who: "player", good: "coin", delta: sign * total }],
     status: r.ok ? "confirmed" : "failed", txHash: r.txHash || null, decision: null, since: [],
   }];
@@ -878,7 +878,7 @@ export async function residentTurn(cfg: Config, provider: JsonRpcProvider, relay
       const s = await call(me, "sell", { buyer: plan.sell.buyer, token_id: r.good, qty: String(plan.sell.qty), min_price: String(plan.sell.price) });
       log.push(`resident ${r.id} sold ${plan.sell.qty} ${r.good} to ${plan.sell.merchant} at ${plan.sell.price} c${s.ok ? "" : ` FAILED: ${s.error}`}`);
       const total = plan.sell.qty * plan.sell.price, mer = plan.sell.merchant;
-      resEvent("sell", `${r.name} sold ${plan.sell.qty} ${r.good}${plan.sell.qty > 1 ? "s" : ""} to ${stalls[mer as MerchantId]?.name ?? mer} at ${plan.sell.price} c.`, [{ who: r.id, good: r.good, delta: -plan.sell.qty }, { who: r.id, good: "coin", delta: total }, { who: mer, good: r.good, delta: plan.sell.qty }, { who: mer, good: "coin", delta: -total }], s, mer);
+      resEvent("sell", `${r.name} sold ${goodsText(r.good, plan.sell.qty)} to ${stalls[mer as MerchantId]?.name ?? mer} at ${plan.sell.price} c.`, [{ who: r.id, good: r.good, delta: -plan.sell.qty }, { who: r.id, good: "coin", delta: total }, { who: mer, good: r.good, delta: plan.sell.qty }, { who: mer, good: "coin", delta: -total }], s, mer);
       if (!s.ok) continue;
       carried = s.txHash;
     }
@@ -1278,6 +1278,9 @@ async function settle(cfg: Config): Promise<Response> {
   );
   return json(r.ok ? 200 : 502, { status: r.ok ? "onchain" : "failed", day, txHash: r.txHash, message: r.error });
 }
+
+/** "1 mango", "2 mangoes", "3 lemons", "2 lassis": town news reads as English (was "2 mangos", "3 mango"). */
+const goodsText = (good: string, n: number): string => `${n} ${n === 1 ? good : good === "mango" ? "mangoes" : `${good}s`}`;
 
 /** Entry point for both runtimes. `route` is the last path segment under /api/near/. */
 export async function handle(route: string, req: Request, env: RelayEnv): Promise<Response> {
