@@ -12,7 +12,7 @@ import { adjustRep, advance, chainLive, shopperWant, invest, MAX_PACKS, payRelea
 import { bidFor, quote, lassiPrice, stallPull, ORCHARD_PICK, ORCHARD_HOURS, HAGGLE_FLOOR, DIVIDEND_BPS, type Quote } from "../economy/pricing";
 import { clockOf, dayOf, MERCHANT_IDS, MINUTES_PER_DAY, STARTER_COINS, type EconomyState, type Good, type MerchantId, type Receipt } from "../economy/state";
 import { RESIDENTS } from "../economy/residents";
-import { gossipLine, type ChronicleEvent, type ChronicleKind } from "../economy/chronicle";
+import { gossipLine, readableNews, type ChronicleEvent, type ChronicleKind } from "../economy/chronicle";
 import { audio } from "./audio";
 import { createCityMap } from "./map";
 import { MOODS, VOICES, type LineId, type Mood } from "./audio-manifest";
@@ -1244,7 +1244,7 @@ export async function createPlay(game: Game): Promise<Play> {
       const online = !isOffline() && townEvents.length > 0;
       const list = online ? townEvents : localEvents();
       const ul = el("ul", "chron");
-      for (const e of [...list].reverse().slice(0, 25)) { const li = el("li"); li.append(el("b", "", e.text), el("span", "prov", whenOf(e, online))); ul.append(li); }
+      for (const e of [...list].reverse().slice(0, 25)) { const li = el("li"); li.append(el("b", "", readableNews(e.text)), el("span", "prov", whenOf(e, online))); ul.append(li); }
       if (!list.length) sec.append(el("p", "", "Quiet so far. Trades, price changes and rent nights show up here as they happen."));
       sec.append(ul);
       if (playerId()) residentsInto(sec);
@@ -1509,7 +1509,7 @@ export async function createPlay(game: Game): Promise<Play> {
     }
     det.append(t); card.append(det);
     const events = state.log.filter((e) => e.minute > from.minute && e.kind !== "player").slice(-8);
-    if (events.length) { const ev = el("details"); ev.append(el("summary", "", "What happened, hour by hour")); const ul = el("ul"); for (const e of events) ul.append(el("li", "", `${clockOf(e.minute)} · ${e.text}`)); ev.append(ul); card.append(ev); }
+    if (events.length) { const ev = el("details"); ev.append(el("summary", "", "What happened, hour by hour")); const ul = el("ul"); for (const e of events) ul.append(el("li", "", `${clockOf(e.minute)} · ${readableNews(e.text)}`)); ev.append(ul); card.append(ev); }
     if (week && playerId()) {
       const near = el("details"); near.append(el("summary", "", "Dividends"));
       const line = el("p", "why", "Paying out today's dividends…"); near.append(line); card.append(near);

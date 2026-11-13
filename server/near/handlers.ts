@@ -22,7 +22,7 @@ import { AGENTS, memoriesFor, recordMemories, verifyPass } from "./autonomy.ts";
 import { verifyDecision } from "./verify.ts";
 import type { ChainReceipt, MemoryRow, Snapshot } from "./memory.ts";
 import { addBond, bondFacts, chronicle, putDealRef, readBonds, readChronicle, takeDealRef } from "./ledger.ts";
-import { changedSince, decisionEvent, eventId, lastDecisionAt, type ChronicleEvent } from "../../src/economy/chronicle.ts";
+import { changedSince, countOf, decisionEvent, eventId, lastDecisionAt, type ChronicleEvent } from "../../src/economy/chronicle.ts";
 import { GRACE_DAYS, guildFillTo, guildPlan, rentToCharge, touristUnits } from "../../src/economy/recovery.ts";
 import { ORCHARD_PICK, bidFor, dealBounds, planMerchantTrades, quote } from "../../src/economy/pricing.ts";
 import { newcomerPrice, verifyDealUnit } from "../../src/economy/haggle.ts";
@@ -1217,8 +1217,7 @@ async function talk(cfg: Config, req: Request, env: RelayEnv): Promise<Response>
     player ? readBonds(store, id, player).catch(() => []) : Promise.resolve([]),
   ]);
   // what this character can still recall about this player beyond the 20 latest receipts (ledger.ts, 30 days)
-  const noun = (good: string, n: number): string => `${n} ${good === "mango" ? (n === 1 ? "mango" : "mangoes") : `${good}${n === 1 ? "" : "s"}`}`;
-  const recalled = bondFacts(bonds, noun);
+  const recalled = bondFacts(bonds, goodsText);
   // the speaker's recent confirmed market events from the Chronicle (reopening, rent, trades), as facts it may mention
   const town = (await readChronicle(store).catch(() => [])).filter((e) => e.actors.includes(id) && (e.status === "confirmed" || e.status === "recorded")).slice(-3).map((e) => `Recently in the market: ${e.text}`);
   let built: { facts: string[]; script: string; topics: Record<string, string>; ledger: Ledger };
@@ -1237,7 +1236,7 @@ async function talk(cfg: Config, req: Request, env: RelayEnv): Promise<Response>
     const reopened = town.find((f) => /reopened|open again/.test(f));
     if (reopened && !built.topics.past) built.topics.past = reopened.replace(/^Recently in the market: /, "Recently, ").replace(/Pema's stall/, "my stall");
     const delivered = bonds.filter((x) => x.evidence === "chain" && x.kind === "delivered");
-    if (delivered.length && !built.topics.you) built.topics.you = `You've brought me ${noun("mango", delivered.reduce((n, x) => n + x.qty, 0))} so far. I keep count.`;
+    if (delivered.length && !built.topics.you) built.topics.you = `You've brought me ${goodsText("mango", delivered.reduce((n, x) => n + x.qty, 0))} so far. I keep count.`;
   }
   const ops = opsConfig(env);
   const ai = { key: (env.NEAR_AI_KEY ?? "").trim() || null, model: (env.NEAR_AI_CHAT_MODEL ?? env.NEAR_AI_MODEL ?? "").trim() || null };
@@ -1280,7 +1279,7 @@ async function settle(cfg: Config): Promise<Response> {
 }
 
 /** "1 mango", "2 mangoes", "3 lemons", "2 lassis": town news reads as English (was "2 mangos", "3 mango"). */
-const goodsText = (good: string, n: number): string => `${n} ${n === 1 ? good : good === "mango" ? "mangoes" : `${good}s`}`;
+const goodsText = (good: string, n: number): string => countOf(n, good);
 
 /** Entry point for both runtimes. `route` is the last path segment under /api/near/. */
 export async function handle(route: string, req: Request, env: RelayEnv): Promise<Response> {

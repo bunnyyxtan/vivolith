@@ -11902,6 +11902,53 @@ function planMerchantTrades(state) {
 	}
 	return out;
 }
+// src/economy/chronicle.ts
+/** A count and its noun as English: "1 mango", "0 mangoes", "2 mangoes", "3 lemons", "1 crate", "5 shares". */
+const countOf = (n, noun) => `${n} ${n === 1 ? noun : noun === "mango" ? "mangoes" : `${noun}s`}`;
+let seq = 0;
+const eventId = (at, kind) => `${at.toString(36)}-${kind}-${(seq++ % 1296).toString(36)}`;
+/** Ids of events that changed `who`'s holdings after `afterAt` and before `beforeAt`, oldest first. */
+function changedSince(events, who, afterAt, beforeAt) {
+	return events.filter((e) => e.at > afterAt && e.at < beforeAt && e.status !== "failed" && e.changes.some((c) => c.who === who && c.delta !== 0)).sort((a, b) => a.at - b.at).map((e) => e.id);
+}
+/** Appends `e` (newest last), dropping the oldest past CHRONICLE_MAX and any repeat of the same id, or of the same
+*  transaction recorded twice for the same kind and actors (a retried write never doubles an event). */
+function appendEvent(list, e) {
+	if (list.some((x) => x.id === e.id || e.txHash !== null && x.txHash === e.txHash && x.kind === e.kind && x.actors.join() === e.actors.join())) return [...list];
+	return [...list, e].sort((a, b) => a.at - b.at).slice(-60);
+}
+/** Time of the most recent decision event of `who` before `at` (0 if none): it bounds the "since" window. */
+function lastDecisionAt(events, who, at) {
+	return events.filter((e) => e.kind === "decision" && e.actors[0] === who && e.at < at).reduce((t, e) => Math.max(t, e.at), 0);
+}
+/** A decision as a Chronicle event: what was decided, by whom (model or rule), on which facts, and which recorded events
+*  had changed the decider's goods or till since its previous decision. No claim that those events were the reason. */
+function decisionEvent(id, name, history, d, tx, day, at = Date.now(), offline = false) {
+	const what = d.side === "ask" ? `${d.good} price` : `${d.good} bid`;
+	return {
+		id: `decision-${id}-${day}-${d.source}-${d.to}`,
+		at,
+		day,
+		kind: "decision",
+		actors: [id],
+		player: null,
+		text: d.from === d.to ? `${name} kept the ${what} at ${d.to} c.` : `${name} ${d.to > d.from ? "raised" : "lowered"} the ${what} from ${d.from} to ${d.to} c.`,
+		changes: [],
+		status: offline ? "offline" : tx ? tx.ok ? "confirmed" : "failed" : "recorded",
+		txHash: tx?.hash || null,
+		decision: {
+			source: d.source,
+			action: d.action,
+			from: d.from,
+			to: d.to,
+			model: d.model,
+			decisionId: d.decisionId,
+			verification: d.verification,
+			inputs: d.inputs
+		},
+		since: changedSince(history, id, lastDecisionAt(history, id, at), at)
+	};
+}
 // src/economy/sim.ts
 /** Shoppers per open hour wanting each good across the whole market, at a fair price. */
 const HOURLY_DEMAND = {
@@ -11980,7 +12027,7 @@ function playerBuy(state, id, good, qty) {
 	sell(state, id, good, units, price);
 	state.player.coins -= units * price;
 	state.player.inventory[good] += units;
-	log(state, "player", `You bought ${units} ${good}${units > 1 ? "s" : ""} from ${m.name} for ${units * price} c.`);
+	log(state, "player", `You bought ${countOf(units, good)} from ${m.name} for ${units * price} c.`);
 	return {
 		ok: true,
 		message: `Bought ${units} for ${units * price} c.`
@@ -12021,7 +12068,7 @@ function pemaBuysFromTomas(state, wanted) {
 	sell(state, "tomas", "mango", qty, price);
 	p.cash -= qty * price;
 	p.stock.mango += qty;
-	log(state, "trade", `Pema bought ${qty} mangoes from Tomas Vell at ${price} c each.`);
+	log(state, "trade", `Pema bought ${countOf(qty, "mango")} from Tomas Vell at ${price} c each.`);
 	return {
 		ok: true,
 		message: `Pema bought ${qty} at ${price} c.`
@@ -12070,7 +12117,7 @@ function teahouseForwardBuy(state, qty) {
 	tea.cash -= units * price;
 	state.merchants.pema.cash += units * price;
 	state.flags.forwardQty = units;
-	log(state, "trade", `Tea House pre-paid Pema ${units * price} c for ${units} crates on the held shipment.`);
+	log(state, "trade", `Tea House pre-paid Pema ${units * price} c for ${countOf(units, "crate")} on the held shipment.`);
 	return {
 		ok: true,
 		message: `Tea House pre-paid ${units * price} c to Pema.`
@@ -12799,6 +12846,7 @@ var lines_default = {
 		"./avoid",
 		"./brand",
 		"./camera",
+		"./chronicle.ts",
 		"./dialogue.ts",
 		"./floor",
 		"./game",
@@ -14228,6 +14276,7 @@ var lines_default = {
 		"pos",
 		"position",
 		"pqHfZKP75CvOlQylNhV4",
+		"pre-paid crate",
 		"price",
 		"primary",
 		"primary full",
@@ -14495,10 +14544,12 @@ var lines_default = {
 		"warm, confident, expressive tea house owner, a natural merchant",
 		"warm, kind older woman, motherly market auntie",
 		"warm, motherly and a little worried about rent; calls people 'dear'; proud of her regulars; never brags",
+		"was",
 		"water",
 		"waypoint",
 		"week",
 		"weekSeen",
+		"were",
 		"wheel",
 		"when",
 		"when the market charges it",
@@ -14540,6 +14591,7 @@ var lines_default = {
 		"(?:pema|tomas|mira|arin):(?:lassi)",
 		"(?:pema|tomas|mira|arin):(?:mango|lemon|lassi)",
 		"(?:pema|tomas|mira|arin)\\.(?:mango|lemon|lassi)",
+		"(?:was|is|were|are)",
 		", \\d{1,6}(?:[.,:]\\d{1,3})? refused",
 		", including \\d{1,6}(?:[.,:]\\d{1,3})? c in dividends from your shares",
 		"-\\d{1,6}(?:[.,:]\\d{1,3})? c · crates leave now, arrive in 90 min",
@@ -14622,7 +14674,6 @@ var lines_default = {
 		"Pema at \\d{1,6}(?:[.,:]\\d{1,3})? c\\?",
 		"Pema bids \\d{1,6}(?:[.,:]\\d{1,3})? c a mango and needs stock to sell before rent\\.",
 		"Pema bought \\d{1,6}(?:[.,:]\\d{1,3})? at \\d{1,6}(?:[.,:]\\d{1,3})? c\\.",
-		"Pema bought \\d{1,6}(?:[.,:]\\d{1,3})? mangoes from Tomas Vell at \\d{1,6}(?:[.,:]\\d{1,3})? c each\\.",
 		"Pema could only pay \\d{1,6}(?:[.,:]\\d{1,3})? of \\d{1,6}(?:[.,:]\\d{1,3})? c",
 		"Pema is \\d{1,6}(?:[.,:]\\d{1,3})? c short of rent\\.",
 		"Pema paid \\d{1,6}(?:[.,:]\\d{1,3})? of \\d{1,6}(?:[.,:]\\d{1,3})? c \\(all she had\\)",
@@ -14657,7 +14708,6 @@ var lines_default = {
 		"Sold \\d{1,6}(?:[.,:]\\d{1,3})? shares for \\d{1,6}(?:[.,:]\\d{1,3})? c\\.",
 		"Step \\d{1,6}(?:[.,:]\\d{1,3})? of \\d{1,6}(?:[.,:]\\d{1,3})?",
 		"Talk to [A-Z][a-z]{1,13}",
-		"Tea House pre-paid Pema \\d{1,6}(?:[.,:]\\d{1,3})? c for \\d{1,6}(?:[.,:]\\d{1,3})? crates on the held shipment\\.",
 		"Tea House pre-paid \\d{1,6}(?:[.,:]\\d{1,3})? c to Pema\\.",
 		"Tea House pre-pays Pema for \\d{1,6}(?:[.,:]\\d{1,3})? crates at cost · she makes rent tonight · crates go to the Tea House on arrival",
 		"Thank you, [A-Z][a-z]{1,13}\\.",
@@ -14670,8 +14720,6 @@ var lines_default = {
 		"Why \\d{1,6}(?:[.,:]\\d{1,3})? c:",
 		"Why \\d{1,6}(?:[.,:]\\d{1,3})? c\\?",
 		"You are [A-Z][a-z]{1,13}, in Saltlight Market, a cosy anime city\\.",
-		"You bought \\d{1,6}(?:[.,:]\\d{1,3})? (?:mango|lemon|lassi) from [A-Z][a-z]{1,13} for \\d{1,6}(?:[.,:]\\d{1,3})? c\\.",
-		"You bought \\d{1,6}(?:[.,:]\\d{1,3})? (?:mango|lemon|lassi)s from [A-Z][a-z]{1,13} for \\d{1,6}(?:[.,:]\\d{1,3})? c\\.",
 		"You have \\d{1,6}(?:[.,:]\\d{1,3})?",
 		"You have \\d{1,6}(?:[.,:]\\d{1,3})? c\\.",
 		"You made \\d{1,6}(?:[.,:]\\d{1,3})? c and left \\d{1,6}(?:[.,:]\\d{1,3})? c in my till\\?",
@@ -14775,7 +14823,6 @@ var lines_default = {
 		"\\d{1,6}(?:[.,:]\\d{1,3})? more mangoes on my shelves and I open again\\.",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? of \\d{1,6}(?:[.,:]\\d{1,3})? c in her till",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? on the stall",
-		"\\d{1,6}(?:[.,:]\\d{1,3})? pre-paid crates went from [A-Z][a-z]{1,13} to the Tea House\\.",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? share",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? shares",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? shares cost \\d{1,6}(?:[.,:]\\d{1,3})? c\\.",
@@ -16855,51 +16902,6 @@ async function verifyPass(store, day, check, budget, log) {
 		if (next) log.push(`${id} decision for day ${d}: ${next.receipt.status} (${next.receipt.note.slice(0, 80)})`);
 	}
 }
-// src/economy/chronicle.ts
-let seq = 0;
-const eventId = (at, kind) => `${at.toString(36)}-${kind}-${(seq++ % 1296).toString(36)}`;
-/** Ids of events that changed `who`'s holdings after `afterAt` and before `beforeAt`, oldest first. */
-function changedSince(events, who, afterAt, beforeAt) {
-	return events.filter((e) => e.at > afterAt && e.at < beforeAt && e.status !== "failed" && e.changes.some((c) => c.who === who && c.delta !== 0)).sort((a, b) => a.at - b.at).map((e) => e.id);
-}
-/** Appends `e` (newest last), dropping the oldest past CHRONICLE_MAX and any repeat of the same id, or of the same
-*  transaction recorded twice for the same kind and actors (a retried write never doubles an event). */
-function appendEvent(list, e) {
-	if (list.some((x) => x.id === e.id || e.txHash !== null && x.txHash === e.txHash && x.kind === e.kind && x.actors.join() === e.actors.join())) return [...list];
-	return [...list, e].sort((a, b) => a.at - b.at).slice(-60);
-}
-/** Time of the most recent decision event of `who` before `at` (0 if none): it bounds the "since" window. */
-function lastDecisionAt(events, who, at) {
-	return events.filter((e) => e.kind === "decision" && e.actors[0] === who && e.at < at).reduce((t, e) => Math.max(t, e.at), 0);
-}
-/** A decision as a Chronicle event: what was decided, by whom (model or rule), on which facts, and which recorded events
-*  had changed the decider's goods or till since its previous decision. No claim that those events were the reason. */
-function decisionEvent(id, name, history, d, tx, day, at = Date.now(), offline = false) {
-	const what = d.side === "ask" ? `${d.good} price` : `${d.good} bid`;
-	return {
-		id: `decision-${id}-${day}-${d.source}-${d.to}`,
-		at,
-		day,
-		kind: "decision",
-		actors: [id],
-		player: null,
-		text: d.from === d.to ? `${name} kept the ${what} at ${d.to} c.` : `${name} ${d.to > d.from ? "raised" : "lowered"} the ${what} from ${d.from} to ${d.to} c.`,
-		changes: [],
-		status: offline ? "offline" : tx ? tx.ok ? "confirmed" : "failed" : "recorded",
-		txHash: tx?.hash || null,
-		decision: {
-			source: d.source,
-			action: d.action,
-			from: d.from,
-			to: d.to,
-			model: d.model,
-			decisionId: d.decisionId,
-			verification: d.verification,
-			inputs: d.inputs
-		},
-		since: changedSince(history, id, lastDecisionAt(history, id, at), at)
-	};
-}
 // server/near/ledger.ts
 const CHRONICLE_KEY = "vivolith:chronicle";
 const CHRONICLE_TTL = 604800;
@@ -18874,8 +18876,7 @@ async function talk(cfg, req, env) {
 		player ? view(provider, cfg.contractId, "get_receipts", { account_id: player }).catch(() => []) : Promise.resolve([]),
 		player ? readBonds(store, id, player).catch(() => []) : Promise.resolve([])
 	]);
-	const noun = (good, n) => `${n} ${good === "mango" ? n === 1 ? "mango" : "mangoes" : `${good}${n === 1 ? "" : "s"}`}`;
-	const recalled = bondFacts(bonds, noun);
+	const recalled = bondFacts(bonds, goodsText);
 	const town = (await readChronicle(store).catch(() => [])).filter((e) => e.actors.includes(id) && (e.status === "confirmed" || e.status === "recorded")).slice(-3).map((e) => `Recently in the market: ${e.text}`);
 	let built;
 	let mood = "neutral";
@@ -18900,7 +18901,7 @@ async function talk(cfg, req, env) {
 		const reopened = town.find((f) => /reopened|open again/.test(f));
 		if (reopened && !built.topics.past) built.topics.past = reopened.replace(/^Recently in the market: /, "Recently, ").replace(/Pema's stall/, "my stall");
 		const delivered = bonds.filter((x) => x.evidence === "chain" && x.kind === "delivered");
-		if (delivered.length && !built.topics.you) built.topics.you = `You've brought me ${noun("mango", delivered.reduce((n, x) => n + x.qty, 0))} so far. I keep count.`;
+		if (delivered.length && !built.topics.you) built.topics.you = `You've brought me ${goodsText("mango", delivered.reduce((n, x) => n + x.qty, 0))} so far. I keep count.`;
 	}
 	const ops = opsConfig(env);
 	const ai = {
@@ -18977,7 +18978,7 @@ async function settle(cfg) {
 	});
 }
 /** "1 mango", "2 mangoes", "3 lemons", "2 lassis": town news reads as English (was "2 mangos", "3 mango"). */
-const goodsText = (good, n) => `${n} ${n === 1 ? good : good === "mango" ? "mangoes" : `${good}s`}`;
+const goodsText = (good, n) => countOf(n, good);
 /** Entry point for both runtimes. `route` is the last path segment under /api/near/. */
 async function handle(route, req, env) {
 	const cfg = readConfig(env);

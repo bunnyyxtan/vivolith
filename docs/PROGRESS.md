@@ -224,6 +224,24 @@ rollback `vivolith-9eu9hcz07` (66907f3). Production env not changed (no VIVOLITH
   push them out. Also unfixed: "it reopens after 1 mangoes are delivered" (handlers.ts rent-closed event).
   `phase6d-prod-d483ee3-town-news-old-plurals.jpg`. Minor: under ?inspect the account chip says "saved in this browser".
 
+Town news wording, complete (local, 2026-11-14):
+- Cause: the Chronicle stores each event's text when it happens; entries written before 5f039fd/d8443ba keep "2 mangos",
+  "3 mango", "1 mangoes are delivered" until 40 newer events replace them. The offline town log had the same class of
+  defect in templates 5f039fd never touched: "You bought 2 mangos" (sim.ts playerBuy), "1 lemons delivered", "1 crates",
+  "1 pre-paid crates", and three copies of the plural rule on the server.
+- New entries: one helper, `countOf(n, noun)` (src/economy/chronicle.ts), now used by every Town news and log template
+  with a count (server player trades, resident sales, delivery recall; offline purchases, shipments, Pema's purchase,
+  Tea House crates, share buys and sales). The rent-closing line was already right in source ("1 mango is delivered").
+- Old entries: `readableNews(text)` fixes them at display (Town notebook, townsfolk gossip, evening report), never in the
+  store: only "<number> <mango|lemon|lassi|crate|share>" (optionally "pre-paid"), not when the good names another thing
+  ("5 mango crates", "the mango bid"), plus a directly following is/are/was/were. Digits, names, prices, hashes and
+  changes are untouched; `?ledger` reads receipts, not this text, and is unaffected.
+- `node src/economy/news.check.ts`: counts 0, 1, 2, 12, 30; 11 stored production-style lines; 14 correct or unrelated
+  lines left byte-identical; idempotent; every digit preserved; gossip fixed with the stored event unchanged; new offline
+  entries at 1 and 2 need no correction. Browser (offline server, unconfigured): the 10 stored lines from production as
+  a fixture, Town notebook shows 10 rows, 10 unique, in order, all corrected, the stored log unchanged
+  (`phase6d-town-news-historical-fixture.jpg`; "0 mangoes" is a fixture case, not a real event).
+
 Verified offline in the browser: open stocked stall (Tomas), closed stall with stock (Pema, no goods outside, Closed card), vacant stall, reopening at 08:00 (shutter up, goods back), resident delivery to an open stall and to a shut stall (state injected to close her: labelled), trade and haggle panels with the mission visible, panel open at 20:58 (clock holds while trading), 1280x720 and 1920x1080, day and night. Not verified: a live resident delivery to a closed stall on testnet; sold-out display (no stall reached 0 stock in play). 13/13 checks, voice check, typecheck, build.
 
 ## Phase 6: live production acceptance (2026-11-14, authorized)

@@ -48,6 +48,20 @@ export interface ChronicleEvent {
 
 export const CHRONICLE_MAX = 60;
 
+/** A count and its noun as English: "1 mango", "0 mangoes", "2 mangoes", "3 lemons", "1 crate", "5 shares". */
+export const countOf = (n: number, noun: string): string => `${n} ${n === 1 ? noun : noun === "mango" ? "mangoes" : `${noun}s`}`;
+
+/** Town news as it reads, for entries recorded before their wording was fixed ("2 mangos", "3 mango", "1 mangoes are
+ *  delivered"). Display only: the stored event, its figures and its transaction stay as recorded. Only a number directly
+ *  followed by one of the market's goods is touched, and never when the good names something else ("5 mango crates"). */
+// a regex literal, not a string: scripts/audio/lines.ts must not read its fragments as spoken sentences
+const NEWS_COUNT = /\b(\d+) (pre-paid )?(mango|lemon|lassi|crate|share)(?:es|s)?\b(?! (?:bids?|prices?|crates?|stalls?|stock|shelf|shelves|asks?|offers?)\b)( (?:are|is|were|was)\b)?/g;
+export const readableNews = (text: string): string => text.replace(NEWS_COUNT, (_all, num: string, pre: string | undefined, noun: string, verb: string | undefined) => {
+  const n = Number(num), one = n === 1;
+  const v = verb ? ` ${one ? (/were|was/.test(verb) ? "was" : "is") : (/were|was/.test(verb) ? "were" : "are")}` : "";
+  return countOf(n, `${pre ?? ""}${noun}`) + v;
+});
+
 let seq = 0;
 export const eventId = (at: number, kind: string): string => `${at.toString(36)}-${kind}-${(seq++ % 1296).toString(36)}`;
 
@@ -100,6 +114,6 @@ export function gossipLine(e: ChronicleEvent, name: (id: string) => string): str
     return `${name(e.actors[0])} ${e.decision.to > e.decision.from ? "raised" : "lowered"} a price to ${e.decision.to} c.`;
   if (e.kind === "reopened") return `${name(e.actors[0])} is open again.`;
   if (e.kind === "closed") return `${name(e.actors[0])} pulled the shutters down.`;
-  if (e.kind === "trade" || e.kind === "resident") return e.text;
+  if (e.kind === "trade" || e.kind === "resident") return readableNews(e.text);
   return null;
 }

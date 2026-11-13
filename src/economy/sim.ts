@@ -2,6 +2,7 @@
 // Time advances in game minutes; rules fire on hour boundaries. Called every frame with real dt,
 // and by fast-forward with large spans. ponytail: mutates state in place (one owner, hot loop).
 import { clockOf, dayOf, MERCHANT_IDS, MINUTES_PER_DAY, type EconomyState, type Good, type Merchant, type MerchantId } from "./state.ts";
+import { countOf } from "./chronicle.ts";
 import { DIVIDEND_BPS, SHARES_PER_STALL, lassiPrice, planMerchantTrades, quote, type MerchantTrade } from "./pricing.ts";
 
 /** Shoppers per open hour wanting each good across the whole market, at a fair price. */
@@ -95,14 +96,14 @@ function shipments(state: EconomyState): void {
     if (s.status === "transit" && s.arriveAt !== null && state.minute >= s.arriveAt) {
       s.status = "delivered";
       if (!chainLive(state)) state.merchants[s.to].stock[s.good] += s.qty;
-      log(state, "shipment", `${s.qty} ${s.good === "mango" ? "mangoes" : `${s.good}s`} delivered to ${state.merchants[s.to].shop}.`);
+      log(state, "shipment", `${countOf(s.qty, s.good)} delivered to ${state.merchants[s.to].shop}.`);
       const forward = Number(state.flags.forwardQty ?? 0);
       if (forward > 0 && s.good === "mango") { // pre-paid crates (NEAR Labs forward order) go straight on
         const units = Math.min(forward, state.merchants[s.to].stock.mango);
         state.merchants[s.to].stock.mango -= units;
         state.merchants.arin.stock.mango += units;
         state.flags.forwardQty = 0;
-        log(state, "trade", `${units} pre-paid crates went from ${state.merchants[s.to].name} to the Tea House.`);
+        log(state, "trade", `${countOf(units, "pre-paid crate")} went from ${state.merchants[s.to].name} to the Tea House.`);
       }
     }
   }
@@ -253,7 +254,7 @@ export function playerBuy(state: EconomyState, id: MerchantId, good: Good, qty: 
   sell(state, id, good, units, price);
   state.player.coins -= units * price;
   state.player.inventory[good] += units;
-  log(state, "player", `You bought ${units} ${good}${units > 1 ? "s" : ""} from ${m.name} for ${units * price} c.`);
+  log(state, "player", `You bought ${countOf(units, good)} from ${m.name} for ${units * price} c.`);
   return { ok: true, message: `Bought ${units} for ${units * price} c.` };
 }
 
@@ -281,7 +282,7 @@ export function pemaBuysFromTomas(state: EconomyState, wanted: number): ActionRe
   sell(state, "tomas", "mango", qty, price);
   p.cash -= qty * price;
   p.stock.mango += qty;
-  log(state, "trade", `Pema bought ${qty} mangoes from Tomas Vell at ${price} c each.`);
+  log(state, "trade", `Pema bought ${countOf(qty, "mango")} from Tomas Vell at ${price} c each.`);
   return { ok: true, message: `Pema bought ${qty} at ${price} c.` };
 }
 
@@ -314,7 +315,7 @@ export function teahouseForwardBuy(state: EconomyState, qty: number): ActionResu
   tea.cash -= units * price;
   state.merchants.pema.cash += units * price;
   state.flags.forwardQty = units;
-  log(state, "trade", `Tea House pre-paid Pema ${units * price} c for ${units} crates on the held shipment.`);
+  log(state, "trade", `Tea House pre-paid Pema ${units * price} c for ${countOf(units, "crate")} on the held shipment.`);
   return { ok: true, message: `Tea House pre-paid ${units * price} c to Pema.` };
 }
 
@@ -376,7 +377,7 @@ export function invest(state: EconomyState, id: MerchantId, shares: number): Act
   const before = state.player.shares[id], supply = shareSupply(state, id);
   state.player.shares[id] += shares;
   if (state.player.shares[id] > supply) state.flags[`supply.${id}`] = state.player.shares[id]; // offline the player is the only partner
-  log(state, "player", `You bought ${shares} shares of ${m.shop} for ${cost} c.`);
+  log(state, "player", `You bought ${countOf(shares, "share")} of ${m.shop} for ${cost} c.`);
   if (before < UPGRADE_AT && state.player.shares[id] >= UPGRADE_AT) log(state, "trade", `${m.shop} used the investment to upgrade the stall.`);
   return { ok: true, message: `Bought ${shares} shares for ${cost} c.` };
 }
@@ -389,6 +390,6 @@ export function sellShares(state: EconomyState, id: MerchantId, shares: number):
   state.player.shares[id] -= shares;
   state.player.coins += pay;
   state.flags[`reserve.${id}`] = Math.max(0, Number(state.flags[`reserve.${id}`] ?? 0) - pay);
-  log(state, "player", `You sold ${shares} shares of ${state.merchants[id].shop} back for ${pay} c.`);
+  log(state, "player", `You sold ${countOf(shares, "share")} of ${state.merchants[id].shop} back for ${pay} c.`);
   return { ok: true, message: `Sold ${shares} shares for ${pay} c.` };
 }
