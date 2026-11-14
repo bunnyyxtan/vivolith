@@ -18,21 +18,29 @@ type a name and you are in.
 
 ## Five minutes in Saltlight
 
-The shortest path through what makes VIVOLITH different. Open **[vivolith.world/ledger](https://vivolith.world/ledger)**
-(the game, with the ledger switched on) and:
+The shortest path through what makes VIVOLITH different. Saltlight is one shared, persistent market, so the town you
+walk into is the town other players and the merchants left behind. Open
+**[vivolith.world/ledger](https://vivolith.world/ledger)** (the game, with the ledger switched on) and:
 
 1. **Arrive.** Type a name, press Enter. You start with 40 coins, and a NEAR account was created for you in the
    background: no wallet, no seed phrase.
-2. **Meet Pema.** Follow the gold marker and press **F**. Her story is told from her real till and rent: open,
-   struggling or already shut.
-3. **Ask her anything** in the box under her line, for example *"Why is your stall closed?"* NEAR AI phrases the answer
+2. **Meet Pema.** Follow the gold marker and press **F**. Her story is told from her real till and rent, so it is
+   today's: thriving, struggling or shut.
+3. **Ask her anything** in the box under her line, for example *"How is business today?"* NEAR AI phrases the answer
    from her on-chain facts; an answer with any number not in those facts is replaced.
-4. **Buy 3 mangoes from Tomas, then sell one to a closed stall.** The shutters go up. That was two NEAR transactions,
-   signed by your own key and relayed for you.
+4. **Trade.** Get 3 mangoes where the gold marker points, then sell where your goal card (**J**) sends you. What
+   happens next depends on the town you found:
+   - **If a stall is shut**, its trade panel shows how many mangoes reopen it. Deliver them while it is buying and the
+     shutters go up: a reopening the contract records on chain.
+   - **If every stall is open**, the trade itself is the moment: your purse and bag change at once, the merchant's
+     stock moves and their posted price is worked out again, and the receipt is already in your ledger. A reopening
+     from an earlier day is [traced below](#one-decision-traced-on-chain), transaction by transaction.
+
+   Either way, those were real NEAR transactions, signed by your own key and relayed for you.
 5. **Press N.** The ledger shows your NEAR account, every receipt with its explorer link, and a live read of your
    balances from the contract.
 
-Then play on: **Haggle** in any trade (tactics against a patience bar), **Invest** in a stall (shares that pay
+Then play on: **Haggle** over mangoes (tactics against a patience bar), **Invest** in a stall (shares that pay
 dividends from every later sale), and stay for **Rent Night at 21:00**, when every merchant reports their evening and a
 stall that cannot pay closes.
 
@@ -41,8 +49,8 @@ Controls: **WASD** move · **Shift** run · mouse or **Q/E** look · **F** talk 
 
 ## One decision, traced on chain
 
-A stall that misses rent closes. One mango delivered to it reopens it, even when another stall pays as much for that
-mango. Whether you help is up to you, and the chain keeps the result.
+A stall that misses rent closes, and only mangoes delivered to it reopen it, even when another stall pays as much for
+them. Whether you help is up to you, and the chain keeps the result. Here is one such day, from start to finish.
 
 | The choice | The consequence |
 |---|---|
@@ -99,7 +107,7 @@ Coin is an in-game token with no monetary value.
 | Anyone can audit any player, and cannot change anything while doing it | `/inspect/<account>`, e.g. the player above: [/inspect/gb1872bf…](https://vivolith.world/inspect/gb1872bf2841bc798.bunnyy-nearworld.testnet) | [`inspect.ts`](src/near/inspect.ts) refuses every write · `inspect.check.ts` |
 | NEAR AI price decisions are bounded, signed and labelled | [`/api/near/decisions?merchant=arin`](https://vivolith.world/api/near/decisions?merchant=arin): model, confidence, signature receipt, reasons, transaction | [`agent.ts`](server/near/agent.ts), [`verify.ts`](server/near/verify.ts) · `agent.check.ts` |
 | The contract's books balance: custody, reserves, Guild loans | `npm run verify` prints the contract's own audit from public RPC | [`contracts/market`](contracts/market/src/lib.rs) · 55 Rust tests in CI |
-| Rent, closure, rescue and reopening follow fixed rules | Pema's stall, at Rent Night | [`recovery.ts`](src/economy/recovery.ts) · `turn.check.ts` · [economy math](docs/ECONOMY_MATH.md) |
+| Rent, closure, rescue and reopening follow fixed rules | Rent Night at 21:00; any shut stall's trade panel | [`recovery.ts`](src/economy/recovery.ts) · `turn.check.ts` · [economy math](docs/ECONOMY_MATH.md) |
 
 ```bash
 npm install
