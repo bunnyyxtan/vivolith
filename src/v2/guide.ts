@@ -32,7 +32,11 @@ export const NEWCOMER_FLOOR = 3;
 /** Who sells the tutorial its mangoes: Tomas, unless the shared market has closed him or emptied his crates. */
 export const tutorSeller = (s: EconomyState): MerchantId => {
   const ok = (id: MerchantId): boolean => s.merchants[id].status === "open" && s.merchants[id].stock.mango >= 3;
-  return ok("tomas") || !ok("mira") ? "tomas" : "mira";
+  if (ok("tomas")) return "tomas";
+  if (ok("mira")) return "mira";
+  // the shared market can have both shut (live 2026-11-14: a new player was stuck at "Buy 3 mangoes from Tomas" with
+  // Tomas closed): Pema sells too, and coins are what she lacks
+  return ok("pema") ? "pema" : "tomas";
 };
 export const titleOf = (st: Step, s: EconomyState): string => (typeof st.title === "function" ? st.title(s) : st.title);
 
@@ -67,11 +71,13 @@ export const STEPS: readonly Step[] = [
   },
   {
     id: "buy", title: (s) => `Buy 3 mangoes from ${NAMES[tutorSeller(s)]}`, target: tutorSeller,
-    detail: (s) => tutorSeller(s) === "tomas" ? "Tomas has more mangoes than he can sell. His stall is across the square." : "Tomas has none to spare today, but Mira undercuts him anyway. Her stall is up the row.",
+    detail: (s) => tutorSeller(s) === "tomas" ? "Tomas has more mangoes than he can sell. His stall is across the square."
+      : tutorSeller(s) === "mira" ? "Tomas has none to spare today, but Mira undercuts him anyway. Her stall is up the row."
+      : "Tomas and Mira have their shutters down today. Pema sells mangoes too, and every coin you pay her goes into her till.",
     done: (s) => f(s, "boughtTomas"), reward: "The mangoes are in your bag. Press B to look.",
   },
   {
-    id: "deliver", title: "Sell your mangoes: Pema needs them", target: "pema",
+    id: "deliver", title: (s) => (s.flags.tutSeller === "pema" ? "Sell your mangoes where they pay most" : "Sell your mangoes: Pema needs them"), target: "pema",
     detail: (s) => {
       const b = bidFor(s, "pema", "mango")?.price;
       if (b) return `Pema bids ${b} c a mango and needs stock to sell before rent. Other stalls post their own bids: the trade panel compares them. Your call.`;
@@ -83,7 +89,7 @@ export const STEPS: readonly Step[] = [
   },
   {
     id: "haggle", title: (s) => `Haggle with ${NAMES[tutorSeller(s)]}`, target: tutorSeller,
-    detail: () => "Buy again, but press Haggle and try a tactic. Watch his patience.",
+    detail: () => "Buy again, but press Haggle and try a tactic. Watch the patience bar.",
     done: (s) => f(s, "haggled"), reward: "You can haggle with every merchant now.",
   },
   {

@@ -594,7 +594,8 @@ export async function createPlay(game: Game): Promise<Play> {
    *  three mangoes always fit the starter purse and always sell to Pema at a profit, whatever the live market. */
   const buyUnit = (id: MerchantId): number => {
     const p = priceOf(state, id).price;
-    return stepIndex(state) === 2 && id === tutorSeller(state) ? Math.min(p, Math.max(Math.ceil(p * 0.55), NEWCOMER_FLOOR)) : p;
+    // the relayer signs a newcomer price only for Tomas and Mira (haggle.ts newcomerPrice); Pema, the fallback seller, asks her own
+    return stepIndex(state) === 2 && id === tutorSeller(state) && (id === "tomas" || id === "mira") ? Math.min(p, Math.max(Math.ceil(p * 0.55), NEWCOMER_FLOOR)) : p;
   };
   const sellPrice = (id: MerchantId): number | null => {
     return bidFor(state, id, "mango")?.price ?? null;
@@ -1089,7 +1090,10 @@ export async function createPlay(game: Game): Promise<Play> {
     if (h.mode === "sell") { const s = screenOf(npc.head); hud.coins(s.x, s.y, Math.max(4, total)); }
     let say = WHO[h.merchant].thanks;
     const i = stepIndex(state);
-    if (h.mode === "buy" && h.merchant === tutorSeller(state) && i === 2) { state.flags.boughtTomas = true; state.flags.tutCost = total; say = "There you go. Don't tell Pema where you got them."; }
+    if (h.mode === "buy" && h.merchant === tutorSeller(state) && i === 2) {
+      state.flags.boughtTomas = true; state.flags.tutCost = total; state.flags.tutSeller = h.merchant;
+      say = h.merchant === "pema" ? "Bless you, dear. Those coins keep my shutters up." : "There you go. Don't tell Pema where you got them.";
+    }
     if (h.mode === "sell" && i === 3 && h.merchant !== "pema") { // the first sale is the player's choice: Pema's need or a better bid
       state.flags.soldElsewhere = true; state.flags.firstBuyer = h.merchant;
       const cost = Number(state.flags.tutCost ?? total);
