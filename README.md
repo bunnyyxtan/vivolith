@@ -12,8 +12,8 @@ Each has their own till, their own stock and their own pricing strategy, and eac
 to where they are missing and buy shares in stalls you believe in. When a merchant cannot make rent, the shutters come
 down for real, and only trade can open them again.
 
-Under the hood every merchant is a NEAR account, every trade is a NEAR testnet transaction, and NEAR AI decides some of
-the merchants' prices within strict bounds. The player never sees a wallet or a gas prompt.
+NEAR makes the economy real. Each merchant is a NEAR account with its own till. Each trade you make is a testnet
+transaction. NEAR AI moves some prices, one coin at a time, inside fixed bounds. You never see a wallet or a gas prompt.
 
 ## The core loop: one decision, traced end to end
 
@@ -26,29 +26,29 @@ more. That choice is the game.
 
 What happened, step by step, on production on 2026-11-14 (NEAR testnet, checkable with `npm run verify`):
 
-| # | Player action or market event | On chain | What you see |
-|---|---|---|---|
-| 1 | Rent turns charge every stall; one that cannot pay closes. Pema closed this way | e.g. [`GNcCYF74…`](https://testnet.nearblocks.io/txns/GNcCYF74wPsEEYTnMJayb5sp8aWuHsemQVbL2eV3WHnr): Tomas and Arin pay, Mira closes 1 c short | Shutters down, a "Closed" sign, a board that says what she can still pay |
-| 2 | A new player buys 3 mangoes from Tomas | [`2eXEpbbC…`](https://testnet.nearblocks.io/txns/2eXEpbbCjnU3UeGXB29bEC8XsijDNphf6gBH76Zx9dog): 9 c to Tomas, 3 mangoes to the player | Purse 40 → 31 c; Tomas's shelf and till move |
-| 3 | The player sells 1 mango to closed Pema for 1 c | [`7ywzZnoq…`](https://testnet.nearblocks.io/txns/7ywzZnoq1c5UxqYMZRQGpFXMX5zmXGh2A8hrKap6PS4F): a price Pema signed, settled by the contract | The shutters roll up; "We're open again, thanks to you!" |
-| 4 | The town remembers it | Chronicle event "Pema's stall reopened after a delivery." carrying that transaction | Town news, and what merchants say |
-| 5 | Merchants reprice on the next turns | e.g. [`CznTaWJh…`](https://testnet.nearblocks.io/txns/CznTaWJhctgxL7RSMYubwUMyU5vGJBJUb62uaZEXuFBa): NEAR AI lowers Arin's mango bid 6 → 5 c, posted with Arin's own key | Chalkboard prices and offers change |
+| Step | What happened | Transaction |
+|---|---|---|
+| Rent | A market turn charges every stall's rent; a stall that cannot pay closes (here Mira, 1 c short; Pema closed the same way) | [`GNcCYF74…`](https://testnet.nearblocks.io/txns/GNcCYF74wPsEEYTnMJayb5sp8aWuHsemQVbL2eV3WHnr) |
+| Buy | A new player buys 3 mangoes from Tomas: purse 40 → 31 c | [`2eXEpbbC…`](https://testnet.nearblocks.io/txns/2eXEpbbCjnU3UeGXB29bEC8XsijDNphf6gBH76Zx9dog) |
+| Deliver | The player sells Pema 1 mango for 1 c; her shutters roll up, and the town news records the reopening | [`7ywzZnoq…`](https://testnet.nearblocks.io/txns/7ywzZnoq1c5UxqYMZRQGpFXMX5zmXGh2A8hrKap6PS4F) |
+| Reprice | On later turns merchants move their prices; here NEAR AI lowers Arin's mango bid from 6 to 5 c | [`CznTaWJh…`](https://testnet.nearblocks.io/txns/CznTaWJhctgxL7RSMYubwUMyU5vGJBJUb62uaZEXuFBa) |
 
 ## Try it: do this, see that
 
+Your first decision comes within a minute of arriving.
+
 | Do | See |
 |---|---|
-| Open [vivolith.world](https://vivolith.world), type a name, press **Enter** | You arrive with 40 coins. A NEAR testnet account was created for you in the background |
+| Open [vivolith.world](https://vivolith.world), type a name, press **Enter** | You arrive with 40 coins; a NEAR testnet account was made for you in the background |
 | Follow the gold marker to Pema and press **F** | Her story, told from her real till and rent: open, struggling or already closed |
-| Ask her anything in the box, e.g. "Why is your stall closed?" | An answer phrased by a NEAR AI model from her on-chain facts ([below](#near-ai-what-it-controls-and-what-it-cannot)) |
-| Buy 3 mangoes from Tomas, then sell to Pema | Coins and mangoes move on chain; her shelf, price and till change; a closed stall can reopen |
-| Press **Haggle** in a trade and pick tactics | A patience bar reacts; the final price is one the merchant signed |
-| Open **Invest** at a stall | Buy shares; every later sale pays dividends from the stall's own revenue |
+| Type a question in her box, e.g. "Why is your stall closed?" | An answer phrased by NEAR AI from her on-chain facts |
+| Buy 3 mangoes from Tomas, then sell to Pema | Coins and mangoes move on chain; her shelf, price and till change; a closed stall reopens |
+| Press **Haggle** in a trade, or open **Invest** | Tactics against a patience bar; shares that pay dividends from every later sale |
 | Play on to 21:00 (Rent Night) | Each merchant reports their evening; a stall that cannot pay closes |
-| Press **C** | Town news: trades, rent, closures and reopenings, newest first |
-| Press **T** once the goals unlock it | A week of the town in about a minute, labelled as a forecast |
-| Open [vivolith.world/?ledger](https://vivolith.world/?ledger) and press **N** | The judge view: your NEAR account, balances, receipts with explorer links, decision evidence |
-| Open `vivolith.world/?inspect=<account>` | Any player's wallet, read-only: the page refuses every write |
+
+**Judge tools:** [vivolith.world/?ledger](https://vivolith.world/?ledger) then **N** shows your NEAR account, receipts
+with explorer links and decision evidence. `vivolith.world/?inspect=<account>` opens any player's wallet read-only.
+**C** opens town news; **T** (unlocked by the goals) shows a week in a minute, labelled as a forecast.
 
 Controls: **WASD** move, **Shift** run, mouse or **Q/E** look, **F** talk or trade, **B** bag, **J** goals, **M** map,
 **H** help, **Esc** menu. `?offline` runs the same rules locally and says so.
@@ -162,10 +162,10 @@ deployment uses its own relayer account, NEAR AI key, Upstash Redis and ElevenLa
 | Command | What it does |
 |---|---|
 | `npm run typecheck` | TypeScript, strict |
-| `npm test` | All 17 checks (`node --test`), no network |
+| `npm test` | All 17 checks (`node --test`), no keys, network mocked |
 | `npm run build` | Client build, approved voice lines, relayer bundle |
 | `npm run verify` | Public on-chain verification, no keys |
-| `cd contracts/market && cargo test` | Contract unit tests (Rust toolchain) |
+| `cd contracts/market && cargo test --features upgrade` | Contract unit tests (Rust toolchain) |
 | `node scripts/near/e2e.ts` | The full player journey with real testnet transactions (needs keys) |
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the typecheck, the checks, the build and the

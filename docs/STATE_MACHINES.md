@@ -26,7 +26,7 @@ Rule of thumb: **connected, the chain decides value and open/closed; the browser
 | Fails closed | Store down = no turn, no paid call, agents halted. Test caps `NEAR_TEST_TURNS`/`NEAR_TEST_TXS` reserve before signing |
 | Posted book | `ruleOrders()` is the one rule for every merchant's standing orders. The turn posts them in step 1 and re-posts the changed ones at its end (3b); a player's confirmed trade calls `reprice` for that stall. A lever order stays at its NEAR AI price for the day only when the decision was genuinely AI (`source: ai`, tx); the turn plans its merchant trades and shoppers with that price, and the game shows it (`syncAgentPrice`, refreshed on every sync) |
 | Autonomy | `NEAR_AGENT_MERCHANTS` (which agents) + `NEAR_AGENTS_IN_PLAY=1` (turns driven by players' browsers may ask NEAR AI, not only scheduler turns). Bounded by one decision per agent per market day and `NEAR_AI_DAILY_DECISIONS/VERIFIES/CHATS` (defaults 200/200/300); kill switch `scripts/near/agents.ts halt` |
-| Dangerous | `tick`, `settle`, `claim`, `pick`, `guest`, `register`, `relay`, `deal`, `reprice`, `market-turn` all write to testnet. Opening the connected game at a bare URL creates a guest and ticks every 60 s. For QA use `?inspect=<account>` plus the `near-world-inspect` relay (`VIVOLITH_READ_ONLY=1`), or `?offline` |
+| Dangerous | `tick`, `settle`, `claim`, `pick`, `guest`, `register`, `relay`, `deal`, `reprice`, `market-turn` all write to testnet. Opening the connected game at a bare URL creates a guest and ticks every 60 s. For QA use `?inspect=<account>` with a dev server started with `VIVOLITH_READ_ONLY=1`, or `?offline` |
 
 ## Merchant lifecycle
 
@@ -53,7 +53,7 @@ Rule of thumb: **connected, the chain decides value and open/closed; the browser
 | Separation | Model output is a *decision* (stored in Redis with source, confidence, band). It becomes an economic action only as a transaction signed by the merchant's own key inside today's price band; the decision row then carries the tx hash. `live` = confirmed, this market day, and still posted |
 | Signature | `none` (rule) / `pending` -> `signed` / `unverified` (no signature after 3 tries) / `failed`. Never shown as "verified" (TEE quote not checked) |
 | Repeats | Browser ticks only replay a decision already stored for the day (no paid call). Memory rows are one per agent per market day, idempotent |
-| Chronicle copy | A decision event copies the status when the turn writes it; `verifyPass` carries the final status (signed, unverified, failed) onto it with `settleVerification` (ledger.ts). "pending" means the check has not finished, never that it passed. Events stored before `eaf3e03` keep "pending" until they age out |
+| Chronicle copy | A decision event copies the status when the turn writes it; `verifyPass` carries the final status (signed, unverified, failed) onto it with `settleVerification` (ledger.ts). "pending" means the check has not finished, never that it passed. Events stored before this fix (2026-11-14) keep "pending" until they age out |
 
 ## Conversation, voice and UI mode
 
