@@ -32,7 +32,7 @@ import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
 import {
   EXPLORER_ACCOUNT, EXPLORER_TX, agentDecision, finalHeight, type AgentDecision, type ChainReceipt, balances, buyPosted, sellPosted, connectGuest, haggleDeal, marketTick, merchantAccount, playerId, playerLabel, receipts as chainReceipts,
-  settleDay, claimDividends, repriceMerchant, connectionError, lastMarketTurn, askMerchant, chainStatus, chronicleEvents, pickOrchard, marketDay, marketDayMs, isOffline, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
+  settleDay, claimDividends, repriceMerchant, connectionError, reconnect, lastMarketTurn, askMerchant, chainStatus, chronicleEvents, pickOrchard, marketDay, marketDayMs, isOffline, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
 } from "../near/chain";
 
 const GAME_MIN_PER_SEC = 2.4; // 09:00 -> 21:00 in five real minutes
@@ -2064,18 +2064,26 @@ export async function createPlay(game: Game): Promise<Play> {
         const s = el("section");
         s.append(el("p", "", why), el("p", "", "Coins, goods and shares live in the shared market, so nothing would be kept if you played now. Your story so far is safe in this browser."), el("p", "why", `Trying again in ${left} s.`));
         card.append(s);
-        footer(card, "Try again now", () => location.reload());
+        footer(card, "Try again now", () => { void retry(); });
       });
     };
+    let trying = false;
     const retry = async (): Promise<void> => {
-      const ok = await fetch("/api/near/status").then((r) => r.ok).catch(() => false);
-      if (ok) { location.reload(); return; }
-      left = 15; if (mode.kind === "card") draw();
-      setTimeout(() => void retry(), 15_000);
+      if (trying) return; // the button and the countdown share one attempt
+      trying = true;
+      const w = hud.card.querySelector(".why"); if (w) w.textContent = "Trying again…";
+      // the step that failed is tried again (a healthy /status alone made it reload every 15 s while accounts failed)
+      if (await reconnect().catch(() => null)) { location.reload(); return; }
+      trying = false; left = 15;
+      if (mode.kind === "card") draw();
     };
     draw();
-    const count = setInterval(() => { left = Math.max(0, left - 1); const w = hud.card.querySelector(".why"); if (w) w.textContent = `Trying again in ${left} s.`; if (!left) clearInterval(count); }, 1000);
-    setTimeout(() => void retry(), 15_000);
+    setInterval(() => { // one countdown for the whole wait
+      if (trying) return;
+      left = Math.max(0, left - 1);
+      const w = hud.card.querySelector(".why"); if (w) w.textContent = `Trying again in ${left} s.`;
+      if (!left) void retry();
+    }, 1000);
   };
   /** Market turns that cannot reach the server two times running: the player hears it once, and again when it is back. */
   let missedTurns = 0;
@@ -2090,7 +2098,7 @@ export async function createPlay(game: Game): Promise<Play> {
     hud.acct.innerHTML = "";
     const who = el("div", "who");
     const name = typeof state.flags.name === "string" ? state.flags.name : null; // display only, never an account
-    who.append(el("b", "", !id ? name ?? "Offline" : label || name || "Guest"), el("span", "", READ_ONLY ? " · read-only, nothing saved" : id ? (label ? " · saved to your account" : " · saved in this browser") : connectionError() ? " · not connected, retrying" : " · trades stay here"));
+    who.append(el("b", "", !id ? (connectionError() ? "Not connected" : name ?? "Offline") : label || name || "Guest"), el("span", "", READ_ONLY ? " · read-only, nothing saved" : id ? (label ? " · saved to your account" : " · saved in this browser") : connectionError() ? " · retrying" : " · trades stay here"));
     hud.acct.append(who);
     if (!id || (!label && !socialAvailable())) return; // sign-in appears once Google/email login is configured
     if (label) return; // signed in: sign-out is in the menu (Esc), behind a confirmation

@@ -261,6 +261,15 @@ async function status(cfg: Config, env: RelayEnv): Promise<Response> {
   });
 }
 
+/** True when the account exists, false only when NEAR says it does not. An unreachable RPC is a 503: treated as "new", every
+ *  retry during an outage spent one of the address's 5 new-player slots and locked the player out for an hour after. */
+async function accountExists(provider: JsonRpcProvider, accountId: string): Promise<boolean> {
+  return provider.viewAccount({ accountId, finality: "final" }).then(() => true, (e: unknown) => {
+    if (/does not exist|UNKNOWN_ACCOUNT|AccountDoesNotExist/i.test(e instanceof Error ? e.message : String(e))) return false;
+    throw new HttpError(503, "the market can't be reached right now");
+  });
+}
+
 async function guest(cfg: Config, req: Request): Promise<Response> {
   const body = await readJson(req);
   const pk = typeof body.publicKey === "string" ? body.publicKey : "";
@@ -273,7 +282,7 @@ async function guest(cfg: Config, req: Request): Promise<Response> {
   if (!pk.startsWith("ed25519:")) throw new HttpError(400, "ed25519 keys only");
   const { provider, relayer } = account(cfg);
   const accountId = guestIdFor(pk, cfg.relayerId);
-  const exists = await provider.viewAccount({ accountId, finality: "final" }).then(() => true, () => false);
+  const exists = await accountExists(provider, accountId);
   const registered = exists && (await view<boolean>(provider, cfg.contractId, "is_registered", { account_id: accountId }));
   if (registered) return json(200, { status: "onchain", accountId, txHashes: [] }); // a repeat: nothing to create or grant
   // Only a new account (an account, NEAR for its key, and a starter purse) counts against the per-address limit.
@@ -614,7 +623,7 @@ export async function linkIdentity(cfg: Config, req: Request, identity: string, 
   const accountId = `s${createHash("sha256").update(`vivolith-account:${identity}`).digest("hex").slice(0, 16)}.${cfg.relayerId}`;
   const signedIn = (extra: Record<string, unknown>): Record<string, unknown> => ({ status: "onchain", accountId, sessionKey: session.toString(), ...extra });
   const txs: string[] = [];
-  const exists = await provider.viewAccount({ accountId, finality: "final" }).then(() => true, () => false);
+  const exists = await accountExists(provider, accountId);
   const registered = exists && (await view<boolean>(provider, cfg.contractId, "is_registered", { account_id: accountId }));
   const guest = guestId && guestId !== accountId && (await view<boolean>(provider, cfg.contractId, "is_registered", { account_id: guestId })) ? guestId : null;
   // One mutating link per guest at a time: two tabs or a double click can never move or burn twice (the contract's

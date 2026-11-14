@@ -41,9 +41,13 @@ export function cheapestSeller(s: EconomyState): Offer | null {
 
 const hh = (h: number): string => `${String(h).padStart(2, "0")}:00`;
 
-/** When the Orchard next gives its free mangoes: today if the pickers have not started yet, else tomorrow. */
+/** When the Orchard next gives its free mangoes: now while it is open and today's share is unpicked (`orchardReady`, set by
+ *  the game), later today if the pickers have not started, else tomorrow. (At 09:00 it said "tomorrow from 06:00".) */
 export function orchardWhen(s: EconomyState): string {
-  return (s.minute % MINUTES_PER_DAY) / 60 < ORCHARD_HOURS[0] ? `at ${hh(ORCHARD_HOURS[0])}` : `tomorrow from ${hh(ORCHARD_HOURS[0])}`;
+  const h = (s.minute % MINUTES_PER_DAY) / 60;
+  if (h < ORCHARD_HOURS[0]) return `at ${hh(ORCHARD_HOURS[0])}`;
+  if (h < ORCHARD_HOURS[1] && s.flags.orchardReady === true) return `now, until ${hh(ORCHARD_HOURS[1])}`;
+  return `tomorrow from ${hh(ORCHARD_HOURS[0])}`;
 }
 
 /** The single best move right now. `orchardReady` is the game's own flag: the pickers are working and today's share is

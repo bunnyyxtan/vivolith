@@ -364,4 +364,12 @@ const calls = (method: string, filter: (a: Record<string, string>) => boolean = 
   assert.ok(buys.every((b) => Number(b.args.max_price) >= Number(ask?.price)), `Arin's limit ${buys.map((b) => b.args.max_price)} covers Tomas's AI ask ${ask?.price}`);
   assert.deepEqual(failedTx, [], JSON.stringify(failedTx));
 }
+// 13. an outage never spends the new-player limit (5 an hour per address): the RPC cannot answer, so every attempt is a
+// 503 the game retries, not a 429 that would lock this player out for an hour after the market came back
+{
+  const pk = KeyPair.fromRandom("ed25519").getPublicKey().toString();
+  const codes: number[] = [];
+  for (let i = 0; i < 6; i++) codes.push((await handle("guest", new Request("http://localhost/api/near/guest", { method: "POST", body: JSON.stringify({ publicKey: pk }) }), env)).status);
+  assert.deepEqual(codes, [503, 503, 503, 503, 503, 503], `outage answers: ${codes}`);
+}
 console.log("market turn handler checks passed");

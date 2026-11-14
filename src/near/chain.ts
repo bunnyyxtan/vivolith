@@ -149,6 +149,12 @@ export async function lastMarketTurn(): Promise<LastTick | null> {
  *  when connected, or offline on purpose (?offline, or a server without NEAR configured). The game says so and retries. */
 let connectionProblem: string | null = null;
 export const connectionError = (): string | null => connectionProblem;
+/** Tries the whole connection again (status, account): the account id once it works, else null with the reason set. */
+export async function reconnect(): Promise<string | null> {
+  connectionProblem = null;
+  status = null;
+  return connectGuest();
+}
 
 /** True once we know NEAR is not available (not configured, unreachable or ?offline): the game runs locally. */
 export const isOffline = (): boolean => status !== null && !status.configured;

@@ -13377,6 +13377,7 @@ var lines_default = {
 		"Normal stock",
 		"Not a chance.",
 		"Not confirmed yet: re-reading NEAR",
+		"Not connected",
 		"Not connected to the market",
 		"Not enough coins.",
 		"Not my problem.",
@@ -13734,6 +13735,7 @@ var lines_default = {
 		"Try again in a moment.",
 		"Try again now",
 		"Try again.",
+		"Trying again…",
 		"Urgent",
 		"Use only the facts below.",
 		"Vell holds the standing contract for that berth.",
@@ -14176,8 +14178,10 @@ var lines_default = {
 		"loyal",
 		"main",
 		"mango",
+		"mango on her shelf turns",
 		"mangoes",
 		"mangoes in the whole stall.",
+		"mangoes on her shelf turn",
 		"market",
 		"me",
 		"meal_from",
@@ -14599,8 +14603,8 @@ var lines_default = {
 		"z",
 		"zero",
 		"zoom in",
-		"· not connected, retrying",
 		"· read-only, nothing saved",
+		"· retrying",
 		"· saved in this browser",
 		"· saved to your account",
 		"· trades stay here",
@@ -14836,7 +14840,7 @@ var lines_default = {
 		"\\d{1,6}(?:[.,:]\\d{1,3})? m straight · no walking route found",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? mango",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? mango in your bag\\.",
-		"\\d{1,6}(?:[.,:]\\d{1,3})? mango on her shelf turn into coins as shoppers buy",
+		"\\d{1,6}(?:[.,:]\\d{1,3})? mango on her shelf turns into coins as shoppers buy",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? mangoes",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? mangoes in the kitchen",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? mangoes in your bag\\.",
@@ -17473,6 +17477,17 @@ async function status(cfg, env) {
 		} : null
 	});
 }
+/** True when the account exists, false only when NEAR says it does not. An unreachable RPC is a 503: treated as "new", every
+*  retry during an outage spent one of the address's 5 new-player slots and locked the player out for an hour after. */
+async function accountExists(provider, accountId) {
+	return provider.viewAccount({
+		accountId,
+		finality: "final"
+	}).then(() => true, (e) => {
+		if (/does not exist|UNKNOWN_ACCOUNT|AccountDoesNotExist/i.test(e instanceof Error ? e.message : String(e))) return false;
+		throw new HttpError(503, "the market can't be reached right now");
+	});
+}
 async function guest(cfg, req) {
 	const body = await readJson(req);
 	const pk = typeof body.publicKey === "string" ? body.publicKey : "";
@@ -17485,10 +17500,7 @@ async function guest(cfg, req) {
 	if (!pk.startsWith("ed25519:")) throw new HttpError(400, "ed25519 keys only");
 	const { provider, relayer } = account(cfg);
 	const accountId = guestIdFor(pk, cfg.relayerId);
-	const exists = await provider.viewAccount({
-		accountId,
-		finality: "final"
-	}).then(() => true, () => false);
+	const exists = await accountExists(provider, accountId);
 	if (exists && await view(provider, cfg.contractId, "is_registered", { account_id: accountId })) return json(200, {
 		status: "onchain",
 		accountId,
@@ -17939,10 +17951,7 @@ async function linkIdentity(cfg, req, identity, secret, guestId, choice) {
 		...extra
 	});
 	const txs = [];
-	const exists = await provider.viewAccount({
-		accountId,
-		finality: "final"
-	}).then(() => true, () => false);
+	const exists = await accountExists(provider, accountId);
 	const registered = exists && await view(provider, cfg.contractId, "is_registered", { account_id: accountId });
 	const guest = guestId && guestId !== accountId && await view(provider, cfg.contractId, "is_registered", { account_id: guestId }) ? guestId : null;
 	const lockGuest = async () => {

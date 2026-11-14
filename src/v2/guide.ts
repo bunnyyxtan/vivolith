@@ -292,7 +292,7 @@ function renderCardInto(card: HTMLElement, c: Objective): void {
   panel.append(top, meter, nums);
   // the stock the player sold her: it cost her till coins and pays rent only once shoppers buy it (without this line,
   // helping her read as "she is now further from rent")
-  if (short > 0 && n.shelf > 0) panel.append(el("div", "shelf", `${n.shelf} ${n.shelf === 1 ? "mango" : "mangoes"} on her shelf turn into coins as shoppers buy`));
+  if (short > 0 && n.shelf > 0) panel.append(el("div", "shelf", `${n.shelf} ${n.shelf === 1 ? "mango on her shelf turns" : "mangoes on her shelf turn"} into coins as shoppers buy`));
   card.append(panel);
 }
 
