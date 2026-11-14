@@ -26,7 +26,7 @@ const CSS = /* css */ `
 #menu .col { position:absolute; left:var(--pad); top:clamp(22px, 10vh, 120px); bottom:clamp(64px, 12vh, 132px); width:min(900px, calc(100vw - var(--pad) - 18px));
   display:flex; flex-direction:column; justify-content:space-between; gap:clamp(14px, 4vh, 48px); overflow-x:hidden; overflow-y:auto; overscroll-behavior:contain;
   scrollbar-width:thin; scrollbar-color:rgba(255,255,255,.3) transparent; padding-right:8px; }
-#menu .mark { display:block; width:clamp(44px, 6.4vh, 64px); height:auto; margin:0 0 clamp(12px, 2.4vh, 22px) -4px; filter:drop-shadow(0 6px 24px rgba(0,16,40,.45)); }
+#menu .mark { display:block; width:clamp(44px, 6.4vh, 64px); height:auto; margin:0 0 clamp(12px, 2.4vh, 22px) 0; filter:drop-shadow(0 6px 24px rgba(0,16,40,.45)); }
 #menu .over { margin:0 0 clamp(10px, 2vh, 18px); font-size:clamp(10px, 1.5vh, 12px); font-weight:600; letter-spacing:.34em; text-transform:uppercase; color:#9ff7d4;
   display:flex; align-items:center; gap:14px; }
 #menu .over::after { content:""; width:56px; height:1px; background:currentColor; opacity:.6; transform-origin:left; }
