@@ -45,10 +45,10 @@ makes bounded price and resident decisions. Production: https://vivolith.world.
 
 ```bash
 npm run typecheck
-npm test                 # the 17 *.check.ts files via node --test, no network
+npm test                 # the 17 *.check.ts files via node --test, no keys, network mocked
 npm run build            # also regenerates server/near/lines.json and api/near/[route].js
 npm run verify           # public on-chain state, no keys
-cd contracts/market && cargo test
+cd contracts/market && cargo test --features upgrade
 ```
 
 `api/near/[route].js` is generated from `server/near/` by `npm run build:api`. Never edit it by hand; commit it with
