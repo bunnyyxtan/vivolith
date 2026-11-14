@@ -372,4 +372,12 @@ const calls = (method: string, filter: (a: Record<string, string>) => boolean = 
   for (let i = 0; i < 6; i++) codes.push((await handle("guest", new Request("http://localhost/api/near/guest", { method: "POST", body: JSON.stringify({ publicKey: pk }) }), env)).status);
   assert.deepEqual(codes, [503, 503, 503, 503, 503, 503], `outage answers: ${codes}`);
 }
+{
+  // 14. The relayer pays gas only for accounts it created for players
+  const { isGameAccount } = await import("./handlers.ts");
+  const R = "relayer.testnet";
+  assert.ok(isGameAccount(`g0123456789abcdef.${R}`, R) && isGameAccount(`s0123456789abcdef.${R}`, R), "guest and signed-in accounts");
+  for (const bad of ["attacker.testnet", `g0123456789abcdef.other.testnet`, `x0123456789abcdef.${R}`, `g0123.${R}`, `pema.${R}`, `g0123456789ABCDEF.${R}`, R])
+    assert.ok(!isGameAccount(bad, R), `not a game account: ${bad}`);
+}
 console.log("market turn handler checks passed");

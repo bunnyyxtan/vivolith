@@ -316,8 +316,7 @@ async function guest(cfg: Config, req: Request): Promise<Response> {
 async function register(cfg: Config, req: Request): Promise<Response> {
   const body = await readJson(req);
   const accountId = String(body.accountId ?? "");
-  const suffix = `.${cfg.relayerId}`;
-  if (!accountId.endsWith(suffix) || !/^[gs][0-9a-f]{16}$/.test(accountId.slice(0, -suffix.length))) throw new HttpError(400, "not a game account");
+  if (!isGameAccount(accountId, cfg.relayerId)) throw new HttpError(400, "not a game account");
   const { provider, relayer } = account(cfg);
   if (!(await provider.viewAccount({ accountId, finality: "final" }).then(() => true, () => false))) throw new HttpError(404, "no such account");
   if (await view<boolean>(provider, cfg.contractId, "is_registered", { account_id: accountId })) return json(200, { status: "onchain", accountId, txHashes: [] });
@@ -330,6 +329,10 @@ async function register(cfg: Config, req: Request): Promise<Response> {
 interface DecodedDelegate {
   delegateAction: { senderId: string; receiverId: string; actions: { functionCall?: { methodName: string; gas: bigint; deposit: bigint } }[] };
 }
+
+/** An account this relayer created for a player: a guest `g<16 hex>` or a signed-in `s<16 hex>` sub-account. */
+export const isGameAccount = (id: string, relayerId: string): boolean =>
+  id.endsWith(`.${relayerId}`) && /^[gs][0-9a-f]{16}$/.test(id.slice(0, -relayerId.length - 1));
 
 /** Throws unless the delegate only calls player methods on our contract with zero deposit and bounded gas. */
 export function checkDelegate(d: DecodedDelegate, contractId: string): void {
@@ -357,6 +360,8 @@ async function relay(cfg: Config, req: Request): Promise<Response> {
   }
   checkDelegate(decoded, cfg.contractId);
   const sender = decoded.delegateAction.senderId;
+  // gas is paid only for accounts this relayer created, never for an outside account signing its own delegate
+  if (!isGameAccount(sender, cfg.relayerId)) throw new HttpError(403, "not a game account");
   if (!(await hit(cfg, `relay:${sender}`, LIMITS.relay.max, LIMITS.relay.windowSec))) throw new HttpError(429, "slow down");
   const { relayer } = account(cfg);
   let raw: unknown;
@@ -386,7 +391,7 @@ async function recordPlayerDeal(cfg: Config, d: DecodedDelegate, player: string,
   if (!fc || fc.methodName !== "deal" || !fc.args) return;
   const a = JSON.parse(Buffer.from(fc.args).toString()) as { merchant?: string; side?: string; token_id?: string; qty?: string; unit_price?: string; nonce?: string };
   const merchant = String(a.merchant ?? ""), side = a.side === "buy" ? "buy" : "sell", good = String(a.token_id ?? ""), qty = Number(a.qty), unit = Number(a.unit_price);
-  if (!(MERCHANTS as readonly string[]).includes(merchant) || !Number.isInteger(qty) || !Number.isInteger(unit)) return;
+  if (!(MERCHANTS as readonly string[]).includes(merchant) || !GOODS.has(good) || !Number.isInteger(qty) || !Number.isInteger(unit)) return;
   const store = decisionStore(cfg), at = Date.now(), day = Math.floor(at / MARKET_DAY_MS);
   const ref = await takeDealRef(store, player, String(a.nonce ?? ""));
   const reference = ref && ref.merchant === merchant && ref.unit === unit && ref.qty === qty ? ref.reference : null;
@@ -686,8 +691,7 @@ const SAVE_SKEW_MS = 10 * 60 * 1000;
  *  only whoever holds that account's key can read or write its save. */
 async function saveAuth(cfg: Config, b: Record<string, unknown>, data: string): Promise<string> {
   const accountId = String(b.account ?? ""), publicKey = String(b.publicKey ?? ""), ts = Number(b.ts), sig = String(b.signature ?? "");
-  const suffix = `.${cfg.relayerId}`;
-  if (!accountId.endsWith(suffix) || !/^[gs][0-9a-f]{16}$/.test(accountId.slice(0, -suffix.length))) throw new HttpError(400, "not a game account");
+  if (!isGameAccount(accountId, cfg.relayerId)) throw new HttpError(400, "not a game account");
   if (!Number.isFinite(ts) || Math.abs(Date.now() - ts) > SAVE_SKEW_MS) throw new HttpError(401, "stale request");
   let pk: PublicKey;
   try { pk = PublicKey.fromString(publicKey); } catch { throw new HttpError(400, "invalid public key"); }
@@ -1320,7 +1324,7 @@ async function talk(cfg: Config, req: Request, env: RelayEnv): Promise<Response>
   if (!(await hit(cfg, `talk:${clientIp(req)}`, LIMITS.talk.max, LIMITS.talk.windowSec))) throw new HttpError(429, "slow down");
   const question = typeof b.question === "string" ? b.question.slice(0, MAX_QUESTION) : "";
   // the player's own trades with this speaker come from the player's receipts (public chain data); any game account works
-  const player = typeof b.account === "string" && /^[gs][0-9a-f]{16}\./.test(b.account) && b.account.endsWith(`.${cfg.relayerId}`) ? b.account : null;
+  const player = typeof b.account === "string" && isGameAccount(b.account, cfg.relayerId) ? b.account : null;
   // conversation history lives on the server under an unguessable id it issued: the client cannot plant past lines
   const conv = typeof b.conv === "string" && /^[0-9a-f]{32}$/.test(b.conv) ? b.conv : randomBytes(16).toString("hex");
   const store = decisionStore(cfg), day = Math.floor(Date.now() / MARKET_DAY_MS), npcAccount = `${id}.${cfg.relayerId}`;
