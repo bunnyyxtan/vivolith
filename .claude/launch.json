@@ -55,6 +55,16 @@
       "port": 5176
     },
     {
+      "name": "near-world-unreachable",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:NEAR_RPC_URL='http://127.0.0.1:9'; $env:ELEVENLABS_API_KEY=' '; $env:NEAR_AI_KEY=' '; $env:NEAR_AGENT_MERCHANTS=' '; npm.cmd run dev -- --port 5181 --strictPort"
+      ],
+      "port": 5181
+    },
+    {
       "name": "near-world-voice-mock",
       "runtimeExecutable": "powershell",
       "runtimeArgs": [

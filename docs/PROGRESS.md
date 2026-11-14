@@ -308,6 +308,23 @@ Known-issue resolution (2026-11-14, local `7673f2b`, `eaf3e03`; no transaction, 
 
 Verified offline in the browser: open stocked stall (Tomas), closed stall with stock (Pema, no goods outside, Closed card), vacant stall, reopening at 08:00 (shutter up, goods back), resident delivery to an open stall and to a shut stall (state injected to close her: labelled), trade and haggle panels with the mission visible, panel open at 20:58 (clock holds while trading), 1280x720 and 1920x1080, day and night. Not verified: a live resident delivery to a closed stall on testnet; sold-out display (no stall reached 0 stock in play). 13/13 checks, voice check, typecheck, build.
 
+## Phase 6: player-facing finish (2026-11-14 07:25-08:40 UTC, production `8e54f5d`)
+
+| Item | Fix | Evidence |
+|---|---|---|
+| Tutorial dead ends | `c05eb71`: no stall can sell 3 -> "Get 3 mangoes" (Orchard target, honest text), done once the bag holds 3 from anywhere; deliver moves on if nobody bids; haggle moves on with no seller or no purse. No step promises profit (comments corrected) | Offline UI with Tomas/Mira shut and Pema at 1: mission "Get 3 mangoes ... (now, until 11:00)", Orchard pick -> step 4; no sellers at the haggle step -> step 6. Live: a new player's Orchard pick completed the buy step; closed Mira reopened by the deliver step (`2Wkir1yU…`) |
+| Silent offline after a failed connection | `c05eb71`, `8e54f5d`: status/account failure shows "Not connected to the market" (why, nothing kept, story safe), retries the failed step in place every 15 s and on "Try again now", reloads only once connected; menu "Not connected to the market, retrying", chip "Not connected · retrying"; two unreachable market turns in play -> "Lost touch with the market", then "Back in touch" | `near-world-unreachable` (relay with an unreachable RPC): card shown, status+guest retried at 3, 18, 33 s, same document (the first version reloaded every 15 s: fixed) |
+| Outage locked new players out for an hour | `8e54f5d`: an unreachable RPC answers 503 before the 5-per-hour new-player limit (guest and social) | `turn.check` 13: 6 x 503 (without the fix 200 x5 then 429) |
+| Orchard text said "tomorrow" while open; "1 mango ... turn" | `8e54f5d` | UI: "now, until 11:00"; "1 mango on her shelf turns" |
+| Guild debt read as money ("use the coins I owe the Guild") | `c05eb71`: the fact says it is a debt, not money | Live answer: "find a way to get some quick coins, perhaps by selling shares" |
+| Orchard on production | (no change) | New guest `gad24c7ed0abd1ccf`: "Pick today's 3 mangoes" -> mint `DLHVinwpo65U77ysJJf9DPh1yjqkDQd9wSBwYH3J6mfB`, bag 0 -> 3, prompt "your share is picked"; a second press sent nothing |
+| Google sign-in | (no change) | The pane cannot show the popup; the same authorize request with the live tenant, client and vivolith.world callback answers 302 to `accounts.google.com/o/oauth2/auth`; a foreign callback 403. A completed sign-in needs a person's Google account: NOT verified |
+| Final run, adverse market (Mira closed) | | Orchard -> tutorial without a purchase -> delivery reopened Mira -> haggle `AxRBnxnM…` -> 15 shares `CpgVJbrM…` -> step 7; chain = game (41 c, 3 mangoes, 15 shares) |
+
+Recordings still needing a person (none marked reviewed): `docs/evidence/phase3-voice/*.mp3` (6 files),
+`public/audio/voice/pema/s583444d9.mp3`, `public/audio/voice/engineer/s71b0f56e.mp3`, `public/audio/voice/pema/sdc716855.mp3`
+(greeting), and the untracked `public/audio/voice/pema/s718d89f5.mp3` (not made in these sessions; its origin is unknown).
+
 ## Phase 6: real game on vivolith.world, autonomy in play (2026-11-14 06:15-07:20 UTC, authorized)
 
 **Production: `f2984d7`.** Env now: `NEAR_AGENT_MERCHANTS=pema,tomas,mira,arin,picker,porter`, `NEAR_AGENTS_IN_PLAY=1`,
