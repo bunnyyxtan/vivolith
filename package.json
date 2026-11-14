@@ -11,6 +11,8 @@
     "build:api": "node scripts/build-api.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "test": "node --test --test-concurrency=1 \"src/**/*.check.ts\" \"server/**/*.check.ts\"",
+    "verify": "node scripts/near/verify.mjs",
     "deploy": "node scripts/deploy.mjs"
   },
   "dependencies": {
