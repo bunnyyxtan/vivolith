@@ -72,11 +72,9 @@ const CSS = /* css */ `
 #menu li .err { color:#ffb4a8; }
 #menu .foot { position:absolute; left:var(--pad); right:clamp(18px, 4vw, 64px); bottom:clamp(16px, 4vh, 40px); display:flex; align-items:center; gap:clamp(14px, 3vw, 40px); flex-wrap:wrap;
   font-size:11px; font-weight:600; letter-spacing:.2em; text-transform:uppercase; color:rgba(255,255,255,.66); text-shadow:0 1px 6px rgba(0,16,40,.7); }
-#menu .foot .market { display:flex; gap:clamp(12px, 2vw, 26px); flex-wrap:wrap; }
-#menu .foot .stall { display:inline-flex; align-items:center; gap:8px; color:rgba(255,255,255,.8); }
-#menu .foot .stall i { width:6px; height:6px; border-radius:50%; background:var(--mint); box-shadow:0 0 10px var(--mint); }
-#menu .foot .stall.shut { color:rgba(255,255,255,.5); }
-#menu .foot .stall.shut i { background:#ff8f7a; box-shadow:none; }
+#menu .foot .market { display:flex; align-items:baseline; gap:14px; padding-left:clamp(14px, 3vw, 40px); border-left:1px solid rgba(255,255,255,.3); color:rgba(255,255,255,.82); }
+#menu .foot .market:empty { display:none; }
+#menu .foot .market .label { color:rgba(255,255,255,.46); }
 #menu .foot .acct { margin-left:auto; letter-spacing:.12em; color:rgba(255,255,255,.58); text-transform:none; font-weight:500; font-size:12px; }
 /* entrance: the loader fades over this; each part arrives in turn, the camera settles behind it */
 #menu.show .over, #menu.show h1, #menu.show .where, #menu.show li, #menu.show .foot { animation:rise .9s cubic-bezier(.2,.8,.2,1) both; animation-delay:calc(var(--i, 0) * 70ms + 380ms); }
@@ -338,13 +336,16 @@ export function createMenu(game: Game, play: Play): { open(): void } {
     root.querySelector(".acct")!.textContent = who();
     // the four stalls as this game last read them from the chain (hidden offline: they would be the local model's)
     const market = root.querySelector<HTMLElement>(".market")!, a = play.account();
-    if (a.id && !a.offline) for (const id of MERCHANT_IDS) {
-      const m = play.state.merchants[id], open = m.status === "open";
-      const s = document.createElement("span");
-      s.className = open ? "stall" : "stall shut";
-      s.title = `${m.shop}: ${open ? "open" : "closed"}`;
-      s.append(document.createElement("i"), `${id} ${open ? "open" : "closed"}`);
-      market.append(s);
+    // one line of words, like a notice by the square: "all four stalls open", or who is shut and how many trade on
+    if (a.id && !a.offline) {
+      const shut = MERCHANT_IDS.filter((id) => play.state.merchants[id].status !== "open");
+      const n = ["no", "one", "two", "three", "four"][MERCHANT_IDS.length - shut.length] ?? String(MERCHANT_IDS.length - shut.length);
+      const names = shut.map((id) => cap(id)).join(" and ");
+      const label = document.createElement("span"), state = document.createElement("span");
+      label.className = "label";
+      label.textContent = "Saltlight market";
+      state.textContent = shut.length === 0 ? "All four stalls open" : `${names} closed · ${n} open`;
+      market.append(label, state);
     }
     const ul = root.querySelector("ul")!;
     items.forEach((it, i) => {
