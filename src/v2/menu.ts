@@ -212,8 +212,8 @@ export function createMenu(game: Game, play: Play): { open(): void } {
       </table>
       <p>Look at a chalkboard to see why a price is what it is.</p>
       ${ledgerView(location.search, location.pathname)
-        ? `<p class="judge"><b>Ledger view is on.</b> In town, press <kbd>N</kbd> for your NEAR account, every receipt with its explorer link, and NEAR AI's decisions.</p>`
-        : `<p class="judge">Judging VIVOLITH? <a href="/ledger">Open the ledger view</a>: in town, <kbd>N</kbd> shows your NEAR account, every receipt and NEAR AI's decisions.</p>`}</div>`;
+        ? `<p class="judge"><b>Ledger view is on.</b> In town, press <kbd>N</kbd> for your NEAR account and every receipt, each with its explorer link.</p>`
+        : `<p class="judge">Judging VIVOLITH? <a href="/ledger">Open the ledger view</a>: in town, <kbd>N</kbd> shows your NEAR account and every receipt, each with its explorer link.</p>`}</div>`;
     if (sheet === "signout") return `<div class="sheet">
       <p><b>Sign out of ${esc(play.account().label ?? "")}?</b> Your coins, goods and shares stay with that account; sign in again on any device to get them back. This browser goes back to its guest game.</p>
       <p class="confirm"><button data-act="signout"><kbd>Y</kbd>Sign out</button><button data-act="keep"><kbd>Esc</kbd>Stay signed in</button></p></div>`;
