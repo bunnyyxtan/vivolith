@@ -16,10 +16,12 @@ const TXS = [
   ["player sells 15 shares back for exactly the 4 c backing", "HzKujJMXrtZuxEYuFXu2bwg2z37GqWCfvFZBmo4iw7w", "bunnyy-nearworld.testnet"],
   ["dividends settled for all four stalls (accumulator, no holder list)", "7g4zoX9scGAeicNkdR9c6Q8zwE2TViQgQi7pXqbQWqGQ", "bunnyy-nearworld.testnet"],
   ["owed dividend claimed: 1 c paid, 0.35 c carried", "J3qmH7oTxvd3Ni35XvgJJpufcNjaK5Zki8LraEYmFZqc", "bunnyy-nearworld.testnet"],
-  // 2026-11-14, production vivolith.world, one new guest playing the first day (README "The core loop, traced")
-  ["rent turn: Tomas and Arin pay rent, Mira closes 1 c short", "GNcCYF74wPsEEYTnMJayb5sp8aWuHsemQVbL2eV3WHnr", "bunnyy-nearworld.testnet"],
-  ["new player buys 3 mangoes from Tomas for 9 c", "2eXEpbbCjnU3UeGXB29bEC8XsijDNphf6gBH76Zx9dog", "bunnyy-nearworld.testnet"],
-  ["the player delivers 1 mango to closed Pema for 1 c: her stall reopens", "7ywzZnoq1c5UxqYMZRQGpFXMX5zmXGh2A8hrKap6PS4F", "bunnyy-nearworld.testnet"],
+  // 2026-11-14, production vivolith.world, one new player after the recovery fixes (README "One decision, traced on chain")
+  ["guest account created for a new player, holding only a trading key", "3tRuy2fWwy7jLANd8LMCDpXrELzpymCfB5P73WBghJaD", "bunnyy-nearworld.testnet"],
+  ["the player buys 3 mangoes from Tomas at 4 c", "FS54fN889VDpyUSqDrTLUxo7dRSY9DiACa3BX9vqJ4Vh", "bunnyy-nearworld.testnet"],
+  ["the Market Guild advances closed, broke Pema 5 c: one mango's bid", "G1ARMXdujweiFcCjmAbCgEU7Vr2SRievrfYPnxZnKLoP", "bunnyy-nearworld.testnet"],
+  ["the player sells Pema 1 mango for 5 c: her stall reopens", "HEwAwEi8vsfGLkBeGkTTqa5FMrANBCk11AL1D3aXvLki", "bunnyy-nearworld.testnet"],
+  ["harbor contract lands 14 mangoes at closed Tomas (28 c freight): his stall reopens", "2BjftdZegMUXMwwh4wxFh7J8M3RE6dJXkJkw1LzzXRJF", "bunnyy-nearworld.testnet"],
   ["NEAR AI (Jev) lowers Arin's mango bid 6 -> 5 c, posted with Arin's own key", "CznTaWJhctgxL7RSMYubwUMyU5vGJBJUb62uaZEXuFBa", "arin.bunnyy-nearworld.testnet"],
   ["resident Lin buys a lassi from Arin, the meal NEAR AI chose for her", "CqWCNMNaYgqE3mpj2bRxDEPfhUTmkCRuhZZduSy1ynsE", "picker.bunnyy-nearworld.testnet"],
 ];

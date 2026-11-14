@@ -39,8 +39,10 @@ Anything not in this table is not claimed. Commands need no keys.
 ## The transactions above
 
 NEAR testnet, decoded by `npm run verify` through public archival RPC:
-[`GNcCYF74…`](https://testnet.nearblocks.io/txns/GNcCYF74wPsEEYTnMJayb5sp8aWuHsemQVbL2eV3WHnr) rent turn ·
-[`2eXEpbbC…`](https://testnet.nearblocks.io/txns/2eXEpbbCjnU3UeGXB29bEC8XsijDNphf6gBH76Zx9dog) buy ·
-[`7ywzZnoq…`](https://testnet.nearblocks.io/txns/7ywzZnoq1c5UxqYMZRQGpFXMX5zmXGh2A8hrKap6PS4F) reopening delivery ·
+[`3tRuy2fW…`](https://testnet.nearblocks.io/txns/3tRuy2fWwy7jLANd8LMCDpXrELzpymCfB5P73WBghJaD) new player ·
+[`FS54fN88…`](https://testnet.nearblocks.io/txns/FS54fN889VDpyUSqDrTLUxo7dRSY9DiACa3BX9vqJ4Vh) buy ·
+[`G1ARMXdu…`](https://testnet.nearblocks.io/txns/G1ARMXdujweiFcCjmAbCgEU7Vr2SRievrfYPnxZnKLoP) Guild rescue ·
+[`HEwAwEi8…`](https://testnet.nearblocks.io/txns/HEwAwEi8vsfGLkBeGkTTqa5FMrANBCk11AL1D3aXvLki) reopening delivery ·
+[`2BjftdZe…`](https://testnet.nearblocks.io/txns/2BjftdZegMUXMwwh4wxFh7J8M3RE6dJXkJkw1LzzXRJF) harbor reopens Tomas ·
 [`CznTaWJh…`](https://testnet.nearblocks.io/txns/CznTaWJhctgxL7RSMYubwUMyU5vGJBJUb62uaZEXuFBa) AI-priced order ·
 [`CqWCNMNa…`](https://testnet.nearblocks.io/txns/CqWCNMNaYgqE3mpj2bRxDEPfhUTmkCRuhZZduSy1ynsE) Lin's meal.

@@ -7,6 +7,7 @@ import type { Play } from "./play";
 import { clockOf, MERCHANT_IDS } from "../economy/state";
 import { shareSupply } from "../economy/sim";
 import { audio } from "./audio";
+import { ledgerView } from "../near/inspect";
 
 const CSS = /* css */ `
 #boot { position:fixed; inset:0; z-index:30; background:#0e1520; color:#eef2f0; display:flex; flex-direction:column; align-items:center; justify-content:center;
@@ -38,6 +39,8 @@ const CSS = /* css */ `
 #menu .sheet { margin-top:clamp(12px, 3vh, 26px); max-width:440px; font-size:clamp(13px, 2.4vh, 15px); line-height:1.5; color:rgba(255,255,255,.92); text-shadow:0 1px 8px rgba(0,20,50,.6); }
 #menu .sheet b { color:#fff; } #menu .sheet kbd { font:700 12px "Inter Tight",system-ui,sans-serif; background:#fff; color:#10151f; padding:1px 6px; border-radius:2px; margin-right:6px; }
 #menu .sheet .confirm { display:flex; flex-wrap:wrap; gap:10px; }
+#menu .sheet .judge { margin-top:14px; padding-top:10px; border-top:1px solid rgba(255,255,255,.28); font-size:.92em; }
+#menu .sheet .judge a { color:#fff; font-weight:600; text-underline-offset:3px; }
 #menu .sheet button { font:600 14px "Inter Tight",system-ui,sans-serif; color:#fff; background:rgba(10,20,40,.35); border:1px solid rgba(255,255,255,.7); padding:7px 12px 7px 8px; cursor:pointer; }
 #menu .sheet button:hover { background:#fff; color:#10151f; }
 #menu .sheet table { border-collapse:collapse; } #menu .sheet td { padding:3px 18px 3px 0; vertical-align:top; }
@@ -207,7 +210,10 @@ export function createMenu(game: Game, play: Play): { open(): void } {
         <tr><td><kbd>J</kbd>goals</td><td><kbd>H</kbd>help</td></tr>
         <tr><td><kbd>C</kbd>town news</td><td><kbd>Esc</kbd>this menu</td></tr>
       </table>
-      <p>Look at a chalkboard to see why a price is what it is.</p></div>`;
+      <p>Look at a chalkboard to see why a price is what it is.</p>
+      ${ledgerView(location.search, location.pathname)
+        ? `<p class="judge"><b>Ledger view is on.</b> In town, press <kbd>N</kbd> for your NEAR account, every receipt with its explorer link, and NEAR AI's decisions.</p>`
+        : `<p class="judge">Judging VIVOLITH? <a href="/ledger">Open the ledger view</a>: in town, <kbd>N</kbd> shows your NEAR account, every receipt and NEAR AI's decisions.</p>`}</div>`;
     if (sheet === "signout") return `<div class="sheet">
       <p><b>Sign out of ${esc(play.account().label ?? "")}?</b> Your coins, goods and shares stay with that account; sign in again on any device to get them back. This browser goes back to its guest game.</p>
       <p class="confirm"><button data-act="signout"><kbd>Y</kbd>Sign out</button><button data-act="keep"><kbd>Esc</kbd>Stay signed in</button></p></div>`;
