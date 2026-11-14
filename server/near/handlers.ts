@@ -394,7 +394,9 @@ async function recordPlayerDeal(cfg: Config, d: DecodedDelegate, player: string,
     await addBond(store, merchant, player, { at, day, kind: side === "sell" ? "delivered" : "bought", good, qty, unit, reference, evidence: "chain", txHash: r.txHash, note: null });
     if (ref?.closed && side === "sell") {
       const { provider } = account(cfg);
-      const stalls = await view<{ merchant: string; open: boolean }[]>(provider, cfg.contractId, "get_stalls", {}).catch(() => []);
+      // optimistic: the relay answered when the deal executed; a "final" read lags a few blocks and still saw the stall
+      // closed (live 2026-11-14: the reopening was only told by the next market turn, without the player's delivery)
+      const stalls = await (provider.callFunction({ contractId: cfg.contractId, method: "get_stalls", args: {}, finality: "optimistic" }) as Promise<unknown> as Promise<{ merchant: string; open: boolean }[]>).catch(() => []);
       if (stalls.find((s) => s.merchant === merchant)?.open) {
         // the market turn reads these for the one-time rent grace and so does not announce this reopening twice
         await kv(cfg, ["SET", `vivolith:stall:${merchant}`, "open"]).catch(() => null);

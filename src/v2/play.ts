@@ -731,7 +731,8 @@ export async function createPlay(game: Game): Promise<Play> {
     const price = el("div", "price");
     price.append(el("b", "", `${unit} c`), el("span", "", tab === "buy" ? "each" : "paid each"));
     item.append(el("i", `ico ${good}`), left, price);
-    hud.panel.append(item);
+    // a sale that ended the stall's need keeps its tab while the result shows: no bid left, so no "0 c paid each"
+    if (!(tab === "sell" && sellPrice(id) === null)) hud.panel.append(item);
     const cmp = good === "mango" ? compareOf(id, tab, unit) : null;
     if (mode.done > 0 && moved?.id === id) hud.panel.append(el("div", "tp-verdict", moved.text));
     else if (cmp) hud.panel.append(el("div", "tp-verdict", cmp.verdict));

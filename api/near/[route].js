@@ -17650,7 +17650,12 @@ async function recordPlayerDeal(cfg, d, player, r) {
 		});
 		if (ref?.closed && side === "sell") {
 			const { provider } = account(cfg);
-			const stalls = await view(provider, cfg.contractId, "get_stalls", {}).catch(() => []);
+			const stalls = await provider.callFunction({
+				contractId: cfg.contractId,
+				method: "get_stalls",
+				args: {},
+				finality: "optimistic"
+			}).catch(() => []);
 			if (stalls.find((s) => s.merchant === merchant)?.open) {
 				await kv(cfg, [
 					"SET",
