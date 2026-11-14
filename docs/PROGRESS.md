@@ -308,6 +308,31 @@ Known-issue resolution (2026-11-14, local `7673f2b`, `eaf3e03`; no transaction, 
 
 Verified offline in the browser: open stocked stall (Tomas), closed stall with stock (Pema, no goods outside, Closed card), vacant stall, reopening at 08:00 (shutter up, goods back), resident delivery to an open stall and to a shut stall (state injected to close her: labelled), trade and haggle panels with the mission visible, panel open at 20:58 (clock holds while trading), 1280x720 and 1920x1080, day and night. Not verified: a live resident delivery to a closed stall on testnet; sold-out display (no stall reached 0 stock in play). 13/13 checks, voice check, typecheck, build.
 
+## Phase 6: completion (2026-11-14 07:45-08:40 UTC, production `21fbd76`)
+
+- Tutorial (`18aa2fd`): no lesson is skipped any more. Haggling counts on a sale too; with no seller or a short purse the
+  lesson points to the best bidder ("haggle on a sale: open Arin's Sell tab"); with nobody to trade it waits and says
+  why; the sell lesson waits for a buyer. Offline UI with forced states: no seller -> Arin, short purse -> Arin, nobody ->
+  "Haggle once a stall can trade" (waits), and a haggled sale completed the lesson.
+- Full production journey, player `gad24c7ed0abd1ccf` (Ravi): Orchard mint `DLHVinwp…`; buy step completed by the pick;
+  closed Mira reopened by the sell lesson `2Wkir1yU…`; haggle `AxRBnxnM…`; 15 shares `CpgVJbrM…`; Rent Night: bought 2
+  from Pema (`4FN3oG4C…`, 26 of 30 c); the rent turn closed her before the next buy ("stall is closed", nothing charged);
+  a delivery reopened her; story closed -> recovered; Step 8 week forecast (card "Your week ahead: a forecast", purse
+  back to the chain's 31 c); reload: step 8, story, 7 receipts (0 pending), 31 c / 5 mangoes / 15 shares = chain.
+- Fixed live (`21fbd76`): a refusal showed the previous trade's result line ("Pema's till: 30 c" beside "4 of 30 c");
+  the fast-forward clock now says "forecast, not real trades"; the merchant's own price board steps aside while you
+  trade (from his post Tomas stands behind it on the trade camera's line; projection at 1920x1080: board 1240-1620 px,
+  Tomas 1317 px). Visible-pane screenshots at 1280x720 and 1366x768: panel, goal card and HUD clear; the pane was hidden
+  afterwards (frames stale), so the post-fix camera view is not screenshot-verified.
+- Autonomy in normal play: 31 decisions today, 31 signed; e.g. Tomas 4 -> 3 c (`7AqsRa…`), Mira 4 -> 3 c (`C8w7Yr…`),
+  Lin's sale and meal (`BNW1ki…`). Last turn failed 0; Chronicle 40, unique, 0 duplicate tx, 0 failed.
+- Voice review (local Whisper, no credits): greeting `pema/sdc716855.mp3` = "Oh, a new face. I'm Pema." exact.
+  `pema/s583444d9.mp3` heard as "Pretty crates!" (text "Thirty crates!") and `engineer/s71b0f56e.mp3` as "You're cool."
+  (text "Your call."), the same mishearing as before: human listen, re-take if confirmed. `pema/s718d89f5.mp3`
+  (untracked) is an old Pema line referenced nowhere: unused. Audio starts on the first real key or click.
+- Google: authorize request -> 302 to Google's sign-in, foreign callback 403. Completing a sign-in, the callback, account
+  recovery on another device and sign-out back to the guest need a person's Google account: human-only.
+
 ## Phase 6: player-facing finish (2026-11-14 07:25-08:40 UTC, production `8e54f5d`)
 
 | Item | Fix | Evidence |
