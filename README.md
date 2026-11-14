@@ -1,3 +1,5 @@
+<img src="public/brand/vivolith-logo-256.png" width="88" height="88" alt="VIVOLITH logo">
+
 # VIVOLITH
 
 **A market town where every merchant keeps a real till, and the stall you save stays saved.**

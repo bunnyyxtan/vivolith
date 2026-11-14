@@ -26,6 +26,7 @@ const CSS = /* css */ `
 #menu .col { position:absolute; left:var(--pad); top:clamp(22px, 10vh, 120px); bottom:clamp(64px, 12vh, 132px); width:min(900px, calc(100vw - var(--pad) - 18px));
   display:flex; flex-direction:column; justify-content:space-between; gap:clamp(14px, 4vh, 48px); overflow-x:hidden; overflow-y:auto; overscroll-behavior:contain;
   scrollbar-width:thin; scrollbar-color:rgba(255,255,255,.3) transparent; padding-right:8px; }
+#menu .mark { display:block; width:clamp(44px, 6.4vh, 64px); height:auto; margin:0 0 clamp(12px, 2.4vh, 22px) -4px; filter:drop-shadow(0 6px 24px rgba(0,16,40,.45)); }
 #menu .over { margin:0 0 clamp(10px, 2vh, 18px); font-size:clamp(10px, 1.5vh, 12px); font-weight:600; letter-spacing:.34em; text-transform:uppercase; color:#9ff7d4;
   display:flex; align-items:center; gap:14px; }
 #menu .over::after { content:""; width:56px; height:1px; background:currentColor; opacity:.6; transform-origin:left; }
@@ -77,14 +78,14 @@ const CSS = /* css */ `
 #menu .foot .market .label { color:rgba(255,255,255,.46); }
 #menu .foot .acct { margin-left:auto; letter-spacing:.12em; color:rgba(255,255,255,.58); text-transform:none; font-weight:500; font-size:12px; }
 /* entrance: the loader fades over this; each part arrives in turn, the camera settles behind it */
-#menu.show .over, #menu.show h1, #menu.show .where, #menu.show li, #menu.show .foot { animation:rise .9s cubic-bezier(.2,.8,.2,1) both; animation-delay:calc(var(--i, 0) * 70ms + 380ms); }
+#menu.show .mark, #menu.show .over, #menu.show h1, #menu.show .where, #menu.show li, #menu.show .foot { animation:rise .9s cubic-bezier(.2,.8,.2,1) both; animation-delay:calc(var(--i, 0) * 70ms + 380ms); }
 #menu.show h1 { animation-name:reveal; animation-duration:1.3s; }
 #menu.show .over::after { animation:draw 1.2s cubic-bezier(.2,.8,.2,1) .5s both; }
 @keyframes rise { from { opacity:0; transform:translateY(14px); } }
 @keyframes reveal { from { opacity:0; letter-spacing:.3em; clip-path:inset(0 0 100% 0); } to { clip-path:inset(0 0 -10% 0); } }
 @keyframes draw { from { transform:scaleX(0); } }
-#menu.settled .over, #menu.settled h1, #menu.settled .where, #menu.settled li, #menu.settled .foot, #menu.settled .over::after { animation:none; }
-#menu.reopen .over, #menu.reopen h1, #menu.reopen .where, #menu.reopen li, #menu.reopen .foot { animation-delay:calc(var(--i, 0) * 40ms); animation-duration:.5s; }
+#menu.settled .mark, #menu.settled .over, #menu.settled h1, #menu.settled .where, #menu.settled li, #menu.settled .foot, #menu.settled .over::after { animation:none; }
+#menu.reopen .mark, #menu.reopen .over, #menu.reopen h1, #menu.reopen .where, #menu.reopen li, #menu.reopen .foot { animation-delay:calc(var(--i, 0) * 40ms); animation-duration:.5s; }
 #menu.leaving .col, #menu.leaving .foot { transition:opacity .45s ease, transform .6s cubic-bezier(.4,0,.2,1); opacity:0; transform:translateX(-18px); }
 #menu.leaving { transition:background-color .6s; background:none; }
 body.in-menu .hud, body.in-menu #hint { display:none !important; }
@@ -329,7 +330,7 @@ export function createMenu(game: Game, play: Play): { open(): void } {
     // the entrance plays once per opening; later renders (arrow keys, NEAR connecting) show the settled menu
     if (rendered) root.classList.add("settled");
     rendered = true;
-    root.innerHTML = `<div class="col"><header><p class="over" style="--i:0">Saltlight · a market town on NEAR</p><h1 style="--i:1">VIVOLITH</h1><p class="where" style="--i:2"></p></header>`
+    root.innerHTML = `<div class="col"><header><img class="mark" src="/brand/vivolith-logo-128.png" width="64" height="64" alt="" style="--i:0"><p class="over" style="--i:0">Saltlight · a market town on NEAR</p><h1 style="--i:1">VIVOLITH</h1><p class="where" style="--i:2"></p></header>`
       + `<nav aria-label="Main menu"><ul role="menu"></ul>${sheetHtml()}</nav></div>`
       + `<footer class="foot" style="--i:${3 + items.length}"><span>Built on NEAR</span><span class="market"></span><span class="acct"></span></footer>`;
     root.querySelector(".where")!.textContent = where();

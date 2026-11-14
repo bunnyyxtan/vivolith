@@ -12,7 +12,8 @@ the files below. They are included only so the game builds and runs; do not extr
 |---|---|---|
 | `public/models/v2/kavi.glb`, `v2/cast/*.glb` (all characters), `v2/props/*.glb` | Generated with Tripo, then processed by our scripts | Tripo's terms for the plan used at generation time |
 | `public/audio/**` | Generated with ElevenLabs on a paid (Starter) plan | ElevenLabs terms; paid plans allow commercial use |
-| `public/brand/*` (except `vivolith-mark.svg`), `assets-src/brand/**`, the marks modelled into `spire.glb` and `v2/landmarks/*.glb` | NEAR, NEAR AI and NEAR Intents marks | Trademarks of their owners |
+| `public/brand/*` (except the VIVOLITH logo files below), `assets-src/brand/**`, the marks modelled into `spire.glb` and `v2/landmarks/*.glb` | NEAR, NEAR AI and NEAR Intents marks | Trademarks of their owners |
+| `public/brand/vivolith-logo-*.png`, `favicon-*.png`, `apple-touch-icon.png`, `social-preview.jpg`, `public/favicon.ico` | VIVOLITH's own logo, provided by the author (and the social preview built from it and a game screenshot) | VIVOLITH's mark: not covered by the MIT licence, all rights reserved |
 | `public/draco/*` | Draco decoder from three.js | Apache-2.0 |
 | `public/hdri/*`, Poly Haven parts of `spire.glb`, `v2/plaza.glb` and `v2/town.glb` | Poly Haven | CC0 |
 
@@ -21,7 +22,7 @@ the files below. They are included only so the game builds and runs; do not extr
 | File in repo | Original | Notes |
 |---|---|---|
 | `assets-src/brand/near-wordmark.svg` | `logo.svg` | NEAR wordmark + symbol (black). Used as `public/brand/near-wordmark-white.svg` (fill set to white) on the title card |
-| `assets-src/brand/near-symbol.svg` | `favicon.svg` | NEAR symbol. Used as `public/brand/near-symbol.svg` (the tab icon is our own `public/brand/vivolith-mark.svg`) |
+| `assets-src/brand/near-symbol.svg` | `favicon.svg` | NEAR symbol. Used as `public/brand/near-symbol.svg` (the tab icon is VIVOLITH's own logo, `public/favicon.ico`) |
 | `public/brand/nearai-primary-color.svg`, `nearai-tile-color.svg`, `nearintents-Logo-Icon.svg` | near.ai/brand; defuse-protocol/defuse-frontend | NEAR AI and NEAR Intents marks on the fictional landmark buildings (`blender/build_landmarks.py`); sources in `public/brand/README.md` |
 | `assets-src/brand/kit/Tertiary/01_Color/tile-color.svg`, `tile-color@1x.png` | brand kit zip | NEAR app-tile symbol, read by `blender/build_street.py` |
 

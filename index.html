@@ -3,8 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" type="image/svg+xml" href="/brand/vivolith-mark.svg" />
     <title>VIVOLITH</title>
+    <meta name="description" content="A 3D market town where every merchant keeps a real till on NEAR, and the stall you save stays saved. Play in your browser." />
+    <meta name="theme-color" content="#0a1220" />
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/brand/favicon-16.png" />
+    <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="VIVOLITH" />
+    <meta property="og:title" content="VIVOLITH" />
+    <meta property="og:description" content="A market town where every merchant keeps a real till on NEAR, and the stall you save stays saved." />
+    <meta property="og:url" content="https://vivolith.world/" />
+    <meta property="og:image" content="https://vivolith.world/brand/social-preview.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="https://vivolith.world/brand/social-preview.jpg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -25,7 +40,9 @@
       #boot.ready svg path { stroke: #00ec97; }
       #boot.ready svg rect { animation: none; opacity: .95; }
       @keyframes lit { 0%, 100% { opacity: .12; } 45% { opacity: .9; } }
-      #boot h1 { margin: 30px 0 0; font-weight: 700; font-size: 15px; letter-spacing: .64em; padding-left: .64em; }
+      #boot .mark { width: 56px; height: 56px; margin-top: 34px; animation: markIn 1.2s cubic-bezier(.2,.8,.2,1) both; }
+      @keyframes markIn { from { opacity: 0; transform: translateY(6px) scale(.96); } }
+      #boot h1 { margin: 14px 0 0; font-weight: 700; font-size: 15px; letter-spacing: .64em; padding-left: .64em; }
       #boot .stage { margin: 14px 0 0; font-size: 13px; letter-spacing: .04em; color: #b6c4c0; min-height: 1.3em; }
       #boot .count { margin: 7px 0 0; font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: #6c8090; font-variant-numeric: tabular-nums; min-height: 1.2em; }
       #boot .line { position: absolute; left: 16px; right: 16px; bottom: clamp(20px, 6vh, 56px); margin: 0; text-align: center; font-size: 13px; color: #8a9daa; transition: opacity .7s; }
@@ -35,6 +52,7 @@
       @media (prefers-reduced-motion: reduce) {
         #boot, #boot .line, #boot svg path { transition: none; }
         #boot.build svg rect { animation: none; opacity: .6; }
+        #boot .mark { animation: none; }
       }
     </style>
   </head>
@@ -76,6 +94,7 @@
           <rect x="406" y="134" width="8" height="14" style="--d: 4" /><rect x="380" y="190" width="8" height="14" style="--d: 2" />
           <rect x="406" y="218" width="8" height="14" style="--d: 6" />
         </svg>
+        <img class="mark" src="/brand/vivolith-logo-128.png" width="56" height="56" alt="" />
         <h1>VIVOLITH</h1>
         <p class="stage">Opening Saltlight</p>
         <p class="count"></p>
