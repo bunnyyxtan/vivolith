@@ -7,7 +7,7 @@
 ![The NEAR Spire over Protocol Plaza, VIVOLITH](docs/media/hero-near-spire.jpg)
 
 **[Play at vivolith.world](https://vivolith.world)** &nbsp;·&nbsp; **[Judge's ledger](https://vivolith.world/ledger)** &nbsp;·&nbsp;
-[Five-minute path](#five-minutes-in-saltlight) &nbsp;·&nbsp; [Verify every claim](#verify-every-claim) &nbsp;·&nbsp; [Source map](#source-map)
+**[Demo video](https://x.com/Bunnyyxtan/status/2121673686273188127)** &nbsp;·&nbsp; [Five-minute path](#five-minutes-in-saltlight) &nbsp;·&nbsp; [Verify every claim](#verify-every-claim) &nbsp;·&nbsp; [Source map](#source-map)
 
 VIVOLITH is a 3D trading game in Saltlight, a city under the NEAR Spire. Four merchants run fruit and lassi stalls,
 each with their own till, stock and pricing strategy, and each must pay rent. You haggle, carry goods to where they are
@@ -88,7 +88,8 @@ sender. A haggled price is valid only with the merchant's ed25519 signature, che
 **NEAR AI decides, bounded.** Jev (`typesafe/jev-1.13`, [`agent.ts`](server/near/agent.ts)) receives one merchant's
 chain state and picks one of a few named options, each an existing order or a one-coin move inside the band. Below
 0.5 confidence, on any error, over budget or under the kill switch, the deterministic rule in
-[`pricing.ts`](src/economy/pricing.ts) decides instead, and every decision is labelled `ai` or `rule`. NEAR AI's ed25519
+[`pricing.ts`](src/economy/pricing.ts) decides instead, and every decision is labelled `ai` or `rule` (the decision log calls a rule decision `fallback`
+and gives the reason in `fallbackReason`). NEAR AI's ed25519
 signature over the exact request and response is checked ([`verify.ts`](server/near/verify.ts)); the TEE quote is not
 validated, so the game never claims "verified". AI never moves coins, mints, signs a player's trade or sets a price
 outside the band.
