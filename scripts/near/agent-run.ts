@@ -20,7 +20,7 @@ if (!["pema", "tomas", "mira", "arin"].includes(AGENT)) { console.error("--agent
 const SIDE = AGENT === "tomas" ? "ask" : "bid", METHOD = SIDE === "ask" ? "list" : "bid";
 const evidencePath = `docs/evidence/phase2-${AGENT}-live-run.json`;
 const report: Record<string, unknown> = { at: new Date().toISOString(), mode: yes ? "run" : "preflight" };
-const save = (): void => { if (yes) fs.writeFileSync(evidencePath, JSON.stringify(report, null, 1)); };
+const save = (): void => { if (yes) { fs.mkdirSync("docs/evidence", { recursive: true }); fs.writeFileSync(evidencePath, JSON.stringify(report, null, 1)); } };
 const stop = (why: string): never => { report.stopped = why; save(); console.error(`STOP: ${why}`); process.exit(2); throw new Error(why); };
 
 // ------------------------------------------------------------------ network guard (installed before any import) ----
