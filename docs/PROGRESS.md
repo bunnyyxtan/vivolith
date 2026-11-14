@@ -279,6 +279,33 @@ was open, even another merchant's, and unlocked that panel's own unanswered deal
 (now it waits per stall, `settling`). Offline play: buy from Tomas 40 -> 28 c, 3 mangoes, receipt local; Esc and reopen
 gives the normal panel. The connected waiting paths are not reproduced (need a live pending move).
 
+Known-issue resolution (2026-11-14, local `7673f2b`, `eaf3e03`; no transaction, no paid call, no deploy):
+- Refused market-turn transaction, root cause found on testnet (read-only RPC and nearblocks): two relayer operator
+  batches failed, `GwhFDv3yrRrctGsKACLVwjMwUnejkduRU9PcVRXRXoZU` (2026-11-13 19:41 UTC) and
+  `4cVR2XtzLZw8ND7redAmoXUmVkJoM6b9M9FrbaDGgHuQ` (19:52), both "Smart contract panicked: not enough lassi" at Arin's
+  `street_sale`. The turn capped street shoppers by stock read at its start; Lin and Dev had already eaten Arin's lassi
+  that turn, and a failing action reverts the whole batch (all stalls' shoppers and the kitchen). Fix: re-read stock
+  before the operator batch. `turn.check.ts` case 9 (fake contract now applies batches in order, all or nothing, and
+  panics past stock) failed with the same panic before the fix and passes after. Pema, Tomas: 0 failed since 11-13;
+  Mira, Arin, Lin's accounts were rate-limited by nearblocks (not scanned; relayer-signed batches cover their sales).
+- Chronicle decision "pending": the event copied the status when written; the later check updated only the decision
+  row. `settleVerification` carries signed / unverified / failed onto the event under the Chronicle lock;
+  `autonomy.check` covers signed, timeout to unverified, still pending, network error, failed, lock held (it failed
+  without the fix). Old stored events keep "pending" until they age out (?ledger only).
+- Trade failure recovery: `src/near/moves.ts` + `moves.check.ts`: lost answer then success (same delegate resent),
+  lost answer then duplicate (unknown), first duplicate (failed), 4 timeouts (unknown, waits 1.5/3/4.5 s), gateway
+  error retried, relayer error final, contract refusal final with hash, network never answers (unknown); rejected
+  promise answers once as unknown; two moves on one stall answered out of order keep it waiting until both; another
+  stall never blocked; stale reads detected. A mutant without the rejection guard fails the check.
+- Town news on the read-only relay (`near-world-inspect`, `?inspect`): GET chronicle at 3.5 s, with status, only GETs;
+  chip "Guest · read-only, nothing saved". The local relay has no Redis (0 events); wording and order of real stored
+  events were checked on production in the db46f27 pass.
+- Rent line in conversation now says "My next rent is ..." (true before and after the charge).
+- 800x600: mission card collapses above the trade panel, no overlap (offline, Tomas). Offline buy 28 -> 16 c, 3 mangoes,
+  one receipt; reload restored 16 c, 6 mangoes, Tomas 34, no pending receipt.
+- Not defects: Pema's 1-unit buys matched her posted ask of 1; haggle lot is a stated fixed 3 (relayer replays 3).
+  17/17 checks, typecheck, build.
+
 Verified offline in the browser: open stocked stall (Tomas), closed stall with stock (Pema, no goods outside, Closed card), vacant stall, reopening at 08:00 (shutter up, goods back), resident delivery to an open stall and to a shut stall (state injected to close her: labelled), trade and haggle panels with the mission visible, panel open at 20:58 (clock holds while trading), 1280x720 and 1920x1080, day and night. Not verified: a live resident delivery to a closed stall on testnet; sold-out display (no stall reached 0 stock in play). 13/13 checks, voice check, typecheck, build.
 
 ## Phase 6: live production acceptance (2026-11-14, authorized)
@@ -307,7 +334,7 @@ agents, `market-turn` 401. Rollback target: `vivolith-jneb85v3k` (c2ace0b) via `
 | Save and resume on production: reload restored wallet, bag, shares and step; 45 resources, about 12 MB, 0 failed; about 7.9 s to playable | VERIFIED | |
 | Visible-browser FPS (pane in view, 120 Hz display): 1280x720 market 119 fps (p50 8.3, p95 8.4, max 16.7 ms); 1920x1080 market, walking, avenue 120 fps (p95 8.4 ms); night 21:00 120 fps; heap 180-192 MB over the session | MEASURED | Display-capped at 120 Hz |
 | Defects found live, fixed in `d8443ba` (not deployed): chain/AI evidence on player screens (decision card on Arin's lassi tab, signature and model text, tx links, "confirmed on NEAR", "Saved · see N for the record", raw refusal text); connected rent result hidden behind tutorial steps 5-6; epilogue said "my shelves were full, so I opened again" after the player's delivery reopened her; step 4 told the player Pema "needs stock" while her shelves were full and she had no coins; Rent Night lines 403; "after 1 mangoes" | FIXED locally | Ledger (balances, tx, decisions, money trail) only with `?ledger` |
-| Not resolved | OPEN | One market turn reported 1 refused transaction (function logs not retained; balances consistent). Chronicle decision events keep "pending" after the signature is verified (ledger only now). Pema's buy was 1 unit per trade while her posted ask was 1. Ask box sits behind "Why N c?" |
+| Not resolved | OPEN | One market turn reported 1 refused transaction (function logs not retained; balances consistent) [FIXED locally in `eaf3e03`: stale stock in the operator batch, see "Known-issue resolution"]. Chronicle decision events keep "pending" after the signature is verified (ledger only now) [FIXED locally in `eaf3e03`]. Pema's buy was 1 unit per trade while her posted ask was 1. Ask box sits behind "Why N c?" |
 
 ## Phase 6: gameplay, game feel and production review (2026-11-14)
 

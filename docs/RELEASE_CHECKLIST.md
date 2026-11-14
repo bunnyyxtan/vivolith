@@ -12,6 +12,10 @@ decisions/Chronicle (§3), live voice and chat (§4).
 Production before that run: `c2ace0b`. Local commits not deployed: `86cf4be` (Lin grounding), `16ed7a5` (relayer bundle),
 `f781fb2` (Rent Night journey), the Phase 3 voice commits (`30e1fff`, live voice and hardening), the Phase 4 characters commit, plus docs.
 
+**2026-11-14 (later):** production is `db46f27`. Local and not deployed: `1c6a59c`, `d0c2a82`, `7673f2b`, `eaf3e03`
+(trade panel recovery, operator batch stale stock, Chronicle signature status, rent wording) plus docs. Controlled
+live checks for them are listed in PROGRESS.md "Known-issue resolution".
+
 ## 1. Connected playthrough (testnet)
 
 - [ ] Preflight: read shared market state (stalls, tills, Guild, posted orders, last turn) without writing.

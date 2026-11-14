@@ -11,7 +11,7 @@ Rule of thumb: **connected, the chain decides value and open/closed; the browser
 
 | | |
 |---|---|
-| Code | `src/near/chain.ts` `act`/`actOnce`, `src/v2/play.ts` `record`, `server/near/handlers.ts` `relay`/`deal`, contract `deal` |
+| Code | `src/near/moves.ts` (`relaySigned`, `moves()`; checked by `moves.check.ts`), `src/near/chain.ts` `act`, `src/v2/play.ts` `record`, `server/near/handlers.ts` `relay`/`deal`, contract `deal` |
 | States | Receipt: `pending` -> `onchain` / `failed` / `unconfirmed` (`local` offline). TxOutcome `unknown` maps to `unconfirmed` |
 | Source of truth | NEAR. The game applies coins and goods only in the `confirmed` callback, then re-reads the wallet |
 | Invariants | A move is signed once; retries resend the same bytes (delegate nonce: at most one lands). A haggled deal is single-use (contract nonce per merchant and player, expiry). `duplicate` after an earlier send is `unknown`, never success. A rejected promise is `unknown` (never stuck). A wallet read older than a move sent or answered is dropped (`ledgerEpoch`, `inFlight`). Pending receipts become `unconfirmed` on reload and are never resent (`save.ts`) |
@@ -22,7 +22,7 @@ Rule of thumb: **connected, the chain decides value and open/closed; the browser
 | | |
 |---|---|
 | Code | `handlers.ts` `tick`, `claimTick`, `claimOnce`/`releaseOnce`, `ops.ts` |
-| Rules | One turn at a time everywhere: Redis `SET NX EX 75` (outlasts the 60 s function limit). Once-per-market-day claims: orchard pick, each resident's day, rent grace. A claim is released only after a final refusal (nothing happened); a send with no answer keeps it. Rent and settlement are also once per day in the contract |
+| Rules | One turn at a time everywhere: Redis `SET NX EX 75` (outlasts the 60 s function limit). Once-per-market-day claims: orchard pick, each resident's day, rent grace. A claim is released only after a final refusal (nothing happened); a send with no answer keeps it. Rent and settlement are also once per day in the contract. A batch of actions is all or nothing: the operator batch re-reads stock after the residents' and merchants' trades, because one street sale past real stock reverts every action in it (turn.check case 9) |
 | Fails closed | Store down = no turn, no paid call, agents halted. Test caps `NEAR_TEST_TURNS`/`NEAR_TEST_TXS` reserve before signing |
 | Dangerous | `tick`, `settle`, `claim`, `pick`, `guest`, `register`, `relay`, `deal`, `market-turn` all write to testnet. Opening the connected game at a bare URL creates a guest and ticks every 60 s. For QA use `?inspect=<account>` plus the `near-world-inspect` relay (`VIVOLITH_READ_ONLY=1`), or `?offline` |
 
@@ -51,7 +51,7 @@ Rule of thumb: **connected, the chain decides value and open/closed; the browser
 | Separation | Model output is a *decision* (stored in Redis with source, confidence, band). It becomes an economic action only as a transaction signed by the merchant's own key inside today's price band; the decision row then carries the tx hash. `live` = confirmed, this market day, and still posted |
 | Signature | `none` (rule) / `pending` -> `signed` / `unverified` (no signature after 3 tries) / `failed`. Never shown as "verified" (TEE quote not checked) |
 | Repeats | Browser ticks only replay a decision already stored for the day (no paid call). Memory rows are one per agent per market day, idempotent |
-| Known gap | A Chronicle decision event keeps `pending` after the later signature check (seen only with `?ledger`) |
+| Chronicle copy | A decision event copies the status when the turn writes it; `verifyPass` carries the final status (signed, unverified, failed) onto it with `settleVerification` (ledger.ts). "pending" means the check has not finished, never that it passed. Events stored before `eaf3e03` keep "pending" until they age out |
 
 ## Conversation, voice and UI mode
 
@@ -63,6 +63,6 @@ Rule of thumb: **connected, the chain decides value and open/closed; the browser
 
 ## Checks (no network, no credits)
 
-`npm run typecheck`; every `*.check.ts` with `node <file>` (16 files, including `turn.check.ts` for turn caps and locks,
+`npm run typecheck`; every `*.check.ts` with `node <file>` (17 files, including `moves.check.ts` for trade failures, including `turn.check.ts` for turn caps and locks,
 `inspect.check.ts` for the read-only guards, `story.check.ts`, `voice.check.ts`); `npm run build` rebuilds
 `api/near/[route].js`.
