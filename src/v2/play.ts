@@ -20,6 +20,7 @@ import { factsFor, goodsOf, moodOf as voiceMood, scriptFor, sentencesOf } from "
 import { createOrchardBasket, type OrchardBasket } from "./orchard";
 import { night, startNight, updateNight, type Clock, type NightOutcome } from "./story";
 import { READ_ONLY } from "../near/inspect";
+import { moves } from "../near/moves";
 
 /** Metres per footstep sound, and how close to the stalls the market music and murmur take over. */
 const ORCHARD_REACH_M = 4;
@@ -469,26 +470,15 @@ export async function createPlay(game: Game): Promise<Play> {
   /** Sends a value move and changes nothing in the game until NEAR answers: `confirmed` moves the coins and goods
    *  once the chain has, `refused` explains a refusal (nothing was charged). Either way the wallet is then re-read
    *  from the chain, and an attempt with no final answer is settled by that re-read instead of a guess. */
-  let inFlight = 0; // value moves sent this session and not yet answered
-  /** Bumped when a value move is sent and when it is answered: a chain read that started before either is stale (it
-   *  may predate the move) and is dropped, so a slow read can never undo a trade NEAR already confirmed. */
-  let ledgerEpoch = 0;
-  /** Unanswered value moves per stall: reopening that stall's panel keeps it waiting (openTrade), so a second deal is
-   *  never built on numbers the first one has not settled yet. Every answer callback unlocks the panel of its own stall. */
-  const settling = new Map<MerchantId, number>();
+  /** Moves waiting for NEAR (src/near/moves.ts): `epoch` drops chain reads older than a move sent or answered, so a slow
+   *  read can never undo a confirmed trade; `settling(stall)` keeps a reopened panel waiting (openTrade), so a second deal
+   *  is never built on unsettled numbers; a rejected move answers as "unknown" instead of waiting forever. */
+  const ledger = moves();
   const record = (kind: string, summary: string, tx: Promise<TxOutcome>, confirmed: () => void, refused: (message: string | null) => void, who: MerchantId): void => {
     const r: Receipt = { id: `${kind}-${state.minute}-${state.receipts.length}`, kind, minute: state.minute, summary, status: "pending" };
     state.receipts.push(r);
-    inFlight++;
-    ledgerEpoch++;
-    settling.set(who, (settling.get(who) ?? 0) + 1);
     // in-world: a trade needs no status line while it settles (the panel shows the merchant shaking on it)
-    // A rejection (e.g. the expired-sign-in fallback losing the network) is an unknown outcome, never a stuck one: without
-    // this, inFlight stays above 0, the panel waits forever and every later wallet read is dropped.
-    void tx.catch((): TxOutcome => ({ status: "unknown", message: "no answer" })).then((o) => {
-      inFlight--;
-      ledgerEpoch++;
-      settling.set(who, Math.max(0, (settling.get(who) ?? 1) - 1));
+    void ledger.send(who, tx).then((o) => {
       Object.assign(r, { status: o.status === "unknown" ? "unconfirmed" : o.status, txHash: o.txHash, message: o.message, accountId: playerId() ?? undefined });
       if (o.status === "onchain" || o.status === "local") confirmed();
       if (o.status === "failed") {
@@ -653,7 +643,7 @@ export async function createPlay(game: Game): Promise<Play> {
       // offline, stocked shelves reopen the stall at 08:00: asking for stock then was a request for nothing
       : closed ? (!chainLive(state) && reopenGap(state, id) === 0 ? "The shutters are down tonight. My shelves are stocked, so I open again at eight." : VOICES[id].lines.closed) : WHO[id].hello;
     // a deal with this stall is still settling (the panel was closed while waiting): wait for it, as before Esc
-    if (settling.get(id)) { mode = { kind: "trade", npc, id, tab, qty: q, say: "Shaking on it…", tone: "", why: false, h: null, done: AWAITING }; renderTrade(); showPanel("trade"); return; }
+    if (ledger.settling(id)) { mode = { kind: "trade", npc, id, tab, qty: q, say: "Shaking on it…", tone: "", why: false, h: null, done: AWAITING }; renderTrade(); showPanel("trade"); return; }
     mode = { kind: "trade", npc, id, tab, qty: q, say, tone: closed ? "bad" : "", why: false, h: null, done: 0 };
     speak(id, say);
     renderTrade();
@@ -1959,10 +1949,10 @@ export async function createPlay(game: Game): Promise<Play> {
   // ---------------------------------------------------------------- account: guest or social/email ----
   /** The chain is the truth for what the player owns: their purse, bag and shares follow the active account. */
   const syncPlayer = async (id: string): Promise<void> => {
-    const epoch = ledgerEpoch;
+    const epoch = ledger.epoch;
     const b = await balances(id).catch(() => null);
     // a trade sent or answered while this read was in flight would be overwritten by older balances: drop the read
-    if (!b || playerId() !== id || inFlight > 0 || epoch !== ledgerEpoch) return;
+    if (!b || playerId() !== id || ledger.inFlight > 0 || epoch !== ledger.epoch) return;
     state.player.coins = b.coin ?? 0;
     state.player.inventory = { mango: b.mango ?? 0, lemon: b.lemon ?? 0, lassi: b.lassi ?? 0 };
     for (const m of TRADERS) state.player.shares[m] = b[`share:${m}`] ?? 0;
@@ -1971,14 +1961,14 @@ export async function createPlay(game: Game): Promise<Play> {
   };
   /** Merchants' coins and goods follow the chain too, so a stall never offers a deal its wallet can't settle. */
   const syncMerchants = async (): Promise<void> => {
-    const epoch = ledgerEpoch;
+    const epoch = ledger.epoch;
     const [all, stalls] = await Promise.all([
       Promise.all(TRADERS.map((id) => balances(merchantAccount(id)).catch(() => null))),
       view<{ merchant: string; open: boolean; need: string; delivered: string; supply: string; last_rent: number | null }[]>("get_stalls").catch(() => null),
     ]);
     for (const s of stalls ?? []) if ((TRADERS as readonly string[]).includes(s.merchant)) state.flags[`supply.${s.merchant}`] = Number(s.supply);
-    if (epoch === ledgerEpoch) for (const s of stalls ?? []) if ((TRADERS as readonly string[]).includes(s.merchant)) state.flags[`lastRent.${s.merchant}`] = s.last_rent ?? -1;
-    if (ff || epoch !== ledgerEpoch) return; // a forecast runs on the local model; a read older than a trade is stale
+    if (epoch === ledger.epoch) for (const s of stalls ?? []) if ((TRADERS as readonly string[]).includes(s.merchant)) state.flags[`lastRent.${s.merchant}`] = s.last_rent ?? -1;
+    if (ff || epoch !== ledger.epoch) return; // a forecast runs on the local model; a read older than a trade is stale
     TRADERS.forEach((id, i) => {
       const b = all[i];
       if (!b) return;

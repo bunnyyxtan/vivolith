@@ -7,6 +7,7 @@
 import { Auth0Client } from "@auth0/auth0-spa-js";
 import type { ChronicleEvent } from "../economy/chronicle";
 import { INSPECT_ACCOUNT, READ_ONLY } from "./inspect";
+import { relaySigned } from "./moves";
 import { Account, JsonRpcProvider, KeyPair, KeyPairSigner, actions, encodeSignedDelegate, teraToGas, type KeyPairString } from "near-api-js";
 
 export const EXPLORER_TX = "https://testnet.nearblocks.io/txns/";
@@ -348,17 +349,7 @@ async function actOnce(method: "buy" | "sell" | "deal", args: Record<string, unk
       await sleep(RETRY_MS);
     }
   }
-  let sent = false; // an earlier attempt may have reached NEAR
-  for (let attempt = 0; attempt < SEND_TRIES; attempt++) {
-    if (attempt > 0) await sleep(RETRY_MS * attempt);
-    let r: Record<string, unknown>;
-    try { r = await post("relay", { signedDelegate: delegate }); } catch { sent = true; continue; } // network: resend
-    if (r.status === "onchain" && typeof r.txHash === "string") return { status: "onchain", txHash: r.txHash };
-    if (r.status === "duplicate") return sent ? { status: "unknown", message: "sent earlier; checking NEAR" } : { status: "failed", message: "already submitted" };
-    if (r.status === "unknown" || (Number(r.httpStatus) >= 500 && r.status !== "error")) { sent = true; continue; }
-    return { status: "failed", txHash: typeof r.txHash === "string" && r.txHash ? r.txHash : undefined, message: String(r.message ?? "not recorded") };
-  }
-  return sent ? { status: "unknown", message: "no answer from NEAR; checking your balance" } : { status: "failed", message: "relay unreachable" };
+  return relaySigned(delegate, post, sleep, SEND_TRIES, RETRY_MS);
 }
 
 /** A haggled deal: the merchant signs the agreed price (server), the player settles it in one tx. */

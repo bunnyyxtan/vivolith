@@ -15,8 +15,8 @@ assert.equal(inspectParam("?ledger"), null);
 assert.equal(inspectParam("?inspect"), "");
 assert.ok(READ_ONLY && INSPECT_ACCOUNT === "kavi-qa.bunnyy-nearworld.testnet");
 
-// every route the client posts to (read from chain.ts and audio.ts), plus every mutating server route
-const chain = fs.readFileSync("src/near/chain.ts", "utf8"), audio = fs.readFileSync("src/v2/audio.ts", "utf8");
+// every route the client posts to (read from chain.ts, moves.ts and audio.ts), plus every mutating server route
+const chain = fs.readFileSync("src/near/chain.ts", "utf8") + fs.readFileSync("src/near/moves.ts", "utf8"), audio = fs.readFileSync("src/v2/audio.ts", "utf8");
 const posted = [...chain.matchAll(/post\("([a-z-]+)"/g)].map((m) => m[1]);
 assert.ok(posted.length >= 12, `client routes found: ${posted.join(", ")}`);
 assert.ok(audio.includes('fetch("/api/near/voice", { method: "POST"'), "the voice route is a POST");
