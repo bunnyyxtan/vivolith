@@ -308,6 +308,35 @@ Known-issue resolution (2026-11-14, local `7673f2b`, `eaf3e03`; no transaction, 
 
 Verified offline in the browser: open stocked stall (Tomas), closed stall with stock (Pema, no goods outside, Closed card), vacant stall, reopening at 08:00 (shutter up, goods back), resident delivery to an open stall and to a shut stall (state injected to close her: labelled), trade and haggle panels with the mission visible, panel open at 20:58 (clock holds while trading), 1280x720 and 1920x1080, day and night. Not verified: a live resident delivery to a closed stall on testnet; sold-out display (no stall reached 0 stock in play). 13/13 checks, voice check, typecheck, build.
 
+## Phase 6: real game on vivolith.world, autonomy in play (2026-11-14 06:15-07:20 UTC, authorized)
+
+**Production: `f2984d7`.** Env now: `NEAR_AGENT_MERCHANTS=pema,tomas,mira,arin,picker,porter`, `NEAR_AGENTS_IN_PLAY=1`,
+`NEAR_AI_DAILY_CHATS` removed (code default 300); decisions and signature checks at their defaults (200/day each), kill
+switch unchanged. No test caps. Rollback: `vivolith-2vsyzc90s` (d6d6f2c). Played as two brand-new guests
+(`gcca8c74e37f4a7f7`, `g476841b1824053ee`) through the whole journey; every trade below is final on testnet.
+
+| Defect (found live) | Root cause | Fix | Live evidence |
+|---|---|---|---|
+| Panel price vs posted chain order | Orders were re-posted only at the start of the next turn; the turn's own later steps and players' trades moved stock and tills | `067b6c9`: `ruleOrders()` shared; end-of-turn re-post (3b); route `reprice` after a player's trade; turn marks itself running so they never share a merchant key | After buys/sells: Tomas 35@4 = panel 35@4 (`BD5KkrRD…`), Pema ask 10@5 / bid 1@4 = panel; full sweep: all four stalls equal (Tomas 34@4, Pema 5@5 + bid 4, Mira bid 5, Arin lassi 3@3). `turn.check` 11 |
+| Rule-held lever frozen for the day | Re-post skipped the lever whenever any decision existed | `cc13ec0`: only a genuine AI price holds it | Arin's held bid moved 5 -> 6 c = panel |
+| Merchant trade refused "price moved above your limit" (`AMQUsqQU…`) | Tomas's AI ask 4 -> 5 c in step 1; step 2 planned at the rule 4 c | `f83fe2a`: the turn plans with the AI-posted price | `turn.check` 12 fails without it (limit 4 vs ask 5); later turns failed 0 |
+| Fresh page offered 4 c while Tomas's AI ask was 5 c ("price moved: now 5 c", nothing charged) | Live AI prices were fetched lazily per panel; an unchanged decision kept a stale price | `f2984d7`: all agents' decisions refreshed on every market sync; `live` compared | After reload: no stale AI price; buy `3zzEgDdp…` |
+| New player stuck at "Buy 3 mangoes from Tomas" with Tomas and Mira shut | `tutorSeller` fell back to a closed Tomas | `439bc38`: Pema is the fallback seller (no newcomer price, her own lines) | Not seen live again (Tomas reopened); logic + typecheck |
+| First lesson broke even (Tomas 4 c, Pema bid 4 c) | Newcomer floor 4 c | `7b83432`: floor 3 c (client + relayer) | Newcomer buy 9 c for 3 (`9Ev8nYi4…`); profit still 0 when Pema's own AI decision had lowered her bid to 3 c (honest, 55% signing floor) |
+| Pema's chat: "I don't know anything about crates or the harbor" | No story facts | `7b83432`, `cc13ec0`: one story fact per merchant | "we can't get them out until a storage fee is paid" |
+| Transient status or guest failure = offline session | No retry | `067b6c9`: 3 tries each, 429 final | inspect.check covers `guest`/`register` |
+
+Autonomy in ordinary play: 20 NEAR AI decisions on player-driven turns, 20 signature checks, all **signed**; e.g. Pema bid
+4 -> 3 c (0.8), Tomas ask 4 -> 5 c (AI, signed), Lin's sale and meal (AI, signed); low-confidence choices held by the rule.
+Journey (both players): Pema's story, newcomer buy, sale to Pema (`8SCHNCYu…`), haggle Lowball/Flatter (`4f7dHXC7…`,
+`6Wofaa…`), 15 shares (`ApEpFiq4…`, `DBRafT1L…`), AI chat 1.4-1.7 s, voice 1.4-2.1 s after a real gesture, Rent Night
+(Pema 29 of 30 c, closed), reopening by deliveries (`3FpWtWMx…`, `Fz1Kytmr…`), Chronicle "reopened after a delivery" 6 s
+later. Last turns: failed 0. Chronicle 40, unique, 0 duplicate tx, 0 failed. ElevenLabs +72 credits.
+
+Dev configurations (`.claude/launch.json`): only `near-world` (= `npm run dev`) and production run the real game (testnet,
+NEAR AI, voice); `-inspect` (read-only relay), `-offline`, `-offline-qa`, `-voice-mock` (no chain), `-voice-live` (voice
+only) and `-live-noai` (chain, no AI or voice) are QA tools by design. Audio starts on the first real pointer or key press.
+
 ## Phase 6: second live production acceptance (2026-11-14 04:20-05:40 UTC, authorized)
 
 **Production: `d6d6f2c` on vivolith.world** (deployment `vivolith-2vsyzc90s`, from the clean release worktree). Rollback:
