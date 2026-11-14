@@ -24,7 +24,7 @@ import type { ChainReceipt, MemoryRow, Snapshot } from "./memory.ts";
 import { addBond, bondFacts, chronicle, putDealRef, readBonds, readChronicle, takeDealRef } from "./ledger.ts";
 import { changedSince, countOf, decisionEvent, eventId, lastDecisionAt, type ChronicleEvent } from "../../src/economy/chronicle.ts";
 import { GRACE_DAYS, guildFillTo, guildPlan, rentToCharge, touristUnits } from "../../src/economy/recovery.ts";
-import { ORCHARD_PICK, bidFor, dealBounds, planMerchantTrades, quote } from "../../src/economy/pricing.ts";
+import { ORCHARD_PICK, agentPriceKey, bidFor, dealBounds, planMerchantTrades, quote } from "../../src/economy/pricing.ts";
 import { newcomerPrice, verifyDealUnit } from "../../src/economy/haggle.ts";
 import { closingNeed, shopperWant } from "../../src/economy/sim.ts";
 import { initialEconomy, type EconomyState } from "../../src/economy/state.ts";
@@ -1119,6 +1119,9 @@ async function tickBody(cfg: Config, env: RelayEnv, trusted: boolean, scope: "ma
       agent = out.decision;
       skipLever = out.skipBid; // another tick holds this day's decision and posts its order
       if (agent) leverPrice = out.price;
+      // the rest of this turn plans with the price the agent posts (live: Tomas's AI ask went 4 -> 5 c while the merchant
+      // trades still offered 4 c, "price moved above your limit"); a rule fallback is the rule price already
+      if (agent && agent.source === "ai" && lever) st.flags[agentPriceKey(id, lever.side, lever.good)] = out.price;
       if (agent) log.push(`${id} ${agent.source === "ai" ? "NEAR AI" : "rule"} decision: ${agent.action} ${lever.good} ${lever.side} ${agent.basePrice} -> ${agent.price} c${agent.fallbackReason ? ` (${agent.fallbackReason})` : ""}`);
     }
     const isLever = (side: "ask" | "bid", good: string): boolean => lever !== undefined && lever.side === side && lever.good === good;

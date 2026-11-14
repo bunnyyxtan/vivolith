@@ -18785,6 +18785,7 @@ async function tickBody(cfg, env, trusted, scope, ops, full) {
 			agent = out.decision;
 			skipLever = out.skipBid;
 			if (agent) leverPrice = out.price;
+			if (agent && agent.source === "ai" && lever) st.flags[agentPriceKey(id, lever.side, lever.good)] = out.price;
 			if (agent) log.push(`${id} ${agent.source === "ai" ? "NEAR AI" : "rule"} decision: ${agent.action} ${lever.good} ${lever.side} ${agent.basePrice} -> ${agent.price} c${agent.fallbackReason ? ` (${agent.fallbackReason})` : ""}`);
 		}
 		const isLever = (side, good) => lever !== void 0 && lever.side === side && lever.good === good;

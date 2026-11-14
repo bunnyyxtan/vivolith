@@ -84,8 +84,11 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
           else { add(m, args.token_id, -Number(args.qty)); add(m, "coin", Number(args.qty) * Number(args.unit_price)); }
         }
         if (method === "buy" && !args.token_id.startsWith("share:")) { // a resident's meal or purchase from a stall's ask
-          const seller = args.seller, cost = Number(args.max_price);
-          if ((next[seller]?.[args.token_id] ?? 0) < Number(args.qty)) panic = `not enough ${args.token_id}`;
+          // like the contract: the seller's posted ask decides the price; a limit under it panics
+          const seller = args.seller, ask = offers.find((o) => o.account_id === seller && o.side === "ask" && o.token_id === args.token_id);
+          const unit = ask ? Number(ask.price) : Number(args.max_price), cost = unit * Number(args.qty);
+          if (ask && Number(args.max_price) < unit) panic = "price moved above your limit";
+          else if ((next[seller]?.[args.token_id] ?? 0) < Number(args.qty)) panic = `not enough ${args.token_id}`;
           else { add(seller, args.token_id, -Number(args.qty)); add(signer, args.token_id, Number(args.qty)); add(signer, "coin", -cost); add(seller, "coin", cost); }
         }
       }
@@ -346,5 +349,19 @@ const calls = (method: string, filter: (a: Record<string, string>) => boolean = 
   }
   assert.equal((await rp("pema")).body.orders, 0, "a second call sends nothing");
   assert.equal((await rp("nobody")).code, 400);
+}
+// 12. live 2026-11-14: Tomas's NEAR AI decision raised his ask in step 1, and Arin's restock in step 2 still offered the rule
+// price ("price moved above your limit"). The rest of the turn now plans with the price the agent posted.
+{
+  nextDay(); reset({ arin: { coin: 400, mango: 0 }, mira: { open: false }, pema: { mango: 0 }, tomas: { mango: 40 } }); bal[acct("arin")].lassi = 0; sent.length = 0; failedTx.length = 0; offers = []; aiChoice = "raise";
+  const t = await turn({ NEAR_AGENT_MERCHANTS: "tomas", NEAR_AI_DAILY_DECISIONS: "500" }, true);
+  aiChoice = "hold";
+  const log = t.log as string[];
+  assert.ok(log.some((l) => /tomas NEAR AI decision: raise/.test(l)), log.filter((l) => /tomas/.test(l)).join("\n"));
+  const ask = offers.find((o) => o.merchant === "tomas" && o.side === "ask" && o.token_id === "mango");
+  const buys = sent.filter((s) => s.signer === acct("arin") && s.method === "buy" && s.args.seller === acct("tomas"));
+  assert.ok(buys.length > 0, `Arin restocked from Tomas this turn: ${log.filter((l) => /arin|tomas|bought/.test(l)).join(" | ")}`);
+  assert.ok(buys.every((b) => Number(b.args.max_price) >= Number(ask?.price)), `Arin's limit ${buys.map((b) => b.args.max_price)} covers Tomas's AI ask ${ask?.price}`);
+  assert.deepEqual(failedTx, [], JSON.stringify(failedTx));
 }
 console.log("market turn handler checks passed");
