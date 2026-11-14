@@ -1,9 +1,0 @@
-{
- "block": 276821167,
- "balances": {
-  "coin|kavi.rhmw892mzr.bunnyy-nearworld.testnet": "5",
-  "coin|pema.rhmw892mzr.bunnyy-nearworld.testnet": "20",
-  "share:pema|kavi.rhmw892mzr.bunnyy-nearworld.testnet": "60",
-  "share:pema|pema.rhmw892mzr.bunnyy-nearworld.testnet": "240"
- }
-}

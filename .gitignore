@@ -33,3 +33,7 @@ public/ref/
 
 # local voice auditions (not shipped)
 tools/voice-samples/
+
+# local QA output (screenshots, live-run reports) and local agent notes
+docs/evidence/
+.mcp.json
