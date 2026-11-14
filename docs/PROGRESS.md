@@ -260,6 +260,19 @@ deployment `vivolith-hc7b2i49j` aliased to vivolith.world; rollback `vivolith-mo
   Minor, pre-existing: Town news is empty until the first market-turn sync (about 60 s); under ?inspect the account chip
   says "saved in this browser".
 
+State-machine audit (2026-11-14, local only, no deploy, no transaction, no paid call). The value-move paths were already
+explicit and idempotent: client trades sign one meta-transaction and resend the same bytes (delegate nonce), `duplicate`
+after a send becomes `unknown` and the wallet is re-read; pending receipts become `unconfirmed` on reload, never resent;
+stale wallet reads are dropped by `ledgerEpoch`/`inFlight`; server turn lock (SET NX EX 75 s), once-per-day claims for
+picks, residents and grace, pick claim released only on a final refusal. Fixed in `1c6a59c`:
+- `record()` (src/v2/play.ts): a rejected trade promise (expired sign-in fallback losing the network) never answered, so
+  `inFlight` stayed above 0: the panel waited forever and every later wallet read was dropped for the session. A rejection
+  is now an `unknown` outcome (re-read the chain), like a lost answer. Not reproduced in the browser (needs a forced
+  rejection); typecheck and checks only.
+- Under ?inspect the chip says "read-only, nothing saved" (verified offline with `?offline&inspect`).
+- Town news is read at boot (GET), not only after the first market turn answers. Not checked connected.
+16/16 checks (incl. voice, after regenerating lines.json), typecheck, build.
+
 Verified offline in the browser: open stocked stall (Tomas), closed stall with stock (Pema, no goods outside, Closed card), vacant stall, reopening at 08:00 (shutter up, goods back), resident delivery to an open stall and to a shut stall (state injected to close her: labelled), trade and haggle panels with the mission visible, panel open at 20:58 (clock holds while trading), 1280x720 and 1920x1080, day and night. Not verified: a live resident delivery to a closed stall on testnet; sold-out display (no stall reached 0 stock in play). 13/13 checks, voice check, typecheck, build.
 
 ## Phase 6: live production acceptance (2026-11-14, authorized)
