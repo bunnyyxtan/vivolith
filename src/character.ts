@@ -313,13 +313,3 @@ export async function loadCharacter(url: string, height: number): Promise<Animat
   };
   return character;
 }
-
-/** Visible notice so a missing character model is never silently replaced by a placeholder. */
-export function showPlaceholderNotice(message: string): void {
-  const el = document.createElement("div");
-  el.textContent = message;
-  el.style.cssText =
-    "position:fixed;top:12px;right:12px;padding:6px 10px;border-radius:6px;font:12px ui-monospace,monospace;" +
-    "background:rgba(120,30,20,.75);color:#fff;pointer-events:none;z-index:10";
-  document.body.appendChild(el);
-}

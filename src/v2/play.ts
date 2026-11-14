@@ -15,6 +15,8 @@ import { RESIDENTS } from "../economy/residents";
 import { gossipLine, readableNews, type ChronicleEvent, type ChronicleKind } from "../economy/chronicle";
 import { audio } from "./audio";
 import { createCityMap } from "./map";
+import { pedestrians } from "./npc";
+import { trafficCars } from "./traffic";
 import { MOODS, VOICES, type LineId, type Mood } from "./audio-manifest";
 import { factsFor, goodsOf, moodOf as voiceMood, scriptFor, sentencesOf } from "../../server/near/talk";
 import { createOrchardBasket, type OrchardBasket } from "./orchard";
@@ -1447,7 +1449,7 @@ export async function createPlay(game: Game): Promise<Play> {
     const mer = market.npcs.find((n) => n.id === short);
     if (mer) return mer.root.position.clone();
     const ri = RESIDENTS.findIndex((r) => r.id === short);
-    const folk = (window as unknown as { __npcs?: { fixed: boolean; x: number; y: number; z: number }[] }).__npcs?.filter((e) => !e.fixed)[ri];
+    const folk = pedestrians.filter((e) => !e.fixed)[ri];
     return ri >= 0 && folk ? new THREE.Vector3(folk.x, folk.y, folk.z) : null;
   };
   const drawTrail = (payer: string, payee: string, me: string | null): void => {
@@ -1758,7 +1760,7 @@ export async function createPlay(game: Game): Promise<Play> {
     audio.ambience(night ? "night" : nearMarket ? "market" : "day");
     // a car passing close by (traffic.ts exposes its cars for playtests); one at a time, not every second
     carQuiet -= 1;
-    const cars = (window as unknown as { __traffic?: { x: number; z: number; v: number; obj: THREE.Object3D }[] }).__traffic ?? [];
+    const cars = trafficCars();
     const passing = entered && carQuiet <= 0 ? cars.find((c) => c.obj.visible && c.v > 2 && Math.hypot(c.x - player.body.x, c.z - player.body.z) < CAR_SOUND_M) : undefined;
     if (passing) { carQuiet = CAR_QUIET_SEC; void audio.sfx("car_pass", { x: passing.x, y: 0.6, z: passing.z }); } // heard from the car's side
   };

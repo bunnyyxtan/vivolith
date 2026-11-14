@@ -37,6 +37,10 @@ const MODELS = ["ev_sedan", "ev_pickup"];
 const POOL = 9, ACCEL = 3, BRAKE = 9, COMFORT = 4, MAX_SPEED = 7;
 /** Jerk limits (m/s^3): acceleration ramps instead of switching, so starts and stops ease in. Braking onset is quicker. */
 const JERK_UP = 8, JERK_DOWN = 28;
+let liveCars: readonly Car[] = [];
+/** The cars currently driving (empty until the town has loaded). */
+export const trafficCars = (): readonly Car[] => liveCars;
+
 /** Paint hue turns (degrees) cycled over the cars: the sedan and the pickup each come in several colours. */
 const PAINT_HUES = [0, 75, 140, 200, 265, 320];
 /** Top of the town's asphalt (measured by raycast: 0.024 m everywhere on the lanes); tyres stand on it. */
@@ -417,7 +421,8 @@ export async function installTraffic(scene: THREE.Scene, colliders: Box[], playe
     cars.push(car);
     trySpawn(car, true);
   }
-  Object.assign(window, { __traffic: cars, __trafficSpots: spots }); // playtest handles
+  liveCars = cars;
+  if (import.meta.env.DEV) Object.assign(window, { __traffic: cars, __trafficSpots: spots }); // playtest handles (dev server only)
 
   setTimeout(() => { // lanes through buildings (town.glb loads async)
     const inside: string[] = [];

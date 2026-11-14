@@ -42,7 +42,8 @@ const phaseAt = (hour: number): Phase => {
 };
 
 /** Anything cars must stop for. */
-export interface Pedestrian { x: number; z: number; hidden: boolean }
+/** Everyone walking the town: merchants first (`fixed`, at their stalls), then the townsfolk. */
+export interface Pedestrian { x: number; y: number; z: number; hidden: boolean; fixed: boolean }
 export const pedestrians: Pedestrian[] = [];
 
 export interface MerchantRef {
@@ -224,8 +225,9 @@ export function createLife(scene: THREE.Scene, colliders: Box[], town: THREE.Obj
   HOMES.forEach((a, i) => { if (folk[i]) folk[i].home = a; });
   const all = [...merEnts, ...folk];
   pedestrians.push(...all);
-  (window as unknown as { __npcs: Pedestrian[]; __tpose: unknown }).__npcs = pedestrians; // playtest handles
-  (window as unknown as { __tpose: unknown }).__tpose = (sim: (sec: number) => void): string[] => tposeReport(scene, sim);
+  if (import.meta.env.DEV) { // playtest handles for the browser console (dev server only)
+    Object.assign(window, { __npcs: pedestrians, __tpose: (sim: (sec: number) => void): string[] => tposeReport(scene, sim) });
+  }
 
   const spire = spots.filter((q) => q.name.includes("spire"));
   const jogs = spots.filter((q) => q.kind === "jog").sort((a, b) => a.name.localeCompare(b.name));
