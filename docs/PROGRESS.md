@@ -272,6 +272,12 @@ picks, residents and grace, pick claim released only on a final refusal. Fixed i
 - Under ?inspect the chip says "read-only, nothing saved" (verified offline with `?offline&inspect`).
 - Town news is read at boot (GET), not only after the first market turn answers. Not checked connected.
 16/16 checks (incl. voice, after regenerating lines.json), typecheck, build.
+Second pass (UI mode, merchant lifecycle, story, NPC errands, voice, agent decisions): map in
+[STATE_MACHINES.md](STATE_MACHINES.md). Fixed: a confirmed share buy or sale wrote its result into whichever trade panel
+was open, even another merchant's, and unlocked that panel's own unanswered deal (now only the same stall); Esc during
+"Shaking on it", then reopening the stall, gave an unlocked panel that could send a second deal on unsettled numbers
+(now it waits per stall, `settling`). Offline play: buy from Tomas 40 -> 28 c, 3 mangoes, receipt local; Esc and reopen
+gives the normal panel. The connected waiting paths are not reproduced (need a live pending move).
 
 Verified offline in the browser: open stocked stall (Tomas), closed stall with stock (Pema, no goods outside, Closed card), vacant stall, reopening at 08:00 (shutter up, goods back), resident delivery to an open stall and to a shut stall (state injected to close her: labelled), trade and haggle panels with the mission visible, panel open at 20:58 (clock holds while trading), 1280x720 and 1920x1080, day and night. Not verified: a live resident delivery to a closed stall on testnet; sold-out display (no stall reached 0 stock in play). 13/13 checks, voice check, typecheck, build.
 
