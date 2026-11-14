@@ -34,6 +34,15 @@ const canSell3 = (s: EconomyState, id: MerchantId): boolean => s.merchants[id].s
 export const noSeller = (s: EconomyState): boolean => !(["tomas", "mira", "pema"] as const).some((id) => canSell3(s, id));
 /** Nobody bids for mangoes right now (a closed stall still takes reopening deliveries, so this is rare). */
 const noBuyer = (s: EconomyState): boolean => MERCHANT_IDS.every((id) => !bidFor(s, id, "mango"));
+/** The purse covers a haggled lot of 3 at the tutor seller (a haggle never goes under 55% of the ask). */
+const canBuyLot = (s: EconomyState): boolean => s.player.coins >= Math.ceil(3 * quote(s, tutorSeller(s), "mango").price * 0.55);
+/** Where the haggle lesson can happen now: buying at the tutor seller, else selling to the best bid; null = nobody. */
+export const haggleWith = (s: EconomyState): MerchantId | null => {
+  if (!noSeller(s) && canBuyLot(s)) return tutorSeller(s);
+  if (s.player.inventory.mango <= 0) return null;
+  const best = MERCHANT_IDS.map((id) => ({ id, b: bidFor(s, id, "mango")?.price ?? 0 })).filter((x) => x.b > 0).sort((a, b) => b.b - a.b)[0];
+  return best?.id ?? null;
+};
 
 /** Who sells the tutorial its mangoes: Tomas, unless the shared market has closed him or emptied his crates. */
 export const tutorSeller = (s: EconomyState): MerchantId => {
@@ -89,19 +98,27 @@ export const STEPS: readonly Step[] = [
     id: "deliver", title: (s) => (s.flags.tutSeller === "pema" ? "Sell your mangoes where they pay most" : "Sell your mangoes: Pema needs them"), target: "pema",
     detail: (s) => {
       const b = bidFor(s, "pema", "mango")?.price;
+      if (noBuyer(s)) return "Nobody is bidding for mangoes this minute: stalls bid again each market turn (about a minute). Keep your mangoes; the lesson waits for a buyer.";
       if (b) return `Pema bids ${b} c a mango and needs stock to sell before rent. Other stalls post their own bids: the trade panel compares them. Your call.`;
       // her shelves are full and her till is what's short (seen live): selling her stock cannot help; coins can
       return `Pema's shelves are full and she isn't buying: what she lacks is coins. Sell your mangoes where they pay, or buy from her to fill her till.`;
     },
-    // nobody bidding at all would block the lesson: then it moves on (the mangoes stay in the bag for later)
-    done: (s) => f(s, "deliveredPema") || f(s, "soldElsewhere") || noBuyer(s),
+    // never skipped: selling is the lesson. With nobody bidding this minute it says so and waits for the next market turn
+    done: (s) => f(s, "deliveredPema") || f(s, "soldElsewhere"),
     reward: "",
   },
   {
-    id: "haggle", title: (s) => `Haggle with ${NAMES[tutorSeller(s)]}`, target: tutorSeller,
-    detail: () => "Buy again, but press Haggle and try a tactic. Watch the patience bar.",
-    // a haggle needs a stall that can sell 3 and a purse for them; with neither, the lesson waits for no one
-    done: (s) => f(s, "haggled") || noSeller(s) || s.player.coins < 3 * quote(s, tutorSeller(s), "mango").price * 0.55,
+    // a haggle on a purchase or on a sale both teach it, so a shut or sold-out market (or a short purse) points to a stall
+    // that bids instead; only with nobody to trade with does it wait, and it says why
+    id: "haggle", title: (s) => { const w = haggleWith(s); return w ? `Haggle with ${NAMES[w]}` : "Haggle once a stall can trade"; },
+    target: (s) => haggleWith(s) ?? "orchard",
+    detail: (s) => {
+      const w = haggleWith(s);
+      if (w && w === tutorSeller(s) && canBuyLot(s)) return "Buy again, but press Haggle and try a tactic. Watch the patience bar.";
+      if (w) return `${noSeller(s) ? "No stall can sell you 3 mangoes right now" : "Your purse is short for a lot of 3"}, so haggle on a sale: open ${NAMES[w]}'s Sell tab, press Haggle and try a tactic.`;
+      return `Nobody can trade mangoes with you this minute: stalls restock and bid again each market turn (about a minute). Free mangoes at the Orchard ${orchardWhen(s)} let you haggle on a sale.`;
+    },
+    done: (s) => f(s, "haggled"),
     reward: "You can haggle with every merchant now.",
   },
   {

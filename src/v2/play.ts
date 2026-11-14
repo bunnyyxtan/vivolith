@@ -1114,7 +1114,8 @@ export async function createPlay(game: Game): Promise<Play> {
       say = gaveUp > 0 ? (total >= cost ? `You made ${total - cost} c and left ${gaveUp} c in my till? ${playerName(state)}. Look at my shelves!` : `${cost - total} c out of your own pocket, for my shelves? I won't forget this.`) : `Bought for ${cost} c, sold for ${total} c: you made ${total - cost} c. And look at my shelves!`;
       market.say("pema", `You saved my morning, ${playerName(state)}!`, 4); // recorded voice for the default name; other names are spoken by the voice route or not at all
     }
-    if (h.mode === "buy" && h.moves > 0) { state.flags.haggled = true; if (out.gain > 0) say = `${out.gain} c cheaper than the first offer. Nicely done.`; }
+    if (h.moves > 0) state.flags.haggled = true; // a haggle on a sale teaches it too (the lesson's way round a market with no seller)
+    if (h.mode === "buy" && h.moves > 0 && out.gain > 0) say = `${out.gain} c cheaper than the first offer. Nicely done.`;
     if (h.mode === "sell" && h.merchant === "arin") state.flags.soldArin = true;
     if (h.mode === "sell" && h.moves > 0 && out.gain > 0) say = `${out.gain} c more than the first offer.`;
     if (h.mode === "sell") recordRestock(state, h.merchant, h.qty);
