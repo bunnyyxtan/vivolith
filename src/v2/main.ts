@@ -19,7 +19,11 @@ async function boot(): Promise<void> {
   game.start();
   loader.progress(1);
   window.setTimeout(() => loader.hide(), 350); // the first frames render behind the fading loader
+  if (import.meta.env.DEV) exposeDevHooks(game, gameplay);
+}
 
+// Dev server only (Vite drops this from production builds): playtest helpers on window.__v2 for the browser console.
+function exposeDevHooks(game: Awaited<ReturnType<typeof createGame>>, gameplay: Awaited<ReturnType<typeof createPlay>>): void {
   const { look, player, rig, step } = game;
   const post = async (name: string): Promise<string> => {
     game.render();
