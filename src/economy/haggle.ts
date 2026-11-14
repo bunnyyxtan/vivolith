@@ -341,7 +341,8 @@ export function verifyDealUnit(s: EconomyState, id: MerchantId, side: Mode, good
  *  so the relayer allows it once per player (a Redis claim) and only inside the old window. Pema's first delivery is
  *  paid at her posted bid (a scripted 6 c sank her: she resells at 5 c). */
 export function newcomerPrice(side: Mode, id: MerchantId, unit: number, reference: number): "buy" | null {
-  if (side === "buy" && (id === "tomas" || id === "mira") && unit <= reference && unit >= Math.max(Math.ceil(reference * 0.55), 4)) return "buy";
+  // floor 3 (src/v2/guide.ts NEWCOMER_FLOOR): at 4 c the first lesson broke even whenever Pema also bid 4 c (live 2026-11-14)
+  if (side === "buy" && (id === "tomas" || id === "mira") && unit <= reference && unit >= Math.max(Math.ceil(reference * 0.55), 3)) return "buy";
   return null;
 }
 

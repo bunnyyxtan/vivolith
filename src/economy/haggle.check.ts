@@ -138,6 +138,8 @@ assert.equal(dealTotal(frac("sell")), 12);
   assert.ok(verifyDealUnit(s, "arin", "sell", "mango", sref, []).ok && !verifyDealUnit(s, "arin", "sell", "mango", sref + 1, []).ok, "selling above the reference needs a haggle");
   // scripted first-day prices are only a candidate; the relayer still claims them once per player
   assert.equal(newcomerPrice("sell", "pema", 6, sref), null, "no scripted sale price any more");
+  // the first lesson must profit at Pema's usual 4 c bid even when Tomas asks 4 c: newcomer floor 3 c, never under 55%
+  assert.equal(newcomerPrice("buy", "tomas", 3, 4), "buy"); assert.equal(newcomerPrice("buy", "tomas", 2, 4), null); assert.equal(newcomerPrice("buy", "tomas", 3, 6), null);
   assert.equal(newcomerPrice("sell", "pema", 9, sref), null);
   assert.equal(newcomerPrice("buy", "pema", ref - 1, ref), null);
 }

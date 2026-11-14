@@ -24,9 +24,10 @@ export interface Step {
 
 const f = (s: EconomyState, k: string): boolean => s.flags[k] === true;
 
-/** The newcomer's price floor at the tutorial seller (the relayer's newcomerPrice allows a buy down to 4 c once).
- *  Pema's first delivery is paid at her real posted bid: a scripted price above what she resells for would sink her. */
-export const NEWCOMER_FLOOR = 4;
+/** The newcomer's price floor at the tutorial seller (the relayer's newcomerPrice allows a buy down to 3 c once), so the
+ *  first resale to Pema at her real bid (usually 4 c) makes a profit. Pema's delivery is paid at her real posted bid: a
+ *  scripted price above what she resells for would sink her. */
+export const NEWCOMER_FLOOR = 3;
 
 /** Who sells the tutorial its mangoes: Tomas, unless the shared market has closed him or emptied his crates. */
 export const tutorSeller = (s: EconomyState): MerchantId => {

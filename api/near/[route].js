@@ -12939,6 +12939,7 @@ var lines_default = {
 		"A full crate saves me the walk at seven.",
 		"A later rent has closed her since.",
 		"A normal day: the usual price.",
+		"A partner buying shares in your stall can help pay that fee.",
 		"A partner!",
 		"A quiet stretch: every stall stayed open and prices held.",
 		"A stall that can't pay closes until it is restocked.",
@@ -13768,6 +13769,7 @@ var lines_default = {
 		"YOU",
 		"You",
 		"You again.",
+		"You buy surplus cheaply from other stalls and resell it for a little less than they do.",
 		"You can haggle with every merchant now.",
 		"You carried the plan out today.",
 		"You don't have enough coins for that.",
@@ -13780,9 +13782,11 @@ var lines_default = {
 		"You have no mangoes to sell.",
 		"You have none to sell.",
 		"You have not traded with this customer before.",
+		"You hold the harbor berth, so your mangoes come in by sea and you sell in bulk; Pema's crates are stuck in the harbor hold.",
 		"You look like someone who walks fast.",
 		"You never sign anything or pay a fee: the game covers it.",
 		"You own",
+		"You run the tea house and turn mangoes into lassi in your kitchen; you always need mangoes.",
 		"You said that already.",
 		"You saved my morning, Kavi!",
 		"You stay on this browser's account, and the coins, goods and shares you hold on NEAR stay in it.</p> <p class=\"confirm\"><button data-act=\"reset\"><kbd>Enter</kbd>Start over</button><button data-act=\"keep\"><kbd>Esc</kbd>Keep playing</button></p></div>",
@@ -13802,6 +13806,7 @@ var lines_default = {
 		"Your guest progress came with you.",
 		"Your loss.",
 		"Your name",
+		"Your own crates of mangoes are stuck in the harbor hold until a storage fee is paid; Tomas has the harbor berth, so he sits on a pile of mangoes while you wait.",
 		"Your part",
 		"Your purse",
 		"Your purse was re-checked.",
@@ -15443,7 +15448,7 @@ function verifyDealUnit(s, id, side, good, unit, tactics, rep = 0) {
 *  so the relayer allows it once per player (a Redis claim) and only inside the old window. Pema's first delivery is
 *  paid at her posted bid (a scripted 6 c sank her: she resells at 5 c). */
 function newcomerPrice(side, id, unit, reference) {
-	if (side === "buy" && (id === "tomas" || id === "mira") && unit <= reference && unit >= Math.max(Math.ceil(reference * .55), 4)) return "buy";
+	if (side === "buy" && (id === "tomas" || id === "mira") && unit <= reference && unit >= Math.max(Math.ceil(reference * .55), 3)) return "buy";
 	return null;
 }
 // server/near/memory.ts
@@ -15609,6 +15614,15 @@ function playerFacts(receipts, npcAccount) {
 	if (!mine.length) return ["You have not traded with this customer before."];
 	return mine.map((r) => `This customer ${r.kind} ${r.qty} ${r.token_id} ${r.kind === "bought" ? "from" : "to"} you at ${r.price} coins each.`);
 }
+/** Each merchant's own story, as the game tells it (Pema's greeting, the harbor hold): without it the model answered
+*  "I don't know anything about crates or the harbor" right after Pema's own greeting said her crates were stuck there.
+*  No numbers, so the grounding guard is unaffected. */
+const STORY = {
+	pema: "Your own crates of mangoes are stuck in the harbor hold until a storage fee is paid; Tomas has the harbor berth, so he sits on a pile of mangoes while you wait. A partner buying shares in your stall can help pay that fee.",
+	tomas: "You hold the harbor berth, so your mangoes come in by sea and you sell in bulk; Pema's crates are stuck in the harbor hold.",
+	mira: "You buy surplus cheaply from other stalls and resell it for a little less than they do.",
+	arin: "You run the tea house and turn mangoes into lassi in your kitchen; you always need mangoes."
+};
 /** Facts for a merchant: the chain, the readable pricing rules (src/economy/pricing.ts), decision, memory, the player. */
 function factsFor(st, id, offers, receipts, extra = {}) {
 	const m = st.merchants[id];
@@ -15620,6 +15634,7 @@ function factsFor(st, id, offers, receipts, extra = {}) {
 	const mFacts = memoryFacts(extra.memory ?? [], "mango", 2);
 	const facts = [
 		`You are ${m.name} and you run ${m.shop} in Saltlight Market.`,
+		STORY[id],
 		`Your stall is ${m.status === "open" ? "open" : "closed because rent went unpaid"}.`,
 		`Your till holds ${Math.floor(m.cash)} coins. Rent is ${m.rent} coins every ${m.rentEveryDays} market days.`,
 		`On your shelves: ${m.stock.mango} mangoes, ${m.stock.lemon} lemons, ${m.stock.lassi} lassi.`,

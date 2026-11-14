@@ -86,6 +86,16 @@ export function playerFacts(receipts: readonly Receipt[], npcAccount: string): s
   return mine.map((r) => `This customer ${r.kind} ${r.qty} ${r.token_id} ${r.kind === "bought" ? "from" : "to"} you at ${r.price} coins each.`);
 }
 
+/** Each merchant's own story, as the game tells it (Pema's greeting, the harbor hold): without it the model answered
+ *  "I don't know anything about crates or the harbor" right after Pema's own greeting said her crates were stuck there.
+ *  No numbers, so the grounding guard is unaffected. */
+const STORY: Readonly<Record<MerchantId, string>> = {
+  pema: "Your own crates of mangoes are stuck in the harbor hold until a storage fee is paid; Tomas has the harbor berth, so he sits on a pile of mangoes while you wait. A partner buying shares in your stall can help pay that fee.",
+  tomas: "You hold the harbor berth, so your mangoes come in by sea and you sell in bulk; Pema's crates are stuck in the harbor hold.",
+  mira: "You buy surplus cheaply from other stalls and resell it for a little less than they do.",
+  arin: "You run the tea house and turn mangoes into lassi in your kitchen; you always need mangoes.",
+};
+
 /** Facts for a merchant: the chain, the readable pricing rules (src/economy/pricing.ts), decision, memory, the player. */
 export function factsFor(st: EconomyState, id: MerchantId, offers: readonly Offer[], receipts: readonly Receipt[], extra: { decision?: Decision | null; memory?: readonly MemoryRow[]; player?: readonly string[] } = {}): { facts: string[]; script: string; topics: Record<string, string>; ledger: Ledger } {
   const m = st.merchants[id];
@@ -97,6 +107,7 @@ export function factsFor(st: EconomyState, id: MerchantId, offers: readonly Offe
   const mFacts = memoryFacts(extra.memory ?? [], "mango", 2);
   const facts = [
     `You are ${m.name} and you run ${m.shop} in Saltlight Market.`,
+    STORY[id],
     `Your stall is ${m.status === "open" ? "open" : "closed because rent went unpaid"}.`,
     `Your till holds ${Math.floor(m.cash)} coins. Rent is ${m.rent} coins every ${m.rentEveryDays} market days.`,
     `On your shelves: ${m.stock.mango} mangoes, ${m.stock.lemon} lemons, ${m.stock.lassi} lassi.`,
