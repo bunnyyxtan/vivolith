@@ -432,4 +432,22 @@ const calls = (method: string, filter: (a: Record<string, string>) => boolean = 
   assert.equal((await say({ speaker: "mira", text: long(99) }, "198.51.100.4")).status, 200, "another player is still voiced");
   assert.equal(ttsCalls, paid + 1);
 }
+// 17. live 2026-11-14: Pema, Tomas and Mira were closed (each 1 mango short) and Arin sold no mangoes, so a new player
+// could buy none until Orchard hours. Tomas's harbor contract keeps landing (paid freight) while he is closed, and the
+// contract counts those mangoes toward his reopening.
+{
+  nextDay(); sent.length = 0; failedTx.length = 0; offers = [];
+  reset({ pema: { open: false, coin: 0, mango: 8, need: 1 }, tomas: { open: false, coin: 29, mango: 26, need: 1 }, mira: { open: false, coin: 29, mango: 7, need: 1 } }, 0, false);
+  const t = await turn();
+  const mint = calls("operator_mint", (a) => a.account_id === acct("tomas") && a.token_id === "mango")[0];
+  const freight = calls("operator_burn", (a) => a.account_id === acct("tomas") && a.token_id === "coin")[0];
+  assert.ok(mint && Number(mint.args.amount) >= 1, `the harbor delivered to closed Tomas: ${(t.log as string[]).join("\n")}`);
+  assert.equal(Number(freight?.args.amount), 2 * Number(mint.args.amount), "he paid the freight from his own till");
+  assert.ok((t.log as string[]).some((l) => /counts toward his reopening/.test(l)));
+  // with no coin for freight nothing lands: the delivery is never free
+  nextDay(); sent.length = 0;
+  reset({ tomas: { open: false, coin: 0, mango: 26, need: 1 } }, 0, false);
+  await turn();
+  assert.equal(calls("operator_mint", (a) => a.account_id === acct("tomas") && a.token_id === "mango").length, 0, "no freight paid, no delivery");
+}
 console.log("market turn handler checks passed");

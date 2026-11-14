@@ -14351,6 +14351,7 @@ var lines_default = {
 		"rent_ok",
 		"rent_risk",
 		"reopen",
+		"reopenNeed.tomas",
 		"reopened",
 		"report.from",
 		"reprice",
@@ -17131,6 +17132,15 @@ function rentToCharge(m, day, reopenedDay, graceUnused) {
 		grace: false
 	};
 }
+/** Whether the harbor's standing contract delivers to Tomas this turn: on any turn he is nearly out or his stall is
+*  closed, else once a market day (`claimDaily`, the caller's once-guard) when he is below his normal stock.
+*  A closed Tomas still receives, and pays for, his contract: the contract counts those mangoes toward his reopening.
+*  Before, the contract stopped with his shutters, so with every fruit stall closed no mango entered the market and a
+*  new player could not buy one until Orchard hours (live 2026-11-14: Pema, Tomas and Mira closed, each 1 mango short). */
+const harborDue = (m, claimDaily) => m.status !== "open" || m.stock.mango < 6 || m.stock.mango < m.target.mango && claimDaily();
+/** Mangoes the harbor lands: up to 140% of his normal stock (at least what reopens a closed stall), as many as his till
+*  pays freight for at `cost` a mango. */
+const harborQty = (m, reopenNeed, cost) => Math.max(0, Math.min(Math.max(m.status === "open" ? 0 : reopenNeed, Math.round(m.target.mango * 1.4) - m.stock.mango), Math.floor(m.cash / cost)));
 /** Whole units street shoppers buy this turn from a fractional demand, carrying the remainder (exact over time).
 *  An empty shelf keeps at most one pending buyer, so demand never piles up while there is nothing to sell. */
 function touristUnits(want, carry, stock) {
@@ -18952,8 +18962,8 @@ async function tickBody(cfg, env, trusted, scope, ops, full) {
 		const c = Number(await kv(cfg, ["GET", `vivolith:carry:${id}:${good}`]).catch(() => null) ?? 0);
 		carriedIn.set(`${id}:${good}`, Number.isFinite(c) ? c : 0);
 	}
-	const tomas0 = st.merchants.tomas, nearlyOut = tomas0.stock.mango < 6;
-	const harborDue = full && tomas0.status === "open" && (nearlyOut || tomas0.stock.mango < tomas0.target.mango) && (nearlyOut || await hit(cfg, `harbor:${day}`, 1, Math.ceil(600)));
+	let claimed = false;
+	const harborDueNow = full && harborDue(st.merchants.tomas, () => claimed = true) && (!claimed || await hit(cfg, `harbor:${day}`, 1, Math.ceil(600)));
 	/** The batch for the stock in `st` right now: street shoppers, the harbor contract, the tea kitchen. */
 	const operatorBatch = () => {
 		const op = [], lines = [], carry = /* @__PURE__ */ new Map();
@@ -18975,21 +18985,21 @@ async function tickBody(cfg, env, trusted, scope, ops, full) {
 			}
 		}
 		const tomas = st.merchants.tomas;
-		const harborQty = harborDue ? Math.min(Math.round(tomas.target.mango * 1.4) - tomas.stock.mango, Math.floor(tomas.cash / HARBOR_COST)) : 0;
-		if (harborQty > 0) {
+		const landed = harborDueNow ? harborQty(tomas, Number(st.flags["reopenNeed.tomas"] ?? 1), HARBOR_COST) : 0;
+		if (landed > 0) {
 			op.push(actions.functionCall("operator_burn", {
 				account_id: `tomas.${cfg.relayerId}`,
 				token_id: "coin",
-				amount: String(harborQty * HARBOR_COST),
+				amount: String(landed * HARBOR_COST),
 				reason: "harbor freight"
 			}, TICK_GAS, 0n));
 			op.push(actions.functionCall("operator_mint", {
 				account_id: `tomas.${cfg.relayerId}`,
 				token_id: "mango",
-				amount: String(harborQty),
+				amount: String(landed),
 				reason: "harbor standing contract"
 			}, TICK_GAS, 0n));
-			lines.push(`harbor delivered ${harborQty} mangoes to tomas for ${harborQty * HARBOR_COST} c`);
+			lines.push(`harbor delivered ${landed} mangoes to tomas for ${landed * HARBOR_COST} c${tomas.status === "open" ? "" : " (counts toward his reopening)"}`);
 		}
 		const arin = st.merchants.arin;
 		const batches = !full ? 0 : Math.min(arin.stock.mango, Math.max(0, Math.ceil((8 - arin.stock.lassi) / 4)));

@@ -71,6 +71,19 @@ export function rentToCharge(m: Merchant, day: number, reopenedDay: number | nul
   return recovering && graceUnused() ? { rent: 0, grace: true } : { rent: m.rent, grace: false };
 }
 
+/** Whether the harbor's standing contract delivers to Tomas this turn: on any turn he is nearly out or his stall is
+ *  closed, else once a market day (`claimDaily`, the caller's once-guard) when he is below his normal stock.
+ *  A closed Tomas still receives, and pays for, his contract: the contract counts those mangoes toward his reopening.
+ *  Before, the contract stopped with his shutters, so with every fruit stall closed no mango entered the market and a
+ *  new player could not buy one until Orchard hours (live 2026-11-14: Pema, Tomas and Mira closed, each 1 mango short). */
+export const harborDue = (m: Merchant, claimDaily: () => boolean): boolean =>
+  m.status !== "open" || m.stock.mango < 6 || (m.stock.mango < m.target.mango && claimDaily());
+
+/** Mangoes the harbor lands: up to 140% of his normal stock (at least what reopens a closed stall), as many as his till
+ *  pays freight for at `cost` a mango. */
+export const harborQty = (m: Merchant, reopenNeed: number, cost: number): number =>
+  Math.max(0, Math.min(Math.max(m.status === "open" ? 0 : reopenNeed, Math.round(m.target.mango * 1.4) - m.stock.mango), Math.floor(m.cash / cost)));
+
 /** Whole units street shoppers buy this turn from a fractional demand, carrying the remainder (exact over time).
  *  An empty shelf keeps at most one pending buyer, so demand never piles up while there is nothing to sell. */
 export function touristUnits(want: number, carry: number, stock: number): { units: number; carry: number } {

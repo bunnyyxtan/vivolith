@@ -23,7 +23,7 @@ import { verifyDecision } from "./verify.ts";
 import type { ChainReceipt, MemoryRow, Snapshot } from "./memory.ts";
 import { addBond, bondFacts, chronicle, putDealRef, readBonds, readChronicle, takeDealRef } from "./ledger.ts";
 import { changedSince, countOf, decisionEvent, eventId, lastDecisionAt, type ChronicleEvent } from "../../src/economy/chronicle.ts";
-import { GRACE_DAYS, guildFillTo, guildPlan, rentToCharge, touristUnits } from "../../src/economy/recovery.ts";
+import { GRACE_DAYS, guildFillTo, guildPlan, harborDue, harborQty, rentToCharge, touristUnits } from "../../src/economy/recovery.ts";
 import { ORCHARD_PICK, agentPriceKey, bidFor, dealBounds, planMerchantTrades, quote } from "../../src/economy/pricing.ts";
 import { newcomerPrice, verifyDealUnit } from "../../src/economy/haggle.ts";
 import { closingNeed, shopperWant } from "../../src/economy/sim.ts";
@@ -1224,11 +1224,12 @@ async function tickBody(cfg: Config, env: RelayEnv, trusted: boolean, scope: "ma
     carriedIn.set(`${id}:${good}`, Number.isFinite(c) ? c : 0);
   }
   // The harbor's standing contract: once a market day when Tomas runs below his normal stock, and on any turn he is
-  // nearly out (so no new player finds the market without mangoes for long). He pays HARBOR_COST a mango; the coin
-  // leaves the economy as freight, as in the offline sim.
-  const tomas0 = st.merchants.tomas, nearlyOut = tomas0.stock.mango < 6;
-  const harborDue = full && tomas0.status === "open" && (nearlyOut || tomas0.stock.mango < tomas0.target.mango)
-    && (nearlyOut || (await hit(cfg, `harbor:${day}`, 1, Math.ceil(MARKET_DAY_MS / 1000))));
+  // nearly out or closed (so no new player finds the market without mangoes for long; the contract counts the mangoes
+  // toward a closed stall's reopening). He pays HARBOR_COST a mango; the coin leaves the economy as freight, as in the
+  // offline sim. Rule: src/economy/recovery.ts harborDue/harborQty. turn.check.ts case 17.
+  let claimed = false;
+  const harborToday = full && harborDue(st.merchants.tomas, () => (claimed = true));
+  const harborDueNow = harborToday && (!claimed || (await hit(cfg, `harbor:${day}`, 1, Math.ceil(MARKET_DAY_MS / 1000))));
   /** The batch for the stock in `st` right now: street shoppers, the harbor contract, the tea kitchen. */
   const operatorBatch = (): { op: ReturnType<typeof actions.functionCall>[]; lines: string[]; carry: Map<string, number> } => {
     const op: ReturnType<typeof actions.functionCall>[] = [], lines: string[] = [], carry = new Map<string, number>();
@@ -1247,11 +1248,11 @@ async function tickBody(cfg: Config, env: RelayEnv, trusted: boolean, scope: "ma
       }
     }
     const tomas = st.merchants.tomas;
-    const harborQty = harborDue ? Math.min(Math.round(tomas.target.mango * 1.4) - tomas.stock.mango, Math.floor(tomas.cash / HARBOR_COST)) : 0;
-    if (harborQty > 0) {
-      op.push(actions.functionCall("operator_burn", { account_id: `tomas.${cfg.relayerId}`, token_id: "coin", amount: String(harborQty * HARBOR_COST), reason: "harbor freight" }, TICK_GAS, 0n));
-      op.push(actions.functionCall("operator_mint", { account_id: `tomas.${cfg.relayerId}`, token_id: "mango", amount: String(harborQty), reason: "harbor standing contract" }, TICK_GAS, 0n));
-      lines.push(`harbor delivered ${harborQty} mangoes to tomas for ${harborQty * HARBOR_COST} c`);
+    const landed = harborDueNow ? harborQty(tomas, Number(st.flags["reopenNeed.tomas"] ?? 1), HARBOR_COST) : 0;
+    if (landed > 0) {
+      op.push(actions.functionCall("operator_burn", { account_id: `tomas.${cfg.relayerId}`, token_id: "coin", amount: String(landed * HARBOR_COST), reason: "harbor freight" }, TICK_GAS, 0n));
+      op.push(actions.functionCall("operator_mint", { account_id: `tomas.${cfg.relayerId}`, token_id: "mango", amount: String(landed), reason: "harbor standing contract" }, TICK_GAS, 0n));
+      lines.push(`harbor delivered ${landed} mangoes to tomas for ${landed * HARBOR_COST} c${tomas.status === "open" ? "" : " (counts toward his reopening)"}`);
     }
     const arin = st.merchants.arin;
     const batches = !full ? 0 : Math.min(arin.stock.mango, Math.max(0, Math.ceil((8 - arin.stock.lassi) / 4)));

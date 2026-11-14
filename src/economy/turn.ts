@@ -8,7 +8,7 @@ import { RESIDENTS, executableOffers, planResident, type Offer } from "./residen
 import { bidFor, planMerchantTrades, quote } from "./pricing.ts";
 import { accrueSale, applyMerchantTrades, closingNeed, shopperWant } from "./sim.ts";
 import { MERCHANT_IDS, type EconomyState, type MerchantId } from "./state.ts";
-import { GUILD_DUES, GUILD_FLOAT, GUILD_FUND, GUILD_HEALTHY, debtOf, guildPlan, rentToCharge, touristUnits, type GuildMove } from "./recovery.ts";
+import { GUILD_DUES, GUILD_FLOAT, GUILD_FUND, GUILD_HEALTHY, debtOf, guildPlan, harborDue, harborQty, rentToCharge, touristUnits, type GuildMove } from "./recovery.ts";
 
 /** Game hours of street trade one turn represents (handlers.ts TICK_HOURS). */
 export const TICK_HOURS = 2;
@@ -116,10 +116,11 @@ export function marketTurn(t: Town, day: number, rules: "old" | "new" = "new"): 
     }
   }
   // the harbor's standing contract for Tomas, and Arin's kitchen (goods only; freight coin is burned)
-  const tom = st.merchants.tomas, nearlyOut = tom.stock.mango < 6;
-  if (tom.status === "open" && (nearlyOut || (tom.stock.mango < tom.target.mango && once(t, `harbor:${day}`)))) {
-    const qty = Math.min(Math.round(tom.target.mango * 1.4) - tom.stock.mango, Math.floor(tom.cash / HARBOR_COST));
-    if (qty > 0) { tom.cash -= qty * HARBOR_COST; burn(t, qty * HARBOR_COST, "harbor freight"); tom.stock.mango += qty; }
+  const tom = st.merchants.tomas;
+  if (harborDue(tom, () => once(t, `harbor:${day}`))) {
+    const qty = harborQty(tom, Number(st.flags["reopenNeed.tomas"] ?? 1), HARBOR_COST);
+    // freight is burned; the mangoes land like a delivery (price 0), so they count toward a closed stall's reopening
+    if (qty > 0) { tom.cash -= qty * HARBOR_COST; burn(t, qty * HARBOR_COST, "harbor freight"); deliver(t, "tomas", qty, 0, day); }
   }
   const arin = st.merchants.arin, batches = Math.min(arin.stock.mango, Math.max(0, Math.ceil((8 - arin.stock.lassi) / 4)));
   if (batches > 0) { arin.stock.mango -= batches; arin.stock.lassi += batches * 4; }
