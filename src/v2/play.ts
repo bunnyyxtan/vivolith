@@ -473,17 +473,22 @@ export async function createPlay(game: Game): Promise<Play> {
   /** Bumped when a value move is sent and when it is answered: a chain read that started before either is stale (it
    *  may predate the move) and is dropped, so a slow read can never undo a trade NEAR already confirmed. */
   let ledgerEpoch = 0;
-  const record = (kind: string, summary: string, tx: Promise<TxOutcome>, confirmed: () => void, refused: (message: string | null) => void): void => {
+  /** Unanswered value moves per stall: reopening that stall's panel keeps it waiting (openTrade), so a second deal is
+   *  never built on numbers the first one has not settled yet. Every answer callback unlocks the panel of its own stall. */
+  const settling = new Map<MerchantId, number>();
+  const record = (kind: string, summary: string, tx: Promise<TxOutcome>, confirmed: () => void, refused: (message: string | null) => void, who: MerchantId): void => {
     const r: Receipt = { id: `${kind}-${state.minute}-${state.receipts.length}`, kind, minute: state.minute, summary, status: "pending" };
     state.receipts.push(r);
     inFlight++;
     ledgerEpoch++;
+    settling.set(who, (settling.get(who) ?? 0) + 1);
     // in-world: a trade needs no status line while it settles (the panel shows the merchant shaking on it)
     // A rejection (e.g. the expired-sign-in fallback losing the network) is an unknown outcome, never a stuck one: without
     // this, inFlight stays above 0, the panel waits forever and every later wallet read is dropped.
     void tx.catch((): TxOutcome => ({ status: "unknown", message: "no answer" })).then((o) => {
       inFlight--;
       ledgerEpoch++;
+      settling.set(who, Math.max(0, (settling.get(who) ?? 1) - 1));
       Object.assign(r, { status: o.status === "unknown" ? "unconfirmed" : o.status, txHash: o.txHash, message: o.message, accountId: playerId() ?? undefined });
       if (o.status === "onchain" || o.status === "local") confirmed();
       if (o.status === "failed") {
@@ -647,6 +652,8 @@ export async function createPlay(game: Game): Promise<Play> {
       : newcomer ? `New in town? ${buyUnit(id)} c a mango, just this once. The board says ${priceOf(state, id).price}.`
       // offline, stocked shelves reopen the stall at 08:00: asking for stock then was a request for nothing
       : closed ? (!chainLive(state) && reopenGap(state, id) === 0 ? "The shutters are down tonight. My shelves are stocked, so I open again at eight." : VOICES[id].lines.closed) : WHO[id].hello;
+    // a deal with this stall is still settling (the panel was closed while waiting): wait for it, as before Esc
+    if (settling.get(id)) { mode = { kind: "trade", npc, id, tab, qty: q, say: "Shaking on it…", tone: "", why: false, h: null, done: AWAITING }; renderTrade(); showPanel("trade"); return; }
     mode = { kind: "trade", npc, id, tab, qty: q, say, tone: closed ? "bad" : "", why: false, h: null, done: 0 };
     speak(id, say);
     renderTrade();
@@ -1070,7 +1077,7 @@ export async function createPlay(game: Game): Promise<Play> {
     mode = { ...mode, h: null, say: `Shaking on it: ${total} c.`, tone: "", done: AWAITING };
     renderTrade();
     record("trade", `${h.mode === "buy" ? "Bought" : "Sold"} ${goodName(h.good, h.qty)} ${h.mode === "buy" ? "from" : "to"} ${name} for ${total} c`,
-      haggleDeal(h.merchant, h.mode, h.good, h.qty, unit, aiPrice(h.merchant, h.mode === "buy" ? "ask" : "bid") ?? 0, h.history, state.player.rep[h.merchant]), () => applyDeal(h, npc), refusedAt(h.merchant, h.mode));
+      haggleDeal(h.merchant, h.mode, h.good, h.qty, unit, aiPrice(h.merchant, h.mode === "buy" ? "ask" : "bid") ?? 0, h.history, state.player.rep[h.merchant]), () => applyDeal(h, npc), refusedAt(h.merchant, h.mode), h.merchant);
   };
   /** NEAR settled the deal: move the goods and coins in the game, then react (story beats, reopened stalls). */
   const applyDeal = (h: HaggleSession, npc: Npc): void => {
@@ -1923,7 +1930,7 @@ export async function createPlay(game: Game): Promise<Play> {
     const m = state.merchants[id];
     const cost = shareCost(id, n);
     if (mode.kind === "trade") { mode = { ...mode, say: `Buying ${n} ${n === 1 ? "share" : "shares"} for ${cost} c.`, tone: "", done: AWAITING }; renderTrade(); }
-    record("invest", `Bought ${n} ${n === 1 ? "share" : "shares"} of ${m.shop} for ${cost} c`, buyPosted(id, `share:${id}`, n, cost), () => applyInvest(id, n), refusedAt(id));
+    record("invest", `Bought ${n} ${n === 1 ? "share" : "shares"} of ${m.shop} for ${cost} c`, buyPosted(id, `share:${id}`, n, cost), () => applyInvest(id, n), refusedAt(id), id);
   };
   /** Sells shares back to the stall: its reserve pays exactly the backing. Coins and shares move once NEAR confirms. */
   const cashOut = (id: MerchantId, n: number): void => {
@@ -1934,10 +1941,10 @@ export async function createPlay(game: Game): Promise<Play> {
     record("invest", `Sold ${n} shares of ${m.shop} back for ${pay} c`, sellPosted(id, `share:${id}`, n, pay), () => {
       sellShares(state, id, n);
       const bye = VOICES[id].lines.shares_sold;
-      if (mode.kind === "trade") { mode = { ...mode, say: `${bye} Done: ${pay} c for ${n} shares. You still own ${state.player.shares[id]}.`, tone: "good", done: RESULT_HOLD }; renderTrade(); }
+      if (mode.kind === "trade" && mode.id === id) { mode = { ...mode, say: `${bye} Done: ${pay} c for ${n} shares. You still own ${state.player.shares[id]}.`, tone: "good", done: RESULT_HOLD }; renderTrade(); }
       void audio.line(id, `${bye} Done`, { openerOnly: true }); // the merchant says it; the figures stay on screen
       drawBoards(); save();
-    }, refusedAt(id));
+    }, refusedAt(id), id);
   };
   const applyInvest = (id: MerchantId, n: number): void => {
     invest(state, id, n);
@@ -1945,7 +1952,7 @@ export async function createPlay(game: Game): Promise<Play> {
     // Pema spends part of her partner's money on the harbor's storage fee: her held crates are finally on the way.
     const released = id === "pema" && payReleaseFee(state, "pema-mangoes", "merchant").ok;
     market.say(id, released ? "A partner! I've paid the harbor. My crates are coming!" : VOICES[id].lines.invest_done, 4);
-    if (mode.kind === "trade") { mode = { ...mode, say: `You now own ${state.player.shares[id]} of ${shareSupply(state, id)} shares.${state.player.shares[id] >= UPGRADE_AT ? " Look at the stall!" : ""}`, tone: "good", done: RESULT_HOLD }; renderTrade(); }
+    if (mode.kind === "trade" && mode.id === id) { mode = { ...mode, say: `You now own ${state.player.shares[id]} of ${shareSupply(state, id)} shares.${state.player.shares[id] >= UPGRADE_AT ? " Look at the stall!" : ""}`, tone: "good", done: RESULT_HOLD }; renderTrade(); }
     drawBoards(); afterProgress(); save();
   };
 

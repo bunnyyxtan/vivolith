@@ -13537,6 +13537,7 @@ var lines_default = {
 		"Sell your mangoes where they pay, or buy from her to fill her till.",
 		"Sell your mangoes: Pema needs them",
 		"Selling fast",
+		"Shaking on it…",
 		"Shard St.",
 		"Shard Street",
 		"Shard Street Goods",
