@@ -1,7 +1,11 @@
 import { createGame } from "./game";
 import { createPlay } from "./play";
-import { createBoot, createMenu } from "./menu";
+import { BOOT_GROUPS, createBoot, createMenu } from "./menu";
 import { cleanUrl, installInspectGuard } from "../near/inspect";
+import { prefetch, releasePrefetch } from "../assets";
+
+// Every model the first screen needs starts downloading now, in parallel (they used to load one after another).
+prefetch(BOOT_GROUPS.flatMap((g) => g.urls));
 
 installInspectGuard(); // /inspect/<account>: read-only, before the game makes any request (src/near/inspect.ts)
 // old query-style links (?ledger, ?inspect=) keep working; the address bar then shows the clean route
@@ -11,17 +15,16 @@ const canvas = document.getElementById("game") as HTMLCanvasElement;
 const loader = createBoot();
 
 async function boot(): Promise<void> {
-  const game = await createGame(canvas, (p) => loader.progress(p * 0.5));
-  // The market (town, merchants, townsfolk) has no progress events: ease the rule toward 95% meanwhile.
-  let eased = 0.5;
-  const ease = window.setInterval(() => { eased += (0.95 - eased) * 0.06; loader.progress(eased); }, 120);
+  // the loader's progress is the bytes that arrived (src/assets.ts), then these two real milestones
+  const game = await createGame(canvas, () => undefined);
+  loader.reached("city");
   const gameplay = await createPlay(game);
-  window.clearInterval(ease);
+  releasePrefetch();
   const menu = createMenu(game, gameplay);
   menu.open();
   game.start();
-  loader.progress(1);
-  window.setTimeout(() => loader.hide(), 350); // the first frames render behind the fading loader
+  loader.reached("ready");
+  window.setTimeout(() => loader.hide(), 450); // the first frames render behind the fading loader
   if (import.meta.env.DEV) exposeDevHooks(game, gameplay);
 }
 
