@@ -1,7 +1,7 @@
 """VIVOLITH v2 level: the NEAR Spire and its plaza in the anime daytime style of the reference video.
 Exports public/models/v2/plaza.glb.
 
-Run inside Blender:  exec(open(r"C:/Bunnyy/Hackathons/NEAR/blender/build_v2_plaza.py").read()); build(); export()
+Run inside Blender:  exec(open(r"blender/build_v2_plaza.py").read()); build(); export()
 
 Reuses the Spire geometry from build_spire.py (same N silhouette) with a bright restyle: vivid blue glass, white
 fins/spandrels/diagrid, cyan LEDs, warm lobby. Around it: a 60 m granite promenade from the south, long reflecting
@@ -9,7 +9,7 @@ pools either side, benches, black lamp posts, rounded stylised trees, hedges, a 
 field ringed by trees so no view ends in empty ground.
 Conventions: COL_* colliders (axis-aligned), SPAWN empty (player start; faces Blender +Y = three -Z).
 """
-exec(open(r"C:/Bunnyy/Hackathons/NEAR/blender/build_spire.py").read())  # Spire builders + street library
+exec(open(r"blender/build_spire.py").read())  # Spire builders + street library
 
 OUT = REPO / "public" / "models" / "v2" / "plaza.glb"
 PROM_X = 6.0          # promenade half width

@@ -11,7 +11,7 @@ Headless:
 """
 import bpy, math, pathlib
 
-REPO = pathlib.Path(r"C:/Bunnyy/Hackathons/NEAR")
+REPO = pathlib.Path.cwd()  # run from the repository root
 P = REPO / "assets-src/tripo/out/merchant/pilot/tripo-out"
 SRC_A = P / "pema-v1-anim-a-8352d615/model.glb"  # idle walk run sit complain_01
 SRC_B = P / "pema-v1-anim-b-340e3d8c/model.glb"  # scared_01

@@ -8,7 +8,7 @@
 import bpy, bmesh
 from mathutils import Vector
 
-SRC = "C:/Bunnyy/Hackathons/NEAR/public/models/v2/props/{}.glb"
+SRC = "public/models/v2/props/{}.glb"
 CARS = ["ev_sedan", "ev_pickup"]
 DARK = 0.16  # texture luma below this is glass, trim or tyre rubber
 

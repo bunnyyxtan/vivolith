@@ -12,7 +12,7 @@ Headless (one or more characters per run):
 """
 import bpy, math, pathlib, sys
 
-REPO = pathlib.Path(r"C:/Bunnyy/Hackathons/NEAR")
+REPO = pathlib.Path.cwd()  # run from the repository root
 SRC = REPO / "assets-src/tripo/library/studio"
 TEX_MAX = 1024
 

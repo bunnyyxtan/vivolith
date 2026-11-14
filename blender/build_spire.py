@@ -1,7 +1,7 @@
 """Builds the NEAR Spire (Protocol Plaza, lobby, NEAR Labs) and exports public/models/spire.glb.
 
 Run inside Blender (MCP for Blender):
-    exec(open(r"C:/Bunnyy/Hackathons/NEAR/blender/build_spire.py").read()); build(); export()
+    exec(open(r"blender/build_spire.py").read()); build(); export()
 
 Design (original architecture, read from the official symbol assets-src/brand/near-symbol.svg):
   The symbol is two vertical bars joined by a stroke running from the top of the left bar to the foot of
@@ -21,7 +21,7 @@ Conventions shared with build_street.py: COL_* colliders, SIGN_<id> runtime-pain
 import bpy, bmesh, math, re, pathlib
 from mathutils import Vector, Matrix
 
-exec(open(r"C:/Bunnyy/Hackathons/NEAR/blender/build_street.py").read())  # library: materials, boxes, assets
+exec(open(r"blender/build_street.py").read())  # library: materials, boxes, assets
 
 OUT = REPO / "public" / "models" / "spire.glb"
 SYMBOL_SVG = REPO / "assets-src" / "brand" / "near-symbol.svg"

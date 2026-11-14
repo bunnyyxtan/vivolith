@@ -5,11 +5,11 @@ Source (assets-src/tripo/out/, git-ignored) came from:
     tripo anim rig @kavi-p2-texture --rig-type biped --spec mixamo
     tripo anim retarget @kavi-rig --animation preset:idle preset:walk preset:run preset:jump preset:turn --animate-in-place
 Run inside Blender (MCP for Blender):
-    exec(open(r"C:/Bunnyy/Hackathons/NEAR/blender/build_kavi_tripo.py").read()); build(); export()
+    exec(open(r"blender/build_kavi_tripo.py").read()); build(); export()
 """
 import bpy, math, pathlib
 
-REPO = pathlib.Path(r"C:/Bunnyy/Hackathons/NEAR")
+REPO = pathlib.Path.cwd()  # run from the repository root
 SRC = REPO / "assets-src/tripo/out/kavi/tripo-out/kavi-anim-903fe5eb/model.glb"
 OUT = REPO / "public/models/v2/kavi.glb"
 CLIPS = {"idle": "Idle", "walk": "Walk", "run": "Run", "turn": "Turn"}

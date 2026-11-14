@@ -12,7 +12,7 @@ These are fictional in-game buildings that use the marks; they are not official 
 import bpy, bmesh, math, random, pathlib
 from mathutils import Vector, Matrix
 
-exec(open(r"C:/Bunnyy/Hackathons/NEAR/blender/build_spire.py").read())  # street library + procedural_tree/tree_materials (overridden helpers below)
+exec(open(r"blender/build_spire.py").read())  # street library + procedural_tree/tree_materials (overridden helpers below)
 
 LM_OUT = REPO / "public" / "models" / "v2" / "landmarks"
 BRAND_DIR = REPO / "public" / "brand"

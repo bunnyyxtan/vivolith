@@ -3,14 +3,14 @@ COL_ collision box, textures capped at 1024 px, Draco + WebP.
 
 Sources: assets-src/tripo/out/ (API) and assets-src/tripo/library/ (Studio exports), both git-ignored;
 see assets-src/tripo/PLAN.md. Run headless (preferred, no clash with other Blender users):
-    blender -b --factory-startup --python-expr "exec(open(r'C:/Bunnyy/Hackathons/NEAR/blender/build_tripo_props.py').read()); build('<name>')"
+    blender -b --factory-startup --python-expr "exec(open(r'blender/build_tripo_props.py').read()); build('<name>')"
 In the live MCP Blender: exec(...); use()  then, in a second call, exec(...); build_all()
 """
 import bpy, math, pathlib
 import numpy as np
 from mathutils import Matrix, Vector
 
-REPO = pathlib.Path(r"C:/Bunnyy/Hackathons/NEAR")
+REPO = pathlib.Path.cwd()  # run from the repository root
 SRC = REPO / "assets-src/tripo"  # out/ = API results, library/ = Studio exports
 OUT = REPO / "public/models/v2/props"
 MINT = np.array([0.62, 0.92, 0.82])  # body tint for NEAR City fleet paint (multiplies near-white texels)

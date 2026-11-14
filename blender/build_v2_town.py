@@ -1,6 +1,6 @@
 """VIVOLITH v2 town south of the Spire promenade. Exports public/models/v2/town.glb and public/models/v2/roads.json.
 
-Run inside Blender:  exec(open(r"C:/Bunnyy/Hackathons/NEAR/blender/build_v2_town.py").read()); build(); export()
+Run inside Blender:  exec(open(r"blender/build_v2_town.py").read()); build(); export()
 
 One designed town (Blender coords; three = (x, z, -y)). The promenade ends at y = -6; the town is x -76..85, y -6..-100.
   Market Avenue   N-S spine, road x -4..4, from the promenade to the town gate (y -100).
@@ -16,7 +16,7 @@ Roads: West Lane (x -48) and East Lane (x 47) run north from Cafe Street to turn
 Geometry is batched per material (few draw calls). Conventions: COL_* colliders, STALL_<id>/NPC_<id>, SPAWN_TOWN,
 PROP_<asset>__<id>, SPOT_<kind>__<id>, LANDMARK_<id>. Lanes and parking go to roads.json.
 """
-exec(open(r"C:/Bunnyy/Hackathons/NEAR/blender/build_v2_plaza.py").read())  # plaza materials, spire lib, street lib
+exec(open(r"blender/build_v2_plaza.py").read())  # plaza materials, spire lib, street lib
 
 OUT = REPO / "public" / "models" / "v2" / "town.glb"
 ROADS_OUT = REPO / "public" / "models" / "v2" / "roads.json"
@@ -2703,4 +2703,4 @@ def build():
     stats()
 
 
-exec(open(r"C:/Bunnyy/Hackathons/NEAR/blender/build_v2_spire_district.py").read())  # the district behind and beside the Spire
+exec(open(r"blender/build_v2_spire_district.py").read())  # the district behind and beside the Spire
