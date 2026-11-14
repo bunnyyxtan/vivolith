@@ -1,7 +1,7 @@
 # VIVOLITH state machines
 
 Where each piece of game state lives, who may change it, and the rules that must always hold. Read this before
-changing trades, rent, the story, the voice or the market turn. Audit of 2026-11-14 (see PROGRESS.md, Phase 6).
+changing trades, rent, the story, the voice or the market turn. Audited 2026-11-14 against production play.
 
 Rule of thumb: **connected, the chain decides value and open/closed; the browser only mirrors it.** Offline
 (`?offline`, or the relayer unconfigured), `src/economy/sim.ts` decides the same things locally and every receipt says

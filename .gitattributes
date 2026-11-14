@@ -1,0 +1,7 @@
+# Built from source by `npm run build:api` (scripts/build-api.mjs); committed because Vercel deploys api/ as is
+api/near/[[]route].js linguist-generated=true -diff
+# Built by scripts/audio/lines.ts from the game's text; voice.check fails when it is stale
+server/near/lines.json linguist-generated=true
+*.glb binary
+*.hdr binary
+*.mp3 binary

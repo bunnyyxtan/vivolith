@@ -5,9 +5,6 @@ Assets we created ourselves (Blender scripts in `blender/`, code-built geometry 
 
 ## Licence scope
 
-Mixamo files were removed from the tree; see [HISTORY_CLEANUP.md](HISTORY_CLEANUP.md) for what remains in Git history.
-
-
 The MIT licence in `LICENSE` covers the code and the assets our Blender scripts build from scratch. It does not cover
 the files below. They are included only so the game builds and runs; do not extract or reuse them outside VIVOLITH.
 
@@ -17,7 +14,7 @@ the files below. They are included only so the game builds and runs; do not extr
 | `public/audio/**` | Generated with ElevenLabs on a paid (Starter) plan | ElevenLabs terms; paid plans allow commercial use |
 | `public/brand/*` (except `vivolith-mark.svg`), `assets-src/brand/**`, the marks modelled into `spire.glb` and `v2/landmarks/*.glb` | NEAR, NEAR AI and NEAR Intents marks | Trademarks of their owners |
 | `public/draco/*` | Draco decoder from three.js | Apache-2.0 |
-| `public/hdri/*`, Poly Haven parts of `saltlight_row.glb` and `spire.glb` | Poly Haven | CC0 |
+| `public/hdri/*`, Poly Haven parts of `spire.glb`, `v2/plaza.glb` and `v2/town.glb` | Poly Haven | CC0 |
 
 ## NEAR brand assets (provided by the team, downloaded from official NEAR brand resources)
 
@@ -26,8 +23,7 @@ the files below. They are included only so the game builds and runs; do not extr
 | `assets-src/brand/near-wordmark.svg` | `logo.svg` | NEAR wordmark + symbol (black). Used as `public/brand/near-wordmark-white.svg` (fill set to white) on the title card |
 | `assets-src/brand/near-symbol.svg` | `favicon.svg` | NEAR symbol. Used as `public/brand/near-symbol.svg` (the tab icon is our own `public/brand/vivolith-mark.svg`) |
 | `public/brand/nearai-primary-color.svg`, `nearai-tile-color.svg`, `nearintents-Logo-Icon.svg` | near.ai/brand; defuse-protocol/defuse-frontend | NEAR AI and NEAR Intents marks on the fictional landmark buildings (`blender/build_landmarks.py`); sources in `public/brand/README.md` |
-| `assets-src/brand/kit/Tertiary/*` | brand kit zip | NEAR app-tile symbol. `tile-color.svg` is the tower clock face |
-| `assets-src/brand/kit/Primary/*`, `Secondary/*` | brand kit zip | **NEAR AI** wordmarks: kept for reference, not used in game (this is a NEAR game, not a NEAR AI product) |
+| `assets-src/brand/kit/Tertiary/01_Color/tile-color.svg`, `tile-color@1x.png` | brand kit zip | NEAR app-tile symbol, read by `blender/build_street.py` |
 
 Usage follows the NEAR brand guidelines (v2.0 PDF, not committed, 44 MB): no recoloring beyond the
 official monochrome versions, no effects on the logo, and the symbol is used sparingly. Palette used: Blue
@@ -36,8 +32,10 @@ Montreal) is commercial and not bundled; the UI uses system fonts.
 
 ## Poly Haven (CC0 1.0, no attribution required; credited anyway)
 
-Downloaded by `tools/fetch_polyhaven.py` into `assets-src/downloads/polyhaven/` (not committed),
-assembled, decimated and texture-capped by `blender/build_street.py` into `public/models/saltlight_row.glb`.
+Downloaded by `tools/fetch_polyhaven.py` into `assets-src/downloads/polyhaven/` (not committed), then assembled,
+decimated and texture-capped by the Blender builds (`blender/build_street.py` is the shared material and asset library
+that `build_spire.py`, `build_v2_plaza.py` and `build_v2_town.py` load). The first table lists the street library's
+assets; the second, those added for the NEAR Spire.
 License: https://polyhaven.com/license
 
 | Asset | Author(s) | Used for |
