@@ -446,7 +446,8 @@ export async function createPlay(game: Game): Promise<Play> {
     const r = el("div", "hud-clock"); r.textContent = rank; r.title = "Your rank: coins, goods and the buy-back value of your shares"; hud.wallet.append(r);
     if (showClock) {
       const c = el("div", "hud-clock");
-      c.append(document.createTextNode(ff ? `${clock} · fast-forward (T to stop)` : clock));
+      // the purse and stalls shown meanwhile are the forecast's, not the chain's: say so where they are seen
+      c.append(document.createTextNode(ff ? `${clock} · forecast, not real trades (T to stop)` : clock));
       hud.wallet.append(c);
       // whose rent, when, and whether they can pay: never a bare "rent at 21:00" that reads like the player's bill
       if (!ff && hint) {
@@ -504,6 +505,7 @@ export async function createPlay(game: Game): Promise<Play> {
     if (message && /price moved/.test(message)) { aiCheckedAt.delete(id); void refreshDecision(id); } // the live price changed under this screen: re-read it
     const why = message === null ? "The market didn't confirm in time. Your purse was re-checked." : refusal(message, side);
     if (mode.kind === "trade" && mode.id === id) {
+      moved = null; // the last confirmed trade's line ("Pema's till: 30 c") must not sit beside a refusal (seen live)
       mode = { ...mode, h: null, say: why, tone: "bad", done: RESULT_HOLD }; renderTrade();
       if (message !== null) void audio.line(id, why); // the merchant's refusal; a timeout notice is the game's, not theirs
     }
@@ -1186,6 +1188,9 @@ export async function createPlay(game: Game): Promise<Play> {
     player.frozen = true;
     npc.talking = false; // listening: the mouth moves only while their voice plays (audio.onVoice)
     for (const n of market.npcs) n.listening = n === npc; // they stop serving and face Kavi until the conversation ends
+    // the trade camera looks past Kavi at the merchant, and their own price board stands on that line (live 1920x1080:
+    // Tomas fully hidden behind it); the panel shows the same price, so the board steps aside while you talk
+    for (const n of market.npcs) if (n.board) n.board.mesh.visible = n !== npc;
   };
   const openTalk = (npc: Npc, convo?: Conversation): void => {
     const c = convo ?? CONVERSATIONS[npc.id];
@@ -1197,7 +1202,9 @@ export async function createPlay(game: Game): Promise<Play> {
   };
   /** Conversation over (closed, or another character addressed): no stale voice, no pending answer. */
   const hush = (): void => { audio.stop(); live = null; asking = null; asked = null; lastTalk = ""; };
+  const showBoards = (): void => { for (const n of market.npcs) if (n.board) n.board.mesh.visible = true; };
   const endPanel = (): void => {
+    showBoards();
     hush();
     if (mode.kind === "trade" || mode.kind === "talk") { mode.npc.talking = false; mode.npc.listening = false; }
     mode = { kind: "walk" };
@@ -1210,7 +1217,7 @@ export async function createPlay(game: Game): Promise<Play> {
 
   // ---------------------------------------------------------------- overlays: notebook and reports ----
   const openCard = (build: (card: HTMLDivElement) => void): void => {
-    if (mode.kind === "trade" || mode.kind === "talk") { hush(); mode.npc.talking = false; mode.npc.listening = false; hidePanel(); }
+    if (mode.kind === "trade" || mode.kind === "talk") { hush(); mode.npc.talking = false; mode.npc.listening = false; hidePanel(); showBoards(); }
     mode = { kind: "card" };
     player.frozen = true;
     hud.card.innerHTML = "";
