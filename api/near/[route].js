@@ -19095,7 +19095,8 @@ async function handle(route, req, env) {
 				status: "error",
 				message: "not a line of this game"
 			});
-			const charge = (n) => hit(cfg, "voice:chars", LIMITS.voiceChars.max, LIMITS.voiceChars.windowSec, n);
+			const cap = Math.min(LIMITS.voiceChars.max, Number(e.VIVOLITH_VOICE_DAILY_CHARS) > 0 ? Number(e.VIVOLITH_VOICE_DAILY_CHARS) : Infinity);
+			const charge = (n) => hit(cfg, "voice:chars", cap, LIMITS.voiceChars.windowSec, n);
 			const r = await synthesize(speaker, text, e.ELEVENLABS_API_KEY?.trim(), {
 				mood,
 				mock,

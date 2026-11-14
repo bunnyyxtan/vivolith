@@ -1351,7 +1351,9 @@ export async function handle(route: string, req: Request, env: RelayEnv): Promis
       const speaker = String(b.speaker ?? ""), text = voiceText(String(b.text ?? "")), mood = typeof b.mood === "string" ? b.mood : "neutral";
       // only lines the server validated (speech token) or lines made of the game's own words: not a general TTS service
       if (!speechTokenOk(voiceSecret(e.NEAR_MERCHANT_SECRET), b.token, speaker, mood, text) && !gameLine(text)) return json(403, { status: "error", message: "not a line of this game" });
-      const charge = (n: number): Promise<boolean> => hit(cfg, "voice:chars", LIMITS.voiceChars.max, LIMITS.voiceChars.windowSec, n);
+      // VIVOLITH_VOICE_DAILY_CHARS: a lower shared cap for a bounded live test (never raises the default)
+      const cap = Math.min(LIMITS.voiceChars.max, Number(e.VIVOLITH_VOICE_DAILY_CHARS) > 0 ? Number(e.VIVOLITH_VOICE_DAILY_CHARS) : Infinity);
+      const charge = (n: number): Promise<boolean> => hit(cfg, "voice:chars", cap, LIMITS.voiceChars.windowSec, n);
       const r = await synthesize(speaker, text, e.ELEVENLABS_API_KEY?.trim(), { mood, mock, charge });
       return json(r.status, r.body);
     }
