@@ -17,14 +17,14 @@ transaction. NEAR AI moves some prices, one coin at a time, inside fixed bounds.
 
 ## The core loop: one decision, traced end to end
 
-Auntie Pema missed rent and her stall is shut. She can pay you 1 c a mango, the coins she still has. Arin pays 5 c
-more. That choice is the game.
+A stall that misses rent shuts its shutters. One delivered mango reopens it, even when another stall pays the same or
+more for that mango. That choice is the game.
 
 | You choose to help her | The town changes |
 |---|---|
-| ![Pema's stall closed: one more mango reopens it, while Arin pays 5 c more](docs/media/choice-closed-stall.jpg) | ![The shutters go up: "We're open again, thanks to you!"](docs/media/consequence-stall-reopens.jpg) |
+| ![Mira's stall closed after rent: one more mango reopens it, and Tomas pays the same](docs/media/choice-closed-stall.jpg) | ![The shutters go up: "We're open again, thanks to you!"](docs/media/consequence-stall-reopens.jpg) |
 
-What happened, step by step, on production on 2026-11-14 (NEAR testnet, checkable with `npm run verify`):
+Left: Mira's stall on production after the 2026-11-14 fixes. Right and below: Pema's reopening, step by step, on production on 2026-11-14 (NEAR testnet, checkable with `npm run verify`):
 
 | Step | What happened | Transaction |
 |---|---|---|
