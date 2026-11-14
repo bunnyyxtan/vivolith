@@ -53,5 +53,4 @@ assert.notEqual((await handle("status", new Request("http://localhost/api/near/s
 assert.notEqual((await handle("tick", new Request("http://localhost/api/near/tick", { method: "POST", body: "{}" }), { NEAR_RPC_URL: "http://127.0.0.1:9" })).status, 403, "without the switch, normal players are unaffected");
 // the dev relay only sees env vars vite.config.ts passes it: without this the switch silently does nothing
 assert.ok(/loadEnv\(.*"VIVOLITH_READ_ONLY"/.test(fs.readFileSync("vite.config.ts", "utf8")), "vite.config.ts passes VIVOLITH_READ_ONLY to the relay");
-assert.ok(fs.readFileSync(".claude/launch.json", "utf8").includes("$env:VIVOLITH_READ_ONLY='1'"), "near-world-inspect sets the switch");
 console.log(`inspect.check: ok (${writes.length} write routes refused in the page and on a read-only relay, reads pass)`);

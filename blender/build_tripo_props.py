@@ -1,8 +1,8 @@
 """Tripo assets -> game-ready GLBs: real-world scale, forward = Blender -Y (glTF +Z), on the ground,
 COL_ collision box, textures capped at 1024 px, Draco + WebP.
 
-Sources: assets-src/tripo/out/ (API) and assets-src/tripo/library/ (Studio exports), both git-ignored;
-see assets-src/tripo/PLAN.md. Run headless (preferred, no clash with other Blender users):
+Sources: assets-src/tripo/out/ (API) and assets-src/tripo/library/ (Studio exports), both git-ignored
+(Tripo outputs are not redistributed as source files). Run headless (preferred, no clash with other Blender users):
     blender -b --factory-startup --python-expr "exec(open(r'blender/build_tripo_props.py').read()); build('<name>')"
 In the live MCP Blender: exec(...); use()  then, in a second call, exec(...); build_all()
 """

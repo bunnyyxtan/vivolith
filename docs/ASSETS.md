@@ -99,8 +99,7 @@ belfry/roof/lantern, string lights, shop signs.
 
 Generated on tripo3d.ai with the team's paid API credits, then made game-ready by `blender/build_kavi_tripo.py`,
 `blender/build_tripo_props.py` and `blender/fix_cars.py` (scale, ground, collision, texture cap, wheel split, shading).
-Raw outputs stay in `assets-src/tripo/out/` and `library/` (git-ignored); prompts, costs and inputs are in
-`assets-src/tripo/PLAN.md`.
+Raw outputs stay in `assets-src/tripo/out/` and `library/` (git-ignored, not redistributed).
 
 | Game file | What |
 |---|---|
