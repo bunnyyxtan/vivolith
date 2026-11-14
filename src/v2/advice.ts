@@ -50,6 +50,20 @@ export function orchardWhen(s: EconomyState): string {
   return `tomorrow from ${hh(ORCHARD_HOURS[0])}`;
 }
 
+/** The Orchard goal's card. While the pickers work, the goal is the move. When they don't, the card leads with what the
+ *  player can do right now, so the title, the instruction and the gold marker all name the same place, and keeps the
+ *  goal as one closing line (live 2026-11-14 20:10: the title said "Pick free mangoes at the Orchard" while the marker
+ *  and the text sent the player to sell to Mira). */
+export function orchardCard(s: EconomyState, now: string): { title: string; label: string; text: string; target: Target | null } {
+  const goal = "Pick free mangoes at the Orchard";
+  if (s.flags.orchardReady === true) {
+    return { title: goal, label: "Goal", target: "orchard", text: `Follow the gold marker to the Mango Orchard sign and press F at the crate: ${ORCHARD_PICK} free mangoes until ${hh(ORCHARD_HOURS[1])}.` };
+  }
+  const m = nextMove(s);
+  if (m.target) return { title: m.title, label: "Meanwhile", target: m.target, text: `${m.text} Goal: free mangoes at the Orchard, ${orchardWhen(s)} (now ${now}).` };
+  return { title: goal, label: "Goal", target: "orchard", text: `The pickers work ${hh(ORCHARD_HOURS[0])} to ${hh(ORCHARD_HOURS[1])} (now ${now}): come back ${orchardWhen(s)}. ${m.text}` };
+}
+
 /** The single best move right now. `orchardReady` is the game's own flag: the pickers are working and today's share is
  *  still in the crate. */
 export function nextMove(s: EconomyState): Move {

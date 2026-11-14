@@ -8,7 +8,7 @@ import { chainLive, reopenGap, SHARE_PACK } from "../economy/sim";
 import { bidFor, quote } from "../economy/pricing";
 import { el, type Hud } from "./hud";
 import { night, type Clock, type Night } from "./story";
-import { cheapestSeller, NAMES, nextMove, orchardWhen, type Target } from "./advice";
+import { cheapestSeller, NAMES, nextMove, orchardCard, orchardWhen, type Target } from "./advice";
 export type { Target } from "./advice";
 
 export interface Step {
@@ -163,7 +163,8 @@ interface Goal {
   /** One line for the goals list (Town tab). */
   detail: string;
   /** The card: the next concrete step from the live market, and where it is. */
-  next: (s: EconomyState) => { text: string; target: Target | null };
+  /** `title`/`label` replace the goal's own when the card leads with something else the player can do now. */
+  next: (s: EconomyState) => { text: string; target: Target | null; title?: string; label?: string };
   meter?: (s: EconomyState) => Meter;
   done: (s: EconomyState) => boolean;
 }
@@ -198,9 +199,7 @@ function sharesNext(s: EconomyState): { text: string; target: Target | null } {
 export const GOALS: readonly Goal[] = [
   {
     id: "orchard", title: "Pick free mangoes at the Orchard", detail: "Press F at the Mango Orchard crate, 06:00 to 11:00: 3 free mangoes a day.",
-    next: (s) => s.flags.orchardReady === true
-      ? { text: "Follow the gold marker to the Mango Orchard sign and press F at the crate: 3 free mangoes until 11:00.", target: "orchard" }
-      : { text: `The pickers work 06:00 to 11:00 (now ${clockNow(s)}): come back ${orchardWhen(s)}. Meanwhile: ${nextMove(s).text}`, target: nextMove(s).target ?? "orchard" },
+    next: (s) => orchardCard(s, clockNow(s)),
     done: (s) => f(s, "pickedOrchard"),
   },
   { id: "arin", title: "Sell mangoes to Arin's tea house", detail: "Arin buys mangoes for his lassi.", next: arinNext, done: (s) => f(s, "soldArin") },
@@ -343,7 +342,7 @@ export function createGuide(hud: Hud, clock: () => Clock): Guide {
     const g = GOALS.find((x) => !x.done(s));
     if (!g) return opportunity(s);
     const n = g.next(s);
-    return { title: g.title, detail: n.text, target: n.target, label: "Goal", meter: g.meter?.(s) };
+    return { title: n.title ?? g.title, detail: n.text, target: n.target, label: n.label ?? "Goal", meter: g.meter?.(s) };
   };
   return {
     current,
