@@ -308,6 +308,35 @@ Known-issue resolution (2026-11-14, local `7673f2b`, `eaf3e03`; no transaction, 
 
 Verified offline in the browser: open stocked stall (Tomas), closed stall with stock (Pema, no goods outside, Closed card), vacant stall, reopening at 08:00 (shutter up, goods back), resident delivery to an open stall and to a shut stall (state injected to close her: labelled), trade and haggle panels with the mission visible, panel open at 20:58 (clock holds while trading), 1280x720 and 1920x1080, day and night. Not verified: a live resident delivery to a closed stall on testnet; sold-out display (no stall reached 0 stock in play). 13/13 checks, voice check, typecheck, build.
 
+## Phase 6: second live production acceptance (2026-11-14 04:20-05:40 UTC, authorized)
+
+**Production: `d6d6f2c` on vivolith.world** (deployment `vivolith-2vsyzc90s`, from the clean release worktree). Rollback:
+`vivolith-hc7b2i49j` (db46f27). Env before: 16 names, no test caps, agents off. Temporary for the run (all removed after,
+the same commit redeployed): NEAR_TEST_TURNS=16, NEAR_TEST_TXS=250, NEAR_TEST_RUN=accept2-1114, NEAR_AGENT_MERCHANTS=arin,
+NEAR_AI_DAILY_DECISIONS=2, NEAR_AI_DAILY_VERIFIES=3, VIVOLITH_VOICE_DAILY_CHARS=2500 (new, `8e1fd71`), CRON_SECRET (kept in
+the scratchpad only, deleted). After: driver players, agents [], no caps, market-turn 401, arbitrary voice 403.
+
+Budgets used: 10 of 16 market turns (6 browser, 4 scheduler), 99 of 250 market-operation transactions (server counter),
+3 paid NEAR AI calls (1 decision, 1 chat, 1 signature check; 10 allowed), 535 ElevenLabs credits (11 057 - 10 522; 1 500
+allowed). Player transactions, counted separately: new guest `gea0f291fa800b181` (create + register, relayer-paid) and 12
+player moves (key nonce 12 = 12 receipts on chain).
+
+| Check | Result | Evidence |
+|---|---|---|
+| Inventory race (`a2f5d23`): operator batch reads stock after residents and merchant trades; a batch refused for moved stock is rebuilt and sent once more (never after an unanswered send) | VERIFIED live + mocked | Turn 1: Lin ate Arin's lassi and shoppers bought 2 lassi in the same turn, 0 failed (the 2026-11-13 failure case). Every scheduler turn read: failed 0. `turn.check` cases 9 (stale stock) and 10 (stock moved mid-turn, at most two sends) fail without the fix |
+| Duplicate prevention: three clicks on Buy | VERIFIED | 1 relay request, 1 receipt `4Pt5tLJ5r1RGkoHqmMEWgiUVSgZk7f4DDVfdSx9EeZdw` |
+| Panel locked while settling; Leave then reopen keeps it waiting | VERIFIED | Reopened panel "Shaking on it…" with only Leave; one sale `44SGB9AjV3wS8Sc3zfYereUBvthSxz4iqu5E4PQoQrT2`; panel unlocked after the result |
+| Reload during a purchase | VERIFIED | Receipt "unconfirmed: the page closed before NEAR answered", never resent; chain unchanged (11 c, 8 mangoes), nonce 9 = 9 receipts |
+| Trades, haggle, invest | VERIFIED | Buys `5TNgGsQT…`, `Cczbcsi2…`; deal at opening price `HnBBtC8H…`; Flatter 12 -> 9 c `8W7QNkMz…`; sales to Arin `6Qw1zUhc…`, `5Kxsk1sS…`; 15 Pema shares `9HLsAAL9…` |
+| Rent Night 1 (day 2991052) | VERIFIED | Pema 11 c < 30 c closed, others paid, Guild lent Mira 3 c; game story "closed" from `lastRent`; delivery `E8NjUy5K…` reopened her, story "recovered" |
+| Rent Night 2 (day 2991054) | VERIFIED | Pema's rent waived once (recovery grace); Tomas closed and restocked in the turn; Mira closed (need 6); deliveries `27wrbJKm…` + `DT82QCGC…` reopened her |
+| NEAR AI decision and signature | VERIFIED | Arin: model chose "lower" at confidence 0.22 (< 0.5: held 6 c), decision `gen-dec-17946312…`, signature **signed** in the same turn; Chronicle event shows "signed" (fix `eaf3e03`); the next turn replayed it with no new paid call |
+| Old pending Chronicle record (Arin, day 2990998) | NOT FIXABLE | Its decision row expired (3 market days): no request/response hashes left to check; left "pending" (?ledger only) |
+| Live chat + voice | VERIFIED | "Oh, dearie, I hope so! Rent is 30 coins and it's due soon. I don't know about your shares..." (no invented facts); Pema's recorded opener `sdc716855.mp3` then 4 server lines 1.5-2.3 s |
+| Town news, read-only | VERIFIED | `?inspect`: GET status, then chronicle 0.3 s later; only GETs; chip "read-only, nothing saved". Chronicle 40 events, unique ids, 0 duplicate tx, 0 failed, in order |
+| Defects found live and fixed (`d6d6f2c`, redeployed, re-verified) | FIXED | (1) A player's reopening delivery was told only by the next turn without the player (relay answers at optimistic finality, the stalls were read at final): now read optimistic; Mira's reopening logged 2 s after the delivery with its tx. (2) "0 c paid each" row while a sale that emptied the bid showed its result: hidden; re-checked on Arin's emptied bid |
+| Still open | OPEN | After a delivery the panel shows the local repriced bid (e.g. 5 -> 4 c) while the chain order keeps the old price until the next turn (the player can be paid less than the posted bid). nearblocks lagged: 41 of ~113 transactions indexed, 0 failed among them; browser-driven turns overwrite `lastTick.failed`, so not every browser turn's result was read |
+
 ## Phase 6: live production acceptance (2026-11-14, authorized)
 
 **Verdict: NO-GO for `55a4121` as deployed; fixes are in local `d8443ba`, not deployed (needs approval).** The connected
