@@ -16,12 +16,24 @@ const TXS = [
   ["player sells 15 shares back for exactly the 4 c backing", "HzKujJMXrtZuxEYuFXu2bwg2z37GqWCfvFZBmo4iw7w", "bunnyy-nearworld.testnet"],
   ["dividends settled for all four stalls (accumulator, no holder list)", "7g4zoX9scGAeicNkdR9c6Q8zwE2TViQgQi7pXqbQWqGQ", "bunnyy-nearworld.testnet"],
   ["owed dividend claimed: 1 c paid, 0.35 c carried", "J3qmH7oTxvd3Ni35XvgJJpufcNjaK5Zki8LraEYmFZqc", "bunnyy-nearworld.testnet"],
+  // 2026-11-14, production vivolith.world, one new guest playing the first day (README "The core loop, traced")
+  ["rent turn: Tomas and Arin pay rent, Mira closes 1 c short", "GNcCYF74wPsEEYTnMJayb5sp8aWuHsemQVbL2eV3WHnr", "bunnyy-nearworld.testnet"],
+  ["new player buys 3 mangoes from Tomas for 9 c", "2eXEpbbCjnU3UeGXB29bEC8XsijDNphf6gBH76Zx9dog", "bunnyy-nearworld.testnet"],
+  ["the player delivers 1 mango to closed Pema for 1 c: her stall reopens", "7ywzZnoq1c5UxqYMZRQGpFXMX5zmXGh2A8hrKap6PS4F", "bunnyy-nearworld.testnet"],
+  ["NEAR AI (Jev) lowers Arin's mango bid 6 -> 5 c, posted with Arin's own key", "CznTaWJhctgxL7RSMYubwUMyU5vGJBJUb62uaZEXuFBa", "arin.bunnyy-nearworld.testnet"],
+  ["resident Lin buys a lassi from Arin, the meal NEAR AI chose for her", "CqWCNMNaYgqE3mpj2bRxDEPfhUTmkCRuhZZduSy1ynsE", "picker.bunnyy-nearworld.testnet"],
 ];
 
-async function rpc(method, params) {
+async function rpc(method, params, attempt = 0) {
   const r = await fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
-  const j = await r.json();
-  if (j.error) throw new Error(`${method}: ${j.error.cause?.name ?? j.error.message}`);
+  const j = await r.json().catch(() => ({ error: { message: `HTTP ${r.status}` } }));
+  const msg = j.error && String(j.error.cause?.name ?? j.error.message ?? j.error);
+  // the free public archival RPC rate-limits bursts: wait and try again (2, 4, 6, 8 s) before giving up
+  if (msg && /rate limit|HTTP 429/i.test(msg) && attempt < 4) {
+    await new Promise((ok) => setTimeout(ok, 2000 * (attempt + 1)));
+    return rpc(method, params, attempt + 1);
+  }
+  if (msg) throw new Error(`${method}: ${msg}`);
   return j.result;
 }
 const view = async (method, args = {}) => {
