@@ -143,7 +143,12 @@ const PEMA_INTRO: Conversation = {
   nodes: {
     hello: {
       speaker: "Auntie Pema",
-      text: (s) => { const n = s.merchants.pema.stock.mango; return `Oh, a new face! I'm Pema. ${n <= 5 ? `Don't look at my shelves, dear: ${n === 1 ? "one mango" : `${n} mangoes`} left` : "Full shelves, dear, but shelves don't pay rent"}, and rent is coming.`; },
+      text: (s) => {
+        const m = s.merchants.pema, n = m.stock.mango;
+        // a newcomer can arrive after a rent night already closed her (connected play): say so, not "rent is coming"
+        if (m.status !== "open") return "Oh, a new face! I'm Pema. My shutters are down, dear: the rent came and my till came up short.";
+        return `Oh, a new face! I'm Pema. ${n <= 5 ? `Don't look at my shelves, dear: ${n === 1 ? "one mango" : `${n} mangoes`} left` : "Full shelves, dear, but shelves don't pay rent"}, and rent is coming.`;
+      },
       next: "why",
     },
     why: {
@@ -154,14 +159,18 @@ const PEMA_INTRO: Conversation = {
     stakes: {
       speaker: "Auntie Pema",
       // the stall's real till and rent (read from NEAR when connected): the stake is the player's to see, not a script's
-      text: (s) => { const m = s.merchants.pema; return m.cash >= m.rent ? `My till has ${Math.floor(m.cash)} coins and rent is ${m.rent}. Enough, if I can keep selling. With empty shelves I can't.` : `My till has ${Math.floor(m.cash)} coins and rent is ${m.rent}. If it isn't there when rent is charged, the shutters come down.`; },
+      text: (s) => {
+        const m = s.merchants.pema, c = Math.floor(m.cash), till = `My till has ${c} ${c === 1 ? "coin" : "coins"} and rent is ${m.rent}.`;
+        if (m.status !== "open") return `${till} A little stock on my shelves and I can open again.`;
+        return m.cash >= m.rent ? `${till} Enough, if I can keep selling. With empty shelves I can't.` : `${till} If it isn't there when rent is charged, the shutters come down.`;
+      },
       choices: [
         { label: "I'll find you mangoes before rent.", next: "deal", effect: (ctx) => { ctx.econ.flags.talkedPema = true; } },
       ],
     },
     deal: {
       speaker: "Auntie Pema",
-      text: (s) => { const b = bidFor(s, "pema", "mango")?.price; return b ? `You would? Bless you. I pay ${b} coins a mango, what I can still sell them on for. Three would get me through today.` : "You would? Bless you. My shelves are stocked for now, but rent is rent: every sale counts."; },
+      text: (s) => { const b = bidFor(s, "pema", "mango")?.price; return b ? `You would? Bless you. I pay ${b} ${b === 1 ? "coin" : "coins"} a mango, what I can still sell them on for. Three would get me through today.` : "You would? Bless you. My shelves are stocked for now, but rent is rent: every sale counts."; },
       next: null,
     },
   },
@@ -642,7 +651,7 @@ export async function createPlay(game: Game): Promise<Play> {
     frame(npc);
     const closed = state.merchants[id].status !== "open";
     const newcomer = tab === "buy" && buyUnit(id) < priceOf(state, id).price;
-    const say = id === "pema" && stepIndex(state) === 3 && sellPrice(id) !== null ? `Are those for me? ${sellPrice(id)} coins each, what I can pay and still sell them on.`
+    const say = id === "pema" && stepIndex(state) === 3 && sellPrice(id) !== null ? `Are those for me? ${sellPrice(id)} ${sellPrice(id) === 1 ? "coin" : "coins"} each, what I can pay and still sell them on.`
       : newcomer ? `New in town? ${buyUnit(id)} c a mango, just this once. The board says ${priceOf(state, id).price}.`
       // offline, stocked shelves reopen the stall at 08:00: asking for stock then was a request for nothing
       : closed ? (!chainLive(state) && reopenGap(state, id) === 0 ? "The shutters are down tonight. My shelves are stocked, so I open again at eight." : VOICES[id].lines.closed) : WHO[id].hello;

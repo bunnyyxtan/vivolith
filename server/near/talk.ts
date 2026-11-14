@@ -118,9 +118,10 @@ export function factsFor(st: EconomyState, id: MerchantId, offers: readonly Offe
     ...receipts.slice(-3).map((r) => `Recently you ${r.kind} ${r.qty} ${r.token_id} at ${r.price} coins with ${r.counterparty.split(".")[0]}.`),
     ...dFacts, ...mFacts, ...(extra.player ?? []),
   ];
+  const till = Math.floor(m.cash);
   const price = m.status !== "open"
-    ? `My shutters are down until rent is sorted. My till holds ${Math.floor(m.cash)} coins.`
-    : `${q.price} coins a ${good} today${reasons.length ? `: ${reasons[0].toLowerCase()}` : ", a normal day"}. My till holds ${Math.floor(m.cash)} coins and rent is ${m.rent}.`;
+    ? `My shutters are down until rent is sorted. My till holds ${till} ${till === 1 ? "coin" : "coins"}.`
+    : `${q.price} ${q.price === 1 ? "coin" : "coins"} a ${good} today${reasons.length ? `: ${reasons[0].toLowerCase()}` : ", a normal day"}. My till holds ${till} ${till === 1 ? "coin" : "coins"} and rent is ${m.rent}.`;
   const topics: Record<string, string> = {
     price,
     // "next": true before and after tonight's charge (a till under rent right after paying is about the next one)

@@ -13087,7 +13087,6 @@ var lines_default = {
 		"Earned, paid next market turn",
 		"Easy there!",
 		"Effects",
-		"Enough, if I can keep selling.",
 		"Enough.",
 		"Enter",
 		"Equal",
@@ -13215,7 +13214,6 @@ var lines_default = {
 		"I've paid the harbor.",
 		"IKne3meq5aSn9XLyUdCD",
 		"INPUT",
-		"If it isn't there when rent is charged, the shutters come down.",
 		"If the facts do not answer the question, say so in character and talk about what you do know.",
 		"In the city",
 		"Ines Varga",
@@ -13334,6 +13332,7 @@ var lines_default = {
 		"My shelves are stocked, so I open again at eight.",
 		"My shelves were full, so I opened again.",
 		"My shutters are down until rent is sorted.",
+		"My shutters are down, dear: the rent came and my till came up short.",
 		"N",
 		"N Spire",
 		"N2lVS1w4EtoT3dr4eOWO",
@@ -14688,6 +14687,7 @@ var lines_default = {
 		"Her till: \\d{1,6}(?:[.,:]\\d{1,3})? of \\d{1,6}(?:[.,:]\\d{1,3})? c rent\\.",
 		"I have \\d{1,6}(?:[.,:]\\d{1,3})? mangoes in the whole stall\\.",
 		"I have \\d{1,6}(?:[.,:]\\d{1,3})? mangoes, \\d{1,6}(?:[.,:]\\d{1,3})? lemons and \\d{1,6}(?:[.,:]\\d{1,3})? lassi right now\\.",
+		"I pay \\d{1,6}(?:[.,:]\\d{1,3})? coin a mango, what I can still sell them on for\\.",
 		"I pay \\d{1,6}(?:[.,:]\\d{1,3})? coins a mango, what I can still sell them on for\\.",
 		"IN TRANSIT · arriving Day \\d{1,4} \\d{2}:\\d{2}\\.",
 		"Keep Pema open: \\d{1,6}(?:[.,:]\\d{1,3})? c short of rent",
@@ -14707,7 +14707,10 @@ var lines_default = {
 		"Meanwhile Tomas Vell sells his at \\d{1,6}(?:[.,:]\\d{1,3})? coins and smiles about it\\.",
 		"My next rent is \\d{1,6}(?:[.,:]\\d{1,3})? coins and my till holds \\d{1,6}(?:[.,:]\\d{1,3})?, so I can pay it\\.",
 		"My next rent is \\d{1,6}(?:[.,:]\\d{1,3})? coins and my till holds only \\d{1,6}(?:[.,:]\\d{1,3})?\\.",
+		"My till has \\d{1,6}(?:[.,:]\\d{1,3})? coin and rent is \\d{1,6}(?:[.,:]\\d{1,3})?\\.",
 		"My till has \\d{1,6}(?:[.,:]\\d{1,3})? coins and rent is \\d{1,6}(?:[.,:]\\d{1,3})?\\.",
+		"My till holds \\d{1,6}(?:[.,:]\\d{1,3})? coin and rent is \\d{1,6}(?:[.,:]\\d{1,3})?\\.",
+		"My till holds \\d{1,6}(?:[.,:]\\d{1,3})? coin\\.",
 		"My till holds \\d{1,6}(?:[.,:]\\d{1,3})? coins and rent is \\d{1,6}(?:[.,:]\\d{1,3})?\\.",
 		"My till holds \\d{1,6}(?:[.,:]\\d{1,3})? coins\\.",
 		"Nobody is buying (?:mango|lemon)s right now, so I'm holding mine\\.",
@@ -14831,6 +14834,7 @@ var lines_default = {
 		"\\d{1,6}(?:[.,:]\\d{1,3})? c profit",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? c short",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? c spent at her stall",
+		"\\d{1,6}(?:[.,:]\\d{1,3})? coin a (?:mango|lassi) today, a normal day\\.",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? coin\\.",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? coins",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? coins a (?:mango|lassi) today, a normal day\\.",
@@ -15680,7 +15684,8 @@ function factsFor(st, id, offers, receipts, extra = {}) {
 		...mFacts,
 		...extra.player ?? []
 	];
-	const price = m.status !== "open" ? `My shutters are down until rent is sorted. My till holds ${Math.floor(m.cash)} coins.` : `${q.price} coins a ${good} today${reasons.length ? `: ${reasons[0].toLowerCase()}` : ", a normal day"}. My till holds ${Math.floor(m.cash)} coins and rent is ${m.rent}.`;
+	const till = Math.floor(m.cash);
+	const price = m.status !== "open" ? `My shutters are down until rent is sorted. My till holds ${till} ${till === 1 ? "coin" : "coins"}.` : `${q.price} ${q.price === 1 ? "coin" : "coins"} a ${good} today${reasons.length ? `: ${reasons[0].toLowerCase()}` : ", a normal day"}. My till holds ${till} ${till === 1 ? "coin" : "coins"} and rent is ${m.rent}.`;
 	const topics = {
 		price,
 		rent: m.cash >= m.rent ? `My next rent is ${m.rent} coins and my till holds ${Math.floor(m.cash)}, so I can pay it.` : `My next rent is ${m.rent} coins and my till holds only ${Math.floor(m.cash)}. I need to sell.`,
@@ -17554,8 +17559,7 @@ async function guest(cfg, req) {
 async function register(cfg, req) {
 	const body = await readJson(req);
 	const accountId = String(body.accountId ?? "");
-	const suffix = `.${cfg.relayerId}`;
-	if (!accountId.endsWith(suffix) || !/^[gs][0-9a-f]{16}$/.test(accountId.slice(0, -suffix.length))) throw new HttpError(400, "not a game account");
+	if (!isGameAccount(accountId, cfg.relayerId)) throw new HttpError(400, "not a game account");
 	const { provider, relayer } = account(cfg);
 	if (!await provider.viewAccount({
 		accountId,
@@ -17580,6 +17584,8 @@ async function register(cfg, req) {
 		message: r.error
 	});
 }
+/** An account this relayer created for a player: a guest `g<16 hex>` or a signed-in `s<16 hex>` sub-account. */
+const isGameAccount = (id, relayerId) => id.endsWith(`.${relayerId}`) && /^[gs][0-9a-f]{16}$/.test(id.slice(0, -relayerId.length - 1));
 /** Throws unless the delegate only calls player methods on our contract with zero deposit and bounded gas. */
 function checkDelegate(d, contractId) {
 	const a = d.delegateAction;
@@ -17605,6 +17611,7 @@ async function relay(cfg, req) {
 	}
 	checkDelegate(decoded, cfg.contractId);
 	const sender = decoded.delegateAction.senderId;
+	if (!isGameAccount(sender, cfg.relayerId)) throw new HttpError(403, "not a game account");
 	if (!await hit(cfg, `relay:${sender}`, LIMITS.relay.max, LIMITS.relay.windowSec)) throw new HttpError(429, "slow down");
 	const { relayer } = account(cfg);
 	let raw;
@@ -17655,7 +17662,7 @@ async function recordPlayerDeal(cfg, d, player, r) {
 	if (!fc || fc.methodName !== "deal" || !fc.args) return;
 	const a = JSON.parse(Buffer.from(fc.args).toString());
 	const merchant = String(a.merchant ?? ""), side = a.side === "buy" ? "buy" : "sell", good = String(a.token_id ?? ""), qty = Number(a.qty), unit = Number(a.unit_price);
-	if (!MERCHANTS.includes(merchant) || !Number.isInteger(qty) || !Number.isInteger(unit)) return;
+	if (!MERCHANTS.includes(merchant) || !GOODS.has(good) || !Number.isInteger(qty) || !Number.isInteger(unit)) return;
 	const store = decisionStore(cfg), at = Date.now(), day = Math.floor(at / MARKET_DAY_MS);
 	const ref = await takeDealRef(store, player, String(a.nonce ?? ""));
 	const reference = ref && ref.merchant === merchant && ref.unit === unit && ref.qty === qty ? ref.reference : null;
@@ -18066,8 +18073,7 @@ const SAVE_SKEW_MS = 6e5;
 *  only whoever holds that account's key can read or write its save. */
 async function saveAuth(cfg, b, data) {
 	const accountId = String(b.account ?? ""), publicKey = String(b.publicKey ?? ""), ts = Number(b.ts), sig = String(b.signature ?? "");
-	const suffix = `.${cfg.relayerId}`;
-	if (!accountId.endsWith(suffix) || !/^[gs][0-9a-f]{16}$/.test(accountId.slice(0, -suffix.length))) throw new HttpError(400, "not a game account");
+	if (!isGameAccount(accountId, cfg.relayerId)) throw new HttpError(400, "not a game account");
 	if (!Number.isFinite(ts) || Math.abs(Date.now() - ts) > SAVE_SKEW_MS) throw new HttpError(401, "stale request");
 	let pk;
 	try {
@@ -19093,7 +19099,7 @@ async function talk(cfg, req, env) {
 	if (!MERCHANTS.includes(id) && !resident) throw new HttpError(400, "unknown speaker");
 	if (!await hit(cfg, `talk:${clientIp(req)}`, LIMITS.talk.max, LIMITS.talk.windowSec)) throw new HttpError(429, "slow down");
 	const question = typeof b.question === "string" ? b.question.slice(0, 200) : "";
-	const player = typeof b.account === "string" && /^[gs][0-9a-f]{16}\./.test(b.account) && b.account.endsWith(`.${cfg.relayerId}`) ? b.account : null;
+	const player = typeof b.account === "string" && isGameAccount(b.account, cfg.relayerId) ? b.account : null;
 	const conv = typeof b.conv === "string" && /^[0-9a-f]{32}$/.test(b.conv) ? b.conv : randomBytes(16).toString("hex");
 	const store = decisionStore(cfg), day = Math.floor(Date.now() / MARKET_DAY_MS), npcAccount = `${id}.${cfg.relayerId}`;
 	const histKey = `vivolith:talk:${conv}:${id}`;
