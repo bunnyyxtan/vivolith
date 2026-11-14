@@ -449,5 +449,18 @@ const calls = (method: string, filter: (a: Record<string, string>) => boolean = 
   reset({ tomas: { open: false, coin: 0, mango: 26, need: 1 } }, 0, false);
   await turn();
   assert.equal(calls("operator_mint", (a) => a.account_id === acct("tomas") && a.token_id === "mango").length, 0, "no freight paid, no delivery");
+  // Pema, closed with 0 c and owing 163 c (over the 120 c cap), could never bid, so no delivery could reopen her: the
+  // Guild lends her exactly her reopening bid, no float
+  nextDay(); sent.length = 0;
+  reset({ pema: { open: false, coin: 0, mango: 8, debt: 163, need: 1 } }, 48, false);
+  await turn();
+  const lend = calls("guild_lend", (a) => a.merchant === "pema");
+  assert.equal(lend.length, 1, "the Guild funds the closed stall's reopening bid past the cap");
+  assert.ok(Number(lend[0].args.amount) > 0 && Number(lend[0].args.amount) <= 10, `one mango's worth, not a float (lent ${lend[0].args.amount} c)`);
+  // an open stall over the cap still gets nothing
+  nextDay(); sent.length = 0;
+  reset({ pema: { coin: 0, mango: 8, debt: 163 } }, 48, false);
+  await turn();
+  assert.equal(calls("guild_lend", (a) => a.merchant === "pema").length, 0, "no loan to an open stall over the cap");
 }
 console.log("market turn handler checks passed");

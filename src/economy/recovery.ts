@@ -11,6 +11,7 @@
 //  5. Residents only sold to open stalls, although the contract lets anyone sell into a closed stall's (reopen) bid.
 //     Fix: closed stalls' funded bids are real offers (residents.ts executableOffers).
 import type { EconomyState, Merchant, MerchantId } from "./state.ts";
+import { CLOSED_RESTOCK } from "./pricing.ts";
 
 export const GUILD_FUND = 200;
 /** A till under this borrows up to it (one tutorial delivery: 3 mangoes at 6 c). */
@@ -48,8 +49,14 @@ export function guildPlan(st: EconomyState, ids: readonly MerchantId[], fund: nu
   for (const id of ids) {
     const m = st.merchants[id], owes = debt[id] ?? 0;
     const float = Math.max(GUILD_FLOAT, rescueOf(id));
-    if (m.cash < float && held > 0 && owes < DEBT_CAP) {
-      const amount = Math.min(float - m.cash, held, DEBT_CAP - owes);
+    // Past DEBT_CAP a closed stall with an empty till still borrows one mango's restock price, so it can bid and a
+    // delivery can reopen it; never a float, and nothing while it has a coin to bid with. Before, such a stall could
+    // not bid, no delivery could reach it, and it stayed shut for good (live 2026-11-14: Pema, 0 c, owing 163 c, the
+    // stall every new player is sent to).
+    const room = owes < DEBT_CAP ? Math.min(float - m.cash, DEBT_CAP - owes)
+      : m.status !== "open" && m.cash < 1 ? Math.round(m.baseCost.mango * CLOSED_RESTOCK) : 0;
+    if (m.cash < float && held > 0 && room > 0) {
+      const amount = Math.min(room, held);
       if (amount > 0) { out.push({ merchant: id, kind: "lend", amount, repaid: 0, dues: 0 }); held -= amount; lent += amount; }
       continue;
     }

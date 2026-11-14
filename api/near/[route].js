@@ -17089,8 +17089,9 @@ function guildPlan(st, ids, fund, debt, rescueOf, collectToday) {
 	for (const id of ids) {
 		const m = st.merchants[id], owes = debt[id] ?? 0;
 		const float = Math.max(18, rescueOf(id));
-		if (m.cash < float && held > 0 && owes < 120) {
-			const amount = Math.min(float - m.cash, held, 120 - owes);
+		const room = owes < 120 ? Math.min(float - m.cash, 120 - owes) : m.status !== "open" && m.cash < 1 ? Math.round(m.baseCost.mango * CLOSED_RESTOCK) : 0;
+		if (m.cash < float && held > 0 && room > 0) {
+			const amount = Math.min(room, held);
 			if (amount > 0) {
 				out.push({
 					merchant: id,
