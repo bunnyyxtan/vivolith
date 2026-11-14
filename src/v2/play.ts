@@ -809,7 +809,8 @@ export async function createPlay(game: Game): Promise<Play> {
     aiCheckedAt.set(id, Date.now());
     const d = await agentDecision(id);
     const prev = aiDecisions.get(id);
-    if (!d || (prev && prev.at === d.at && prev.txHash === d.txHash)) return;
+    // `live` too: an AI price that stopped being posted (a new market day) must leave the game's prices at once
+    if (!d || (prev && prev.at === d.at && prev.txHash === d.txHash && prev.live === d.live)) return;
     aiDecisions.set(id, d);
     syncAgentPrice(id, d);
     drawBoards();
@@ -1995,6 +1996,9 @@ export async function createPlay(game: Game): Promise<Play> {
         state.log.push({ minute: state.minute, kind: s.open ? "reopened" : "closed", text: s.open ? `${m.shop} reopened with fresh stock.` : `${m.shop} could not pay rent and pulled the shutters down.` });
       }
     }
+    // a NEAR AI price the agents posted this turn is known before any panel shows a price (live: a freshly loaded page
+    // offered Tomas's rule 4 c while his AI ask was 5 c; the relayer refused "price moved")
+    for (const id of TRADERS) { aiCheckedAt.delete(id); void refreshDecision(id); }
     drawBoards();
     if (mode.kind === "trade") renderTrade();
   };
