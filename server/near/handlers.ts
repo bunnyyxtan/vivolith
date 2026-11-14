@@ -900,10 +900,10 @@ export async function residentTurn(cfg: Config, provider: JsonRpcProvider, relay
 
 /** The most transactions one market turn can sign: settle, rent and Guild (1 each); one per changed order (every ask
  *  and the mango and lemon bids of each stall); one per merchant-to-merchant buy (a bid per buyer and fruit); a
- *  resident's mint, sale, meal and burn; one operator batch. Checked against every turn in turn.check.ts. */
+ *  resident's mint, sale, meal and burn; one operator batch, sent at most twice. Checked against every turn in turn.check.ts. */
 export function maxTxPerTurn(): number {
   const orders = MERCHANTS.reduce((n, id) => n + initialEconomy().merchants[id].sells.length + 2, 0);
-  return 3 + orders + MERCHANTS.length * 2 + RESIDENTS.length * 4 + 1;
+  return 3 + orders + MERCHANTS.length * 2 + RESIDENTS.length * 4 + 2;
 }
 
 /** One market turn. `trusted` = called by the scheduler route with its secret: only such turns may ask NEAR AI (and
@@ -1117,47 +1117,70 @@ async function tick(cfg: Config, env: RelayEnv, trusted = false, scope: "market"
   // sale past a stall's real stock panics and reverts this whole batch (testnet 2026-11-13: Lin and Dev had eaten Arin's
   // lassi, "not enough lassi", every stall's shoppers and the kitchen lost). turn.check.ts case 9.
   if (full) st.merchants = (await chainEconomy(provider, cfg)).merchants;
-  const op: ReturnType<typeof actions.functionCall>[] = [];
-  for (const id of full ? MERCHANTS : []) {
-    const m = st.merchants[id];
-    if (m.status !== "open") continue; // shutters down: no shoppers
-    for (const good of m.sells) {
-      // residents now buy part of the lassi the street used to: tourists take only the rest. The fraction of a shopper
-      // carries to the next turn (before, floor() per turn dropped every fruit sale: src/economy/recovery.ts)
-      const key = `vivolith:carry:${id}:${good}`;
-      const carried = Number(await kv(cfg, ["GET", key]).catch(() => null) ?? 0);
-      const sold = touristUnits(shopperWant(st, id, good) * TICK_HOURS - (ate[`${id}:${good}`] ?? 0), Number.isFinite(carried) ? carried : 0, m.stock[good]);
-      await kv(cfg, ["SET", key, String(sold.carry)]).catch(() => null);
-      const units = sold.units;
-      if (units > 0) op.push(actions.functionCall("street_sale", { merchant: id, token_id: good, qty: String(units), unit_price: String(quote(st, id, good, false).price) }, TICK_GAS, 0n));
-      if (units > 0) log.push(`tourists bought ${units} ${good} from ${id}`);
-    }
+  // Decided once per turn (they have side effects or must not drift between attempts): each fraction of a shopper carried
+  // from the last turn, and whether the harbor's once-a-day delivery is claimed.
+  const carriedIn = new Map<string, number>();
+  for (const id of full ? MERCHANTS : []) for (const good of st.merchants[id].sells) {
+    const c = Number(await kv(cfg, ["GET", `vivolith:carry:${id}:${good}`]).catch(() => null) ?? 0);
+    carriedIn.set(`${id}:${good}`, Number.isFinite(c) ? c : 0);
   }
   // The harbor's standing contract: once a market day when Tomas runs below his normal stock, and on any turn he is
   // nearly out (so no new player finds the market without mangoes for long). He pays HARBOR_COST a mango; the coin
   // leaves the economy as freight, as in the offline sim.
-  const tomas = st.merchants.tomas;
-  const nearlyOut = tomas.stock.mango < 6;
-  const harborDue = full && tomas.status === "open" && (nearlyOut || tomas.stock.mango < tomas.target.mango)
+  const tomas0 = st.merchants.tomas, nearlyOut = tomas0.stock.mango < 6;
+  const harborDue = full && tomas0.status === "open" && (nearlyOut || tomas0.stock.mango < tomas0.target.mango)
     && (nearlyOut || (await hit(cfg, `harbor:${day}`, 1, Math.ceil(MARKET_DAY_MS / 1000))));
-  const harborQty = harborDue ? Math.min(Math.round(tomas.target.mango * 1.4) - tomas.stock.mango, Math.floor(tomas.cash / HARBOR_COST)) : 0;
-  if (harborQty > 0) {
-    op.push(actions.functionCall("operator_burn", { account_id: `tomas.${cfg.relayerId}`, token_id: "coin", amount: String(harborQty * HARBOR_COST), reason: "harbor freight" }, TICK_GAS, 0n));
-    op.push(actions.functionCall("operator_mint", { account_id: `tomas.${cfg.relayerId}`, token_id: "mango", amount: String(harborQty), reason: "harbor standing contract" }, TICK_GAS, 0n));
-    log.push(`harbor delivered ${harborQty} mangoes to tomas for ${harborQty * HARBOR_COST} c`);
-  }
-  const arin = st.merchants.arin;
-  const batches = !full ? 0 : Math.min(arin.stock.mango, Math.max(0, Math.ceil((8 - arin.stock.lassi) / 4)));
-  if (batches > 0) {
-    op.push(actions.functionCall("operator_burn", { account_id: `arin.${cfg.relayerId}`, token_id: "mango", amount: String(batches), reason: "tea kitchen" }, TICK_GAS, 0n));
-    op.push(actions.functionCall("operator_mint", { account_id: `arin.${cfg.relayerId}`, token_id: "lassi", amount: String(batches * 4), reason: "tea kitchen" }, TICK_GAS, 0n));
-    log.push(`arin's kitchen made ${batches * 4} lassi from ${batches} mangoes`);
-  }
-  if (op.length) {
-    const r = outcome(await relayer.signAndSendTransaction({ receiverId: cfg.contractId, actions: op, throwOnFailure: false }));
+  /** The batch for the stock in `st` right now: street shoppers, the harbor contract, the tea kitchen. */
+  const operatorBatch = (): { op: ReturnType<typeof actions.functionCall>[]; lines: string[]; carry: Map<string, number> } => {
+    const op: ReturnType<typeof actions.functionCall>[] = [], lines: string[] = [], carry = new Map<string, number>();
+    for (const id of full ? MERCHANTS : []) {
+      const m = st.merchants[id];
+      if (m.status !== "open") continue; // shutters down: no shoppers
+      for (const good of m.sells) {
+        // residents now buy part of the lassi the street used to: tourists take only the rest. The fraction of a shopper
+        // carries to the next turn (before, floor() per turn dropped every fruit sale: src/economy/recovery.ts)
+        const sold = touristUnits(shopperWant(st, id, good) * TICK_HOURS - (ate[`${id}:${good}`] ?? 0), carriedIn.get(`${id}:${good}`) ?? 0, m.stock[good]);
+        carry.set(`${id}:${good}`, sold.carry);
+        if (sold.units > 0) {
+          op.push(actions.functionCall("street_sale", { merchant: id, token_id: good, qty: String(sold.units), unit_price: String(quote(st, id, good, false).price) }, TICK_GAS, 0n));
+          lines.push(`tourists bought ${sold.units} ${good} from ${id}`);
+        }
+      }
+    }
+    const tomas = st.merchants.tomas;
+    const harborQty = harborDue ? Math.min(Math.round(tomas.target.mango * 1.4) - tomas.stock.mango, Math.floor(tomas.cash / HARBOR_COST)) : 0;
+    if (harborQty > 0) {
+      op.push(actions.functionCall("operator_burn", { account_id: `tomas.${cfg.relayerId}`, token_id: "coin", amount: String(harborQty * HARBOR_COST), reason: "harbor freight" }, TICK_GAS, 0n));
+      op.push(actions.functionCall("operator_mint", { account_id: `tomas.${cfg.relayerId}`, token_id: "mango", amount: String(harborQty), reason: "harbor standing contract" }, TICK_GAS, 0n));
+      lines.push(`harbor delivered ${harborQty} mangoes to tomas for ${harborQty * HARBOR_COST} c`);
+    }
+    const arin = st.merchants.arin;
+    const batches = !full ? 0 : Math.min(arin.stock.mango, Math.max(0, Math.ceil((8 - arin.stock.lassi) / 4)));
+    if (batches > 0) {
+      op.push(actions.functionCall("operator_burn", { account_id: `arin.${cfg.relayerId}`, token_id: "mango", amount: String(batches), reason: "tea kitchen" }, TICK_GAS, 0n));
+      op.push(actions.functionCall("operator_mint", { account_id: `arin.${cfg.relayerId}`, token_id: "lassi", amount: String(batches * 4), reason: "tea kitchen" }, TICK_GAS, 0n));
+      lines.push(`arin's kitchen made ${batches * 4} lassi from ${batches} mangoes`);
+    }
+    return { op, lines, carry };
+  };
+  // A player's trade can still land between the stock read and the batch. A batch the contract refused moved nothing
+  // (all or nothing), so it is rebuilt once from fresh stock and sent again; a send with no final answer (it threw) is
+  // never resent. maxTxPerTurn counts the second attempt. turn.check.ts case 10.
+  let plan = operatorBatch();
+  for (let attempt = 0; plan.op.length && attempt < 2; attempt++) {
+    const r = outcome(await relayer.signAndSendTransaction({ receiverId: cfg.contractId, actions: plan.op, throwOnFailure: false }));
     txs.push(r.txHash);
-    if (!r.ok) log.push(`operator FAILED: ${r.error}`);
+    if (r.ok) { log.push(...plan.lines); break; }
+    if (attempt === 0 && /not enough/.test(r.error ?? "")) {
+      log.push(`operator refused (${r.error}): stock moved during the turn, rebuilt from fresh stock`);
+      st.merchants = (await chainEconomy(provider, cfg)).merchants;
+      plan = operatorBatch();
+      continue;
+    }
+    log.push(`operator FAILED: ${r.error}`);
+    break;
   }
+  for (const [k, v] of plan.carry) await kv(cfg, ["SET", `vivolith:carry:${k}`, String(v)]).catch(() => null);
 
   // 4. The Chronicle (this turn's recorded events, one write), agents' memory (read from chain, written by every driver)
   // and signature checks of NEAR AI decisions (scheduler turns only: they call NEAR AI, within their own daily budget).

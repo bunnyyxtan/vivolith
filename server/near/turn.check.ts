@@ -32,6 +32,7 @@ let registeredResidents = true;
 let txCount = 0, worstSeen = 0; // signed transactions (a batch of actions is one)
 const sent: { signer: string; receiver: string; method: string; args: Record<string, string> }[] = [];
 const failedTx: { signer: string; panic: string }[] = []; // batches the fake contract refused (reverted whole)
+let interfere: (() => void) | null = null, refuseStreet = false;
 type ChatBody = { model: string; messages: { role: string; content: string }[] };
 const chatCalls: ChatBody[] = [];
 let chatMode: "ok" | "error" | "timeout" | "malformed" = "ok", chatReply = "";
@@ -59,6 +60,9 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       txCount++;
       const raw = (params as { signed_tx_base64?: string }).signed_tx_base64 ?? String((params as unknown as string[])[0]);
       const tx = deserialize(SCHEMA.SignedTransaction, Buffer.from(raw, "base64")) as { transaction: { signerId: string; receiverId: string; actions: { functionCall?: { methodName: string; args: Uint8Array } }[] } };
+      // a player's trade landing just before this batch (once), or a contract that refuses every street sale
+      const streetBatch = tx.transaction.actions.some((a) => a.functionCall?.methodName === "street_sale");
+      if (streetBatch && interfere) { const f = interfere; interfere = null; f(); }
       // the fake contract applies a batch like NEAR: in order, all or nothing (a panic in any action reverts the batch)
       const next: typeof bal = JSON.parse(JSON.stringify(bal));
       const add = (who: string, token: string, d: number): void => { const b = (next[who] ??= {}); b[token] = (b[token] ?? 0) + d; };
@@ -71,7 +75,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         if (method === "operator_burn") add(args.account_id, args.token_id, -Number(args.amount));
         if (method === "street_sale") { // shoppers take goods off the shelf (the contract panics past the stall's stock)
           const m = acct(args.merchant);
-          if ((next[m]?.[args.token_id] ?? 0) < Number(args.qty)) panic = `not enough ${args.token_id}`;
+          if (refuseStreet || (next[m]?.[args.token_id] ?? 0) < Number(args.qty)) panic = `not enough ${args.token_id}`;
           else { add(m, args.token_id, -Number(args.qty)); add(m, "coin", Number(args.qty) * Number(args.unit_price)); }
         }
         if (method === "buy" && !args.token_id.startsWith("share:")) { // a resident's meal or purchase from a stall's ask
@@ -289,5 +293,28 @@ const calls = (method: string, filter: (a: Record<string, string>) => boolean = 
   assert.deepEqual(failedTx, [], `no refused batch: ${JSON.stringify(failedTx)} (street sale ${street}, ${meals} meals)`);
   assert.ok(!(t.log as string[]).some((l) => /operator FAILED/.test(l)));
   assert.ok((bal[acct("arin")].lassi ?? 0) >= 0);
+}
+// 10. a player's trade lands between the stock read and the operator batch: the refused batch moved nothing, so it is
+// rebuilt from fresh stock and sent once more; it is never sent a third time.
+{
+  nextDay(); reset(); sent.length = 0; failedTx.length = 0;
+  interfere = () => { bal[acct("arin")].lassi = 0; }; // the player bought every lassi on Arin's shelf
+  const t = await turn();
+  const log = t.log as string[];
+  const ops = sent.filter((s) => s.signer === RELAYER && s.method === "street_sale");
+  assert.equal(failedTx.length, 1, "the first batch was refused");
+  assert.ok(log.some((l) => /operator refused .*rebuilt from fresh stock/.test(l)), log.join("\n"));
+  assert.ok(!log.some((l) => /operator FAILED/.test(l)), "the rebuilt batch went through");
+  const second = ops.slice(ops.findIndex((s, i) => i > 0 && s.args.merchant === ops[0].args.merchant && s.args.token_id === ops[0].args.token_id));
+  assert.ok(!second.some((s) => s.args.merchant === "arin" && s.args.token_id === "lassi"), "no lassi street sale from an empty shelf");
+  const tourists = log.filter((l) => /^tourists bought/.test(l));
+  assert.equal(new Set(tourists.map((l) => l.replace(/\d+ /, ""))).size, tourists.length, "each stall's shoppers are reported once, from the batch that landed");
+  assert.ok(!tourists.some((l) => /lassi from arin/.test(l)));
+  // a contract that keeps refusing: exactly two operator sends, then the failure is reported
+  nextDay(); reset(); sent.length = 0; failedTx.length = 0; refuseStreet = true;
+  const u = await turn();
+  refuseStreet = false;
+  assert.equal(failedTx.filter((f) => f.signer === RELAYER).length, 2, "the operator batch is sent at most twice");
+  assert.ok((u.log as string[]).some((l) => /operator FAILED/.test(l)));
 }
 console.log("market turn handler checks passed");

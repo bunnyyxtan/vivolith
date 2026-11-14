@@ -18354,9 +18354,9 @@ async function residentTurn(cfg, provider, relayer, secret, day, log, txs, agent
 }
 /** The most transactions one market turn can sign: settle, rent and Guild (1 each); one per changed order (every ask
 *  and the mango and lemon bids of each stall); one per merchant-to-merchant buy (a bid per buyer and fruit); a
-*  resident's mint, sale, meal and burn; one operator batch. Checked against every turn in turn.check.ts. */
+*  resident's mint, sale, meal and burn; one operator batch, sent at most twice. Checked against every turn in turn.check.ts. */
 function maxTxPerTurn() {
-	return 3 + MERCHANTS.reduce((n, id) => n + initialEconomy().merchants[id].sells.length + 2, 0) + MERCHANTS.length * 2 + RESIDENTS.length * 4 + 1;
+	return 3 + MERCHANTS.reduce((n, id) => n + initialEconomy().merchants[id].sells.length + 2, 0) + MERCHANTS.length * 2 + RESIDENTS.length * 4 + 2;
 }
 /** One market turn. `trusted` = called by the scheduler route with its secret: only such turns may ask NEAR AI (and
 *  only within the daily budget); browser-driven turns replay a decision already made today, else use the rule. With
@@ -18747,73 +18747,99 @@ async function tick(cfg, env, trusted = false, scope = "market") {
 	}
 	const ate = full ? await residentTurn(cfg, provider, relayer, secret, day, log, txs, agentCfg, agentStore, true, turn) : {};
 	if (full) st.merchants = (await chainEconomy(provider, cfg)).merchants;
-	const op = [];
-	for (const id of full ? MERCHANTS : []) {
-		const m = st.merchants[id];
-		if (m.status !== "open") continue;
-		for (const good of m.sells) {
-			const key = `vivolith:carry:${id}:${good}`;
-			const carried = Number(await kv(cfg, ["GET", key]).catch(() => null) ?? 0);
-			const sold = touristUnits(shopperWant(st, id, good) * TICK_HOURS - (ate[`${id}:${good}`] ?? 0), Number.isFinite(carried) ? carried : 0, m.stock[good]);
-			await kv(cfg, [
-				"SET",
-				key,
-				String(sold.carry)
-			]).catch(() => null);
-			const units = sold.units;
-			if (units > 0) op.push(actions.functionCall("street_sale", {
-				merchant: id,
-				token_id: good,
-				qty: String(units),
-				unit_price: String(quote(st, id, good, false).price)
-			}, TICK_GAS, 0n));
-			if (units > 0) log.push(`tourists bought ${units} ${good} from ${id}`);
+	const carriedIn = /* @__PURE__ */ new Map();
+	for (const id of full ? MERCHANTS : []) for (const good of st.merchants[id].sells) {
+		const c = Number(await kv(cfg, ["GET", `vivolith:carry:${id}:${good}`]).catch(() => null) ?? 0);
+		carriedIn.set(`${id}:${good}`, Number.isFinite(c) ? c : 0);
+	}
+	const tomas0 = st.merchants.tomas, nearlyOut = tomas0.stock.mango < 6;
+	const harborDue = full && tomas0.status === "open" && (nearlyOut || tomas0.stock.mango < tomas0.target.mango) && (nearlyOut || await hit(cfg, `harbor:${day}`, 1, Math.ceil(600)));
+	/** The batch for the stock in `st` right now: street shoppers, the harbor contract, the tea kitchen. */
+	const operatorBatch = () => {
+		const op = [], lines = [], carry = /* @__PURE__ */ new Map();
+		for (const id of full ? MERCHANTS : []) {
+			const m = st.merchants[id];
+			if (m.status !== "open") continue;
+			for (const good of m.sells) {
+				const sold = touristUnits(shopperWant(st, id, good) * TICK_HOURS - (ate[`${id}:${good}`] ?? 0), carriedIn.get(`${id}:${good}`) ?? 0, m.stock[good]);
+				carry.set(`${id}:${good}`, sold.carry);
+				if (sold.units > 0) {
+					op.push(actions.functionCall("street_sale", {
+						merchant: id,
+						token_id: good,
+						qty: String(sold.units),
+						unit_price: String(quote(st, id, good, false).price)
+					}, TICK_GAS, 0n));
+					lines.push(`tourists bought ${sold.units} ${good} from ${id}`);
+				}
+			}
 		}
-	}
-	const tomas = st.merchants.tomas;
-	const nearlyOut = tomas.stock.mango < 6;
-	const harborQty = full && tomas.status === "open" && (nearlyOut || tomas.stock.mango < tomas.target.mango) && (nearlyOut || await hit(cfg, `harbor:${day}`, 1, Math.ceil(600))) ? Math.min(Math.round(tomas.target.mango * 1.4) - tomas.stock.mango, Math.floor(tomas.cash / HARBOR_COST)) : 0;
-	if (harborQty > 0) {
-		op.push(actions.functionCall("operator_burn", {
-			account_id: `tomas.${cfg.relayerId}`,
-			token_id: "coin",
-			amount: String(harborQty * HARBOR_COST),
-			reason: "harbor freight"
-		}, TICK_GAS, 0n));
-		op.push(actions.functionCall("operator_mint", {
-			account_id: `tomas.${cfg.relayerId}`,
-			token_id: "mango",
-			amount: String(harborQty),
-			reason: "harbor standing contract"
-		}, TICK_GAS, 0n));
-		log.push(`harbor delivered ${harborQty} mangoes to tomas for ${harborQty * HARBOR_COST} c`);
-	}
-	const arin = st.merchants.arin;
-	const batches = !full ? 0 : Math.min(arin.stock.mango, Math.max(0, Math.ceil((8 - arin.stock.lassi) / 4)));
-	if (batches > 0) {
-		op.push(actions.functionCall("operator_burn", {
-			account_id: `arin.${cfg.relayerId}`,
-			token_id: "mango",
-			amount: String(batches),
-			reason: "tea kitchen"
-		}, TICK_GAS, 0n));
-		op.push(actions.functionCall("operator_mint", {
-			account_id: `arin.${cfg.relayerId}`,
-			token_id: "lassi",
-			amount: String(batches * 4),
-			reason: "tea kitchen"
-		}, TICK_GAS, 0n));
-		log.push(`arin's kitchen made ${batches * 4} lassi from ${batches} mangoes`);
-	}
-	if (op.length) {
+		const tomas = st.merchants.tomas;
+		const harborQty = harborDue ? Math.min(Math.round(tomas.target.mango * 1.4) - tomas.stock.mango, Math.floor(tomas.cash / HARBOR_COST)) : 0;
+		if (harborQty > 0) {
+			op.push(actions.functionCall("operator_burn", {
+				account_id: `tomas.${cfg.relayerId}`,
+				token_id: "coin",
+				amount: String(harborQty * HARBOR_COST),
+				reason: "harbor freight"
+			}, TICK_GAS, 0n));
+			op.push(actions.functionCall("operator_mint", {
+				account_id: `tomas.${cfg.relayerId}`,
+				token_id: "mango",
+				amount: String(harborQty),
+				reason: "harbor standing contract"
+			}, TICK_GAS, 0n));
+			lines.push(`harbor delivered ${harborQty} mangoes to tomas for ${harborQty * HARBOR_COST} c`);
+		}
+		const arin = st.merchants.arin;
+		const batches = !full ? 0 : Math.min(arin.stock.mango, Math.max(0, Math.ceil((8 - arin.stock.lassi) / 4)));
+		if (batches > 0) {
+			op.push(actions.functionCall("operator_burn", {
+				account_id: `arin.${cfg.relayerId}`,
+				token_id: "mango",
+				amount: String(batches),
+				reason: "tea kitchen"
+			}, TICK_GAS, 0n));
+			op.push(actions.functionCall("operator_mint", {
+				account_id: `arin.${cfg.relayerId}`,
+				token_id: "lassi",
+				amount: String(batches * 4),
+				reason: "tea kitchen"
+			}, TICK_GAS, 0n));
+			lines.push(`arin's kitchen made ${batches * 4} lassi from ${batches} mangoes`);
+		}
+		return {
+			op,
+			lines,
+			carry
+		};
+	};
+	let plan = operatorBatch();
+	for (let attempt = 0; plan.op.length && attempt < 2; attempt++) {
 		const r = outcome(await relayer.signAndSendTransaction({
 			receiverId: cfg.contractId,
-			actions: op,
+			actions: plan.op,
 			throwOnFailure: false
 		}));
 		txs.push(r.txHash);
-		if (!r.ok) log.push(`operator FAILED: ${r.error}`);
+		if (r.ok) {
+			log.push(...plan.lines);
+			break;
+		}
+		if (attempt === 0 && /not enough/.test(r.error ?? "")) {
+			log.push(`operator refused (${r.error}): stock moved during the turn, rebuilt from fresh stock`);
+			st.merchants = (await chainEconomy(provider, cfg)).merchants;
+			plan = operatorBatch();
+			continue;
+		}
+		log.push(`operator FAILED: ${r.error}`);
+		break;
 	}
+	for (const [k, v] of plan.carry) await kv(cfg, [
+		"SET",
+		`vivolith:carry:${k}`,
+		String(v)
+	]).catch(() => null);
 	if (!await chronicle(agentStore, events).catch(() => false)) log.push("chronicle not written (store busy or down)");
 	const receiptsOf = (id) => view(provider, cfg.contractId, "get_receipts", { account_id: `${id}.${cfg.relayerId}` });
 	await recordMemories(agentStore, day, snaps, receiptsOf, log);
