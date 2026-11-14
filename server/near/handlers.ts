@@ -12,7 +12,7 @@ import { deserialize } from "borsh";
 import { Account, JsonRpcProvider, KeyPairSigner, PublicKey, SCHEMA, actions, nearToYocto, teraToGas, type KeyPairString } from "near-api-js";
 import { MERCHANTS, keyPairFromSeed, merchantKey, residentKey, type MerchantId } from "./keys.ts";
 import { RESIDENTS, executableOffers, planResident, type Offer } from "../../src/economy/residents.ts";
-import { spokenText } from "../../src/v2/audio-manifest.ts";
+import { SPEAKERS, spokenText } from "../../src/v2/audio-manifest.ts";
 import { gameLine, speechToken, speechTokenOk, synthesize, voiceSecret, voiceText } from "./voice.ts";
 import { MAX_QUESTION, answer, factsFor, moodOf, playerFacts, residentFacts, type Exchange, type Ledger, type Receipt } from "./talk.ts";
 import { readMemory } from "./memory.ts";
@@ -77,6 +77,8 @@ const LIMITS = {
   voice: { max: 30, windowSec: 60 }, // per IP: spoken lines without a recorded file (cached; daily budget in voice.ts)
   voiceDay: { max: 1500, windowSec: 24 * 3600 }, // global: voice requests a day across instances (counted before the cache)
   voiceChars: { max: 20000, windowSec: 24 * 3600 }, // global: characters sent to the voice provider a day (about $1.60 at API prices)
+  // per address: newly synthesized characters a day (a long session of unrecorded lines and answers is about 3000)
+  voiceCharsEach: { max: 5000, windowSec: 24 * 3600 },
   pick: { max: 6, windowSec: 3600 }, // per IP: orchard picks (each account also once per market day)
 } as const;
 
@@ -448,7 +450,6 @@ async function deal(cfg: Config, req: Request, env: RelayEnv): Promise<Response>
   const merchant = String(b.merchant ?? "");
   const side = String(b.side ?? "");
   const token = String(b.token ?? "");
-  const player = String(b.player ?? "");
   const qty = Number(b.qty);
   const unit = Number(b.unit);
   /** The raw NEAR AI price the player's screen was built on (0 = "no agent price"); absent from older clients. */
@@ -458,7 +459,9 @@ async function deal(cfg: Config, req: Request, env: RelayEnv): Promise<Response>
   if (side !== "buy" && side !== "sell") throw new HttpError(400, "side must be buy or sell");
   if (!GOODS.has(token)) throw new HttpError(400, "unknown good");
   if (!Number.isInteger(qty) || qty < 1 || qty > 40 || !Number.isInteger(unit) || unit < 1 || unit > 1000) throw new HttpError(400, "bad quantity or price");
-  if (!/^[a-z0-9._-]{2,64}$/.test(player)) throw new HttpError(400, "bad account id");
+  // the caller must hold a key NEAR shows on the account it trades as: nobody else can spend that player's rate limit,
+  // overwrite its deal references or write refused offers into its history with a stall
+  const player = await accountAuth(cfg, b, "deal", dealSigned(b));
   if (!(await hit(cfg, `deal:${player}`, LIMITS.deal.max, LIMITS.deal.windowSec))) throw new HttpError(429, "slow down");
   const { provider } = account(cfg);
   // Judge the deal on the merchant's live balances with the same rules the game shows (src/economy/pricing.ts).
@@ -688,14 +691,15 @@ const SAVE_MAX = 256 * 1024;
 const SAVE_SKEW_MS = 10 * 60 * 1000;
 
 /** The request is signed by a key that NEAR shows on `account` (its session or guest key, limited to our contract):
- *  only whoever holds that account's key can read or write its save. */
-async function saveAuth(cfg: Config, b: Record<string, unknown>, data: string): Promise<string> {
+ *  only whoever holds that account's key can act as that account. `scope` names what is signed ("save", "deal"), so a
+ *  signature for one request kind is never accepted for another. Returns the authenticated account id. */
+async function accountAuth(cfg: Config, b: Record<string, unknown>, scope: string, data: string): Promise<string> {
   const accountId = String(b.account ?? ""), publicKey = String(b.publicKey ?? ""), ts = Number(b.ts), sig = String(b.signature ?? "");
   if (!isGameAccount(accountId, cfg.relayerId)) throw new HttpError(400, "not a game account");
   if (!Number.isFinite(ts) || Math.abs(Date.now() - ts) > SAVE_SKEW_MS) throw new HttpError(401, "stale request");
   let pk: PublicKey;
   try { pk = PublicKey.fromString(publicKey); } catch { throw new HttpError(400, "invalid public key"); }
-  const msg = `vivolith-save|${accountId}|${ts}|${createHash("sha256").update(data).digest("hex")}`;
+  const msg = `vivolith-${scope}|${accountId}|${ts}|${createHash("sha256").update(data).digest("hex")}`;
   let ok = false;
   try { ok = pk.verify(new TextEncoder().encode(msg), Buffer.from(sig, "base64")); } catch { ok = false; }
   if (!ok) throw new HttpError(401, "bad signature");
@@ -703,9 +707,18 @@ async function saveAuth(cfg: Config, b: Record<string, unknown>, data: string): 
   const key = await provider.viewAccessKey({ accountId, publicKey: pk, finality: "final" }).catch(() => null) as { permission?: unknown } | null;
   const perm = key?.permission as { FunctionCall?: { receiver_id?: string } } | string | undefined;
   if (!key || typeof perm !== "object" || perm?.FunctionCall?.receiver_id !== cfg.contractId) throw new HttpError(403, "key does not belong to this account");
+  return accountId;
+}
+
+async function saveAuth(cfg: Config, b: Record<string, unknown>, data: string): Promise<string> {
+  const accountId = await accountAuth(cfg, b, "save", data);
   if (!(await hit(cfg, `save:${accountId}`, LIMITS.save.max, LIMITS.save.windowSec))) throw new HttpError(429, "slow down");
   return accountId;
 }
+
+/** What a deal request signs: the trade itself, so one signature cannot be reused for a different deal. */
+export const dealSigned = (b: Record<string, unknown>): string =>
+  [b.merchant, b.side, b.token, b.qty, b.unit, b.ref ?? "", JSON.stringify(b.tactics ?? []), b.rep ?? 0].map(String).join("|");
 
 async function cloudSave(cfg: Config, req: Request): Promise<Response> {
   const b = await readJson(req, SAVE_MAX + 2048);
@@ -1437,19 +1450,25 @@ export async function handle(route: string, req: Request, env: RelayEnv): Promis
     if (route === "voice") { // spoken lines work offline too: no NEAR needed
       const origin = req.headers.get("origin");
       if (origin && new URL(origin).host !== new URL(req.url).host) return json(403, { status: "error", message: "cross-origin requests not allowed" });
-      if (!(await hit(cfg, `voice:${clientIp(req)}`, LIMITS.voice.max, LIMITS.voice.windowSec))) return json(429, { status: "error", message: "slow down" });
+      const ip = clientIp(req);
+      if (!(await hit(cfg, `voice:${ip}`, LIMITS.voice.max, LIMITS.voice.windowSec))) return json(429, { status: "error", message: "slow down" });
       const e = env as Record<string, string | undefined>;
       // placeholder voice for local play without credits; refused on a production deployment
       const mock = e.VIVOLITH_VOICE_MOCK?.trim() === "1" && e.VERCEL_ENV !== "production";
-      // every instance together: at most this many voice requests a day (cached answers count too: a conservative cap)
-      if (!mock && !(await hit(cfg, "voice:day", LIMITS.voiceDay.max, LIMITS.voiceDay.windowSec))) return json(429, { status: "budget", message: "voice budget used for today" });
       const b = await readJson(req);
       const speaker = String(b.speaker ?? ""), text = voiceText(String(b.text ?? "")), mood = typeof b.mood === "string" ? b.mood : "neutral";
-      // only lines the server validated (speech token) or lines made of the game's own words: not a general TTS service
+      // validated before any shared budget is touched, so refused requests cannot use up the day for real players:
+      // only known voices, and only lines the server validated (speech token) or lines the game itself can say
+      if (!SPEAKERS[speaker]) return json(400, { status: "error", message: "unknown speaker" });
       if (!speechTokenOk(voiceSecret(e.NEAR_MERCHANT_SECRET), b.token, speaker, mood, text) && !gameLine(text)) return json(403, { status: "error", message: "not a line of this game" });
+      // every instance together: at most this many voice requests a day (cached answers count too: a conservative cap)
+      if (!mock && !(await hit(cfg, "voice:day", LIMITS.voiceDay.max, LIMITS.voiceDay.windowSec))) return json(429, { status: "budget", message: "voice budget used for today" });
       // VIVOLITH_VOICE_DAILY_CHARS: a lower shared cap for a bounded live test (never raises the default)
       const cap = Math.min(LIMITS.voiceChars.max, Number(e.VIVOLITH_VOICE_DAILY_CHARS) > 0 ? Number(e.VIVOLITH_VOICE_DAILY_CHARS) : Infinity);
-      const charge = (n: number): Promise<boolean> => hit(cfg, "voice:chars", cap, LIMITS.voiceChars.windowSec, n);
+      // charged only when the provider is actually called (a cache hit or a recorded line costs nothing): one requester's
+      // new lines are capped at a share of the day, so nobody can spend the whole shared budget alone
+      const charge = async (n: number): Promise<boolean> =>
+        (await hit(cfg, `voice:chars:${ip}`, LIMITS.voiceCharsEach.max, LIMITS.voiceCharsEach.windowSec, n)) && hit(cfg, "voice:chars", cap, LIMITS.voiceChars.windowSec, n);
       const r = await synthesize(speaker, text, e.ELEVENLABS_API_KEY?.trim(), { mood, mock, charge });
       return json(r.status, r.body);
     }

@@ -315,14 +315,16 @@ export async function connectGuest(): Promise<string | null> {
 const hex = async (s: string): Promise<string> =>
   Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s))), (b) => b.toString(16).padStart(2, "0")).join("");
 
-/** A request signed by this browser's key for the active account; the relayer checks NEAR has that key on the account. */
-async function signedForSave(data: string): Promise<Record<string, unknown> | null> {
+/** A request signed by this browser's key for the active account; the relayer checks NEAR has that key on the account.
+ *  `scope` is the request kind ("save", "deal"): a signature for one kind is refused for another. */
+async function signedRequest(scope: string, data: string): Promise<Record<string, unknown> | null> {
   const secret = store.get(KEY_STORE), accountId = store.get(ACCOUNT_STORE);
   if (!secret || !accountId) return null;
   const key = KeyPair.fromString(secret as KeyPairString), ts = Date.now();
-  const { signature } = key.sign(new TextEncoder().encode(`vivolith-save|${accountId}|${ts}|${await hex(data)}`));
+  const { signature } = key.sign(new TextEncoder().encode(`vivolith-${scope}|${accountId}|${ts}|${await hex(data)}`));
   return { account: accountId, publicKey: key.getPublicKey().toString(), ts, signature: btoa(String.fromCharCode(...signature)) };
 }
+const signedForSave = (data: string): Promise<Record<string, unknown> | null> => signedRequest("save", data);
 
 /** Uploads the save of a signed-in player (guests' saves stay in their browser). True when stored. */
 export async function cloudPut(data: string): Promise<boolean> {
@@ -390,7 +392,11 @@ export async function haggleDeal(merchant: string, side: "buy" | "sell", token: 
   let signed: Record<string, unknown> | null = null;
   for (let attempt = 0; attempt < SEND_TRIES && !signed; attempt++) { // the merchant's signature moves nothing yet
     if (attempt > 0) await sleep(RETRY_MS);
-    const r = await post("deal", { merchant, side, token, qty, unit, ref, tactics, rep, player: id }).catch(() => null);
+    const body = { merchant, side, token, qty, unit, ref, tactics: [...tactics], rep };
+    // signed fresh on each attempt (the relayer accepts a signature for 10 minutes) with the fields handlers.ts dealSigned() reads
+    const auth = await signedRequest("deal", [merchant, side, token, qty, unit, ref, JSON.stringify(body.tactics), rep].map(String).join("|"));
+    if (!auth) return { status: "failed", message: "no key for this account" };
+    const r = await post("deal", { ...body, ...auth }).catch(() => null);
     if (r && (r.status === "signed" || Number(r.httpStatus) < 500)) signed = r;
   }
   if (!signed || signed.status !== "signed") return { status: "failed", message: String(signed?.message ?? "merchant unreachable") };

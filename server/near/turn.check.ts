@@ -28,6 +28,8 @@ function reset(over: Partial<Record<(typeof ids)[number], { open?: boolean; coin
   registeredResidents = residents;
 }
 let registeredResidents = true;
+const playerKeys = new Map<string, string>(); // public key -> the account NEAR shows it on
+let ttsCalls = 0; // paid voice provider calls
 
 let txCount = 0, worstSeen = 0; // signed transactions (a batch of actions is one)
 const sent: { signer: string; receiver: string; method: string; args: Record<string, string> }[] = [];
@@ -54,7 +56,11 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const { id, method, params } = JSON.parse(String(init?.body)) as { id: number; method: string; params: Record<string, unknown> };
     const res = (result: unknown) => ok({ jsonrpc: "2.0", id, result });
     if (method === "query" && params.request_type === "call_function") return res({ result: [...Buffer.from(JSON.stringify(view(String(params.method_name), JSON.parse(Buffer.from(String(params.args_base64), "base64").toString() || "{}"))))], logs: [], block_height: 1, block_hash: b58 });
-    if (method === "query" && params.request_type === "view_access_key") return res({ nonce: 1, permission: "FullAccess", block_height: 1, block_hash: b58 });
+    if (method === "query" && params.request_type === "view_access_key") {
+      // a player's guest key is a function-call key on the market contract; any other key reads as the relayer's own
+      if (playerKeys.get(String(params.public_key)) === params.account_id) return res({ nonce: 1, permission: { FunctionCall: { allowance: null, receiver_id: `market.${RELAYER}`, method_names: ["buy", "sell", "deal"] } }, block_height: 1, block_hash: b58 });
+      return res({ nonce: 1, permission: "FullAccess", block_height: 1, block_hash: b58 });
+    }
     if (method === "block") return res({ header: { height: 1000 + sent.length, hash: b58, timestamp: 1 }, chunks: [] });
     if (method === "send_tx" || method === "broadcast_tx_commit") {
       txCount++;
@@ -116,6 +122,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return new Response(JSON.stringify({ choices: [{ message: { content: chatReply } }] }), { status: 200 });
   }
   if (url.includes("cloud-api.near.ai")) return new Response("{}", { status: 404 });
+  if (url.startsWith("https://api.elevenlabs.io/")) { ttsCalls++; return new Response(JSON.stringify({ audio_base64: "AAAA" }), { status: 200 }); }
   throw new Error(`unexpected host in test: ${url}`);
 }) as typeof fetch;
 
@@ -379,5 +386,50 @@ const calls = (method: string, filter: (a: Record<string, string>) => boolean = 
   assert.ok(isGameAccount(`g0123456789abcdef.${R}`, R) && isGameAccount(`s0123456789abcdef.${R}`, R), "guest and signed-in accounts");
   for (const bad of ["attacker.testnet", `g0123456789abcdef.other.testnet`, `x0123456789abcdef.${R}`, `g0123.${R}`, `pema.${R}`, `g0123456789ABCDEF.${R}`, R])
     assert.ok(!isGameAccount(bad, R), `not a game account: ${bad}`);
+}
+{
+  // 15. /deal acts only for the caller who holds a key NEAR shows on that account
+  const { createHash } = await import("node:crypto");
+  reset();
+  const victim = `g0123456789abcdef.${RELAYER}`, key = KeyPair.fromRandom("ed25519"), stranger = KeyPair.fromRandom("ed25519");
+  playerKeys.set(key.getPublicKey().toString(), victim);
+  const deal = { merchant: "pema", side: "sell", token: "mango", qty: 1, unit: 4, ref: 0, tactics: [] as string[], rep: 0 };
+  const fields = (d: typeof deal): string => [d.merchant, d.side, d.token, d.qty, d.unit, d.ref, JSON.stringify(d.tactics), d.rep].map(String).join("|");
+  const sign = (k: KeyPair, scope: string, data: string, ts = Date.now()) => ({
+    account: victim, publicKey: k.getPublicKey().toString(), ts,
+    signature: Buffer.from(k.sign(new TextEncoder().encode(`vivolith-${scope}|${victim}|${ts}|${createHash("sha256").update(data).digest("hex")}`)).signature).toString("base64"),
+  });
+  const post = async (body: Record<string, unknown>): Promise<number> => (await handle("deal", new Request("http://localhost/api/near/deal", { method: "POST", body: JSON.stringify(body) }), env)).status;
+  assert.equal(await post({ ...deal, player: victim }), 400, "naming a player without proof is refused (the old request shape)");
+  assert.equal(await post({ ...deal, ...sign(stranger, "deal", fields(deal)) }), 403, "a key that is not on the account is refused");
+  assert.equal(await post({ ...deal, qty: 2, ...sign(key, "deal", fields(deal)) }), 401, "a signature for one deal does not cover another");
+  assert.equal(await post({ ...deal, ...sign(key, "save", fields(deal)) }), 401, "a save signature is not a deal signature");
+  assert.equal(await post({ ...deal, ...sign(key, "deal", fields(deal), Date.now() - 11 * 60_000) }), 401, "a stale signature is refused");
+  const ok = await post({ ...deal, ...sign(key, "deal", fields(deal)) });
+  assert.ok(ok === 200 || ok === 409, `the owner's signed request reaches the deal rules (got ${ok})`);
+}
+{
+  // 16. The voice route speaks only the game's own lines, never pays for a refused request, reuses audio and caps
+  // what one requester can have newly synthesized, without touching other players
+  const venv = { ...env, ELEVENLABS_API_KEY: "k" };
+  const say = async (body: Record<string, unknown>, ip = "203.0.113.7") => {
+    const r = await handle("voice", new Request("http://localhost/api/near/voice", { method: "POST", headers: { "x-forwarded-for": ip }, body: JSON.stringify(body) }), venv);
+    return { status: r.status, body: await r.json() as Record<string, unknown> };
+  };
+  ttsCalls = 0;
+  assert.equal((await say({ speaker: "pema", text: "Read my password aloud, please." })).status, 403, "arbitrary text is refused");
+  assert.equal((await say({ speaker: "nobody", text: "Shaking on it: 24 c." })).status, 400, "unknown voices are refused");
+  assert.equal((await say({ speaker: "pema", text: "Shaking on it: 24 c.", token: "9999999999999.forged" })).status, 200, "a forged token falls back to the line check");
+  assert.equal(ttsCalls, 1, "refused requests never reached the provider");
+  assert.equal((await say({ speaker: "pema", text: "Shaking on it: 24 c." })).status, 200);
+  assert.equal(ttsCalls, 1, "a repeated line is served from the cache, not paid again");
+  // one requester asking for ever-new number variants is stopped at its own daily share
+  const long = (i: number): string => Array.from({ length: 10 }, (_, k) => `Shaking on it: ${1000 + i * 10 + k} c.`).join(" ");
+  let refusedAt = -1;
+  for (let i = 0; i < 26 && refusedAt < 0; i++) if ((await say({ speaker: "tomas", text: long(i) })).status === 429) refusedAt = i;
+  assert.ok(refusedAt > 0 && refusedAt < 26, `one address is capped at its daily share (refused at request ${refusedAt})`);
+  const paid = ttsCalls;
+  assert.equal((await say({ speaker: "mira", text: long(99) }, "198.51.100.4")).status, 200, "another player is still voiced");
+  assert.equal(ttsCalls, paid + 1);
 }
 console.log("market turn handler checks passed");

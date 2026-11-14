@@ -14240,6 +14240,7 @@ var lines_default = {
 		"nineteen",
 		"no answer",
 		"no answer from NEAR; checking your balance",
+		"no key for this account",
 		"none",
 		"noopener",
 		"normal",
@@ -17214,6 +17215,10 @@ const LIMITS = {
 		max: 2e4,
 		windowSec: 86400
 	},
+	voiceCharsEach: {
+		max: 5e3,
+		windowSec: 86400
+	},
 	pick: {
 		max: 6,
 		windowSec: 3600
@@ -17769,7 +17774,6 @@ async function deal(cfg, req, env) {
 	const merchant = String(b.merchant ?? "");
 	const side = String(b.side ?? "");
 	const token = String(b.token ?? "");
-	const player = String(b.player ?? "");
 	const qty = Number(b.qty);
 	const unit = Number(b.unit);
 	/** The raw NEAR AI price the player's screen was built on (0 = "no agent price"); absent from older clients. */
@@ -17779,7 +17783,7 @@ async function deal(cfg, req, env) {
 	if (side !== "buy" && side !== "sell") throw new HttpError(400, "side must be buy or sell");
 	if (!GOODS.has(token)) throw new HttpError(400, "unknown good");
 	if (!Number.isInteger(qty) || qty < 1 || qty > 40 || !Number.isInteger(unit) || unit < 1 || unit > 1e3) throw new HttpError(400, "bad quantity or price");
-	if (!/^[a-z0-9._-]{2,64}$/.test(player)) throw new HttpError(400, "bad account id");
+	const player = await accountAuth(cfg, b, "deal", dealSigned(b));
 	if (!await hit(cfg, `deal:${player}`, LIMITS.deal.max, LIMITS.deal.windowSec)) throw new HttpError(429, "slow down");
 	const { provider } = account(cfg);
 	const [registered, offers, st] = await Promise.all([
@@ -18070,8 +18074,9 @@ async function linkIdentity(cfg, req, identity, secret, guestId, choice) {
 const SAVE_MAX = 262144;
 const SAVE_SKEW_MS = 6e5;
 /** The request is signed by a key that NEAR shows on `account` (its session or guest key, limited to our contract):
-*  only whoever holds that account's key can read or write its save. */
-async function saveAuth(cfg, b, data) {
+*  only whoever holds that account's key can act as that account. `scope` names what is signed ("save", "deal"), so a
+*  signature for one request kind is never accepted for another. Returns the authenticated account id. */
+async function accountAuth(cfg, b, scope, data) {
 	const accountId = String(b.account ?? ""), publicKey = String(b.publicKey ?? ""), ts = Number(b.ts), sig = String(b.signature ?? "");
 	if (!isGameAccount(accountId, cfg.relayerId)) throw new HttpError(400, "not a game account");
 	if (!Number.isFinite(ts) || Math.abs(Date.now() - ts) > SAVE_SKEW_MS) throw new HttpError(401, "stale request");
@@ -18081,7 +18086,7 @@ async function saveAuth(cfg, b, data) {
 	} catch {
 		throw new HttpError(400, "invalid public key");
 	}
-	const msg = `vivolith-save|${accountId}|${ts}|${createHash("sha256").update(data).digest("hex")}`;
+	const msg = `vivolith-${scope}|${accountId}|${ts}|${createHash("sha256").update(data).digest("hex")}`;
 	let ok = false;
 	try {
 		ok = pk.verify(new TextEncoder().encode(msg), Buffer.from(sig, "base64"));
@@ -18097,9 +18102,24 @@ async function saveAuth(cfg, b, data) {
 	}).catch(() => null);
 	const perm = key?.permission;
 	if (!key || typeof perm !== "object" || perm?.FunctionCall?.receiver_id !== cfg.contractId) throw new HttpError(403, "key does not belong to this account");
+	return accountId;
+}
+async function saveAuth(cfg, b, data) {
+	const accountId = await accountAuth(cfg, b, "save", data);
 	if (!await hit(cfg, `save:${accountId}`, LIMITS.save.max, LIMITS.save.windowSec)) throw new HttpError(429, "slow down");
 	return accountId;
 }
+/** What a deal request signs: the trade itself, so one signature cannot be reused for a different deal. */
+const dealSigned = (b) => [
+	b.merchant,
+	b.side,
+	b.token,
+	b.qty,
+	b.unit,
+	b.ref ?? "",
+	JSON.stringify(b.tactics ?? []),
+	b.rep ?? 0
+].map(String).join("|");
 async function cloudSave(cfg, req) {
 	const b = await readJson(req, 264192);
 	const data = typeof b.data === "string" ? b.data : "";
@@ -19268,24 +19288,29 @@ async function handle(route, req, env) {
 				status: "error",
 				message: "cross-origin requests not allowed"
 			});
-			if (!await hit(cfg, `voice:${clientIp(req)}`, LIMITS.voice.max, LIMITS.voice.windowSec)) return json(429, {
+			const ip = clientIp(req);
+			if (!await hit(cfg, `voice:${ip}`, LIMITS.voice.max, LIMITS.voice.windowSec)) return json(429, {
 				status: "error",
 				message: "slow down"
 			});
 			const e = env;
 			const mock = e.VIVOLITH_VOICE_MOCK?.trim() === "1" && e.VERCEL_ENV !== "production";
-			if (!mock && !await hit(cfg, "voice:day", LIMITS.voiceDay.max, LIMITS.voiceDay.windowSec)) return json(429, {
-				status: "budget",
-				message: "voice budget used for today"
-			});
 			const b = await readJson(req);
 			const speaker = String(b.speaker ?? ""), text = voiceText(String(b.text ?? "")), mood = typeof b.mood === "string" ? b.mood : "neutral";
+			if (!SPEAKERS[speaker]) return json(400, {
+				status: "error",
+				message: "unknown speaker"
+			});
 			if (!speechTokenOk(voiceSecret(e.NEAR_MERCHANT_SECRET), b.token, speaker, mood, text) && !gameLine(text)) return json(403, {
 				status: "error",
 				message: "not a line of this game"
 			});
+			if (!mock && !await hit(cfg, "voice:day", LIMITS.voiceDay.max, LIMITS.voiceDay.windowSec)) return json(429, {
+				status: "budget",
+				message: "voice budget used for today"
+			});
 			const cap = Math.min(LIMITS.voiceChars.max, Number(e.VIVOLITH_VOICE_DAILY_CHARS) > 0 ? Number(e.VIVOLITH_VOICE_DAILY_CHARS) : Infinity);
-			const charge = (n) => hit(cfg, "voice:chars", cap, LIMITS.voiceChars.windowSec, n);
+			const charge = async (n) => await hit(cfg, `voice:chars:${ip}`, LIMITS.voiceCharsEach.max, LIMITS.voiceCharsEach.windowSec, n) && hit(cfg, "voice:chars", cap, LIMITS.voiceChars.windowSec, n);
 			const r = await synthesize(speaker, text, e.ELEVENLABS_API_KEY?.trim(), {
 				mood,
 				mock,

@@ -3,6 +3,7 @@
 // sale back at the backing; refused moves that must change nothing; dividends settled and claimed; a re-register of
 // an existing account; and the contract's own `audit` after every step. Run: node scripts/near/e2e.ts
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { Account, JsonRpcProvider, KeyPair, KeyPairSigner, actions, encodeSignedDelegate, teraToGas } from "near-api-js";
 import { handle, readConfig, type RelayEnv } from "../../server/near/handlers.ts";
@@ -57,12 +58,22 @@ async function relayCall(player: Account, method: string, args: Record<string, u
 const STARTER = 40;
 const tx = (h: unknown): string => `https://testnet.nearblocks.io/txns/${String(h)}`;
 
+const guestKeys = new Map<string, KeyPair>();
+/** A deal request signed by the player's own key, as the game does (src/near/chain.ts haggleDeal). */
+function signedDeal(player: Account, deal: Record<string, unknown>): Record<string, unknown> {
+  const key = guestKeys.get(player.accountId)!, ts = Date.now(), body = { ref: 0, tactics: [], rep: 0, ...deal };
+  const data = [body.merchant, body.side, body.token, body.qty, body.unit, body.ref, JSON.stringify(body.tactics), body.rep].map(String).join("|");
+  const msg = `vivolith-deal|${player.accountId}|${ts}|${createHash("sha256").update(data).digest("hex")}`;
+  return { ...body, account: player.accountId, publicKey: key.getPublicKey().toString(), ts, signature: Buffer.from(key.sign(new TextEncoder().encode(msg)).signature).toString("base64") };
+}
+
 async function newGuest(): Promise<Account> {
   const key = KeyPair.fromRandom("ed25519");
   const guest = await call("guest", { publicKey: key.getPublicKey().toString() });
   assert.equal(guest.status, 200, JSON.stringify(guest.body));
   const accountId = String(guest.body.accountId);
   console.log("guest", accountId, (guest.body.txHashes as string[]).map(tx).join(" "));
+  guestKeys.set(accountId, key);
   return new Account(accountId, provider, new KeyPairSigner(key));
 }
 
@@ -113,7 +124,7 @@ if (((await settled(pema)).coin ?? 0) < 18) {
   await settled(pema);
 }
 // 3. Deliver to Pema with a haggled deal she signs (tutorial step 4): 3 at 6 c.
-const signed = await call("deal", { merchant: "pema", side: "sell", token: "mango", qty: 3, unit: 6, player: kavi.accountId });
+const signed = await call("deal", signedDeal(kavi, { merchant: "pema", side: "sell", token: "mango", qty: 3, unit: 6 }));
 assert.equal(signed.status, 200, JSON.stringify(signed.body));
 const dealt = await relayCall(kavi, "deal", signed.body.args as Record<string, unknown>);
 assert.equal(dealt.status, 200, JSON.stringify(dealt.body));
