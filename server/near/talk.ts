@@ -90,7 +90,7 @@ export function playerFacts(receipts: readonly Receipt[], npcAccount: string): s
  *  "I don't know anything about crates or the harbor" right after Pema's own greeting said her crates were stuck there.
  *  No numbers, so the grounding guard is unaffected. */
 const STORY: Readonly<Record<MerchantId, string>> = {
-  pema: "Your own crates of mangoes are stuck in the harbor hold until a storage fee is paid; Tomas has the harbor berth, so he sits on a pile of mangoes while you wait. A partner buying shares in your stall can help pay that fee.",
+  pema: "Your own crates of mangoes are stuck in the harbor hold until a storage fee is paid. Tomas has the harbor berth and a big pile of his own mangoes, which he sells while you wait. A partner buying shares in your stall can help pay that fee.",
   tomas: "You hold the harbor berth, so your mangoes come in by sea and you sell in bulk; Pema's crates are stuck in the harbor hold.",
   mira: "You buy surplus cheaply from other stalls and resell it for a little less than they do.",
   arin: "You run the tea house and turn mangoes into lassi in your kitchen; you always need mangoes.",

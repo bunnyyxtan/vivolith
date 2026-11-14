@@ -788,7 +788,10 @@ async function reprice(cfg: Config, req: Request, env: RelayEnv): Promise<Respon
 async function repostOrders(cfg: Config, provider: JsonRpcProvider, secret: string, id: MerchantId, st: EconomyState, offers: readonly OfferRow[]): Promise<{ orders: number; txHashes: string[]; failed: number; lines: string[] }> {
   const posted = new Map(offers.filter((o) => o.merchant === id).map((o) => [orderKey(o), o]));
   const lever = LEVERS[id];
-  const decided = lever ? await decisionFor(decisionStore(cfg), id, Math.floor(Date.now() / MARKET_DAY_MS)).catch(() => null) : null;
+  // only a genuine NEAR AI price holds the lever for the day (the game shows it too, see play.ts syncAgentPrice); a rule
+  // fallback follows the rule like every other order (live: Arin's held bid stayed 5 c on chain while the game offered 6 c)
+  const d = lever ? await decisionFor(decisionStore(cfg), id, Math.floor(Date.now() / MARKET_DAY_MS)).catch(() => null) : null;
+  const decided = d && d.kind === "price" && d.source === "ai" && d.txHash ? d : null;
   const calls: Call[] = [];
   for (const o of ruleOrders(st, id)) {
     if (decided && lever && lever.side === o.side && lever.good === o.token) continue;

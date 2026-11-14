@@ -13700,6 +13700,7 @@ var lines_default = {
 		"Tomas charges what a shortage allows.",
 		"Tomas has more mangoes than he can sell.",
 		"Tomas has none to spare today, but Mira undercuts him anyway.",
+		"Tomas has the harbor berth and a big pile of his own mangoes, which he sells while you wait.",
 		"Tomas will be laughing at the Tea House tonight.",
 		"Tomas won't budge.",
 		"Tomas's mangoes.",
@@ -13811,7 +13812,7 @@ var lines_default = {
 		"Your guest progress came with you.",
 		"Your loss.",
 		"Your name",
-		"Your own crates of mangoes are stuck in the harbor hold until a storage fee is paid; Tomas has the harbor berth, so he sits on a pile of mangoes while you wait.",
+		"Your own crates of mangoes are stuck in the harbor hold until a storage fee is paid.",
 		"Your part",
 		"Your purse",
 		"Your purse was re-checked.",
@@ -15623,7 +15624,7 @@ function playerFacts(receipts, npcAccount) {
 *  "I don't know anything about crates or the harbor" right after Pema's own greeting said her crates were stuck there.
 *  No numbers, so the grounding guard is unaffected. */
 const STORY = {
-	pema: "Your own crates of mangoes are stuck in the harbor hold until a storage fee is paid; Tomas has the harbor berth, so he sits on a pile of mangoes while you wait. A partner buying shares in your stall can help pay that fee.",
+	pema: "Your own crates of mangoes are stuck in the harbor hold until a storage fee is paid. Tomas has the harbor berth and a big pile of his own mangoes, which he sells while you wait. A partner buying shares in your stall can help pay that fee.",
 	tomas: "You hold the harbor berth, so your mangoes come in by sea and you sell in bulk; Pema's crates are stuck in the harbor hold.",
 	mira: "You buy surplus cheaply from other stalls and resell it for a little less than they do.",
 	arin: "You run the tea house and turn mangoes into lassi in your kitchen; you always need mangoes."
@@ -18171,7 +18172,8 @@ async function reprice(cfg, req, env) {
 async function repostOrders(cfg, provider, secret, id, st, offers) {
 	const posted = new Map(offers.filter((o) => o.merchant === id).map((o) => [orderKey(o), o]));
 	const lever = LEVERS[id];
-	const decided = lever ? await decisionFor(decisionStore(cfg), id, Math.floor(Date.now() / MARKET_DAY_MS)).catch(() => null) : null;
+	const d = lever ? await decisionFor(decisionStore(cfg), id, Math.floor(Date.now() / MARKET_DAY_MS)).catch(() => null) : null;
+	const decided = d && d.kind === "price" && d.source === "ai" && d.txHash ? d : null;
 	const calls = [];
 	for (const o of ruleOrders(st, id)) {
 		if (decided && lever && lever.side === o.side && lever.good === o.token) continue;
