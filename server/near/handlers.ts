@@ -134,13 +134,14 @@ async function hit(cfg: Config, bucket: string, max: number, windowSec: number, 
 
 const kvMemory = new Map<string, string>();
 /** GET / SET one value: Upstash Redis REST when configured (persistent), else per-instance memory (dev only). */
-async function kv(cfg: Config, cmd: ["GET", string] | ["SET", string, string]): Promise<string | null> {
+async function kv(cfg: Config, cmd: ["GET", string] | ["SET", string, string] | ["SET", string, string, "EX", string] | ["DEL", string]): Promise<string | null> {
   if (cfg.redisUrl && cfg.redisToken) {
     const r = await fetch(cfg.redisUrl, { method: "POST", headers: { authorization: `Bearer ${cfg.redisToken}`, "content-type": "application/json" }, body: JSON.stringify(cmd) });
     if (!r.ok) throw new HttpError(503, "save storage unavailable");
     return ((await r.json()) as { result: string | null }).result;
   }
-  if (cmd[0] === "SET") { kvMemory.set(cmd[1], cmd[2]); return "OK"; }
+  if (cmd[0] === "SET") { kvMemory.set(cmd[1], cmd[2]); return "OK"; } // ponytail: no expiry in local memory
+  if (cmd[0] === "DEL") { kvMemory.delete(cmd[1]); return "OK"; }
   return kvMemory.get(cmd[1]) ?? null;
 }
 
@@ -226,8 +227,8 @@ function account(cfg: Config): { provider: JsonRpcProvider; relayer: Account } {
   return { provider, relayer: new Account(cfg.relayerId, provider, cfg.relayerKey!) };
 }
 
-async function view<T>(provider: JsonRpcProvider, contractId: string, method: string, args: Record<string, unknown>): Promise<T> {
-  return (await provider.callFunction({ contractId, method, args, finality: "final" })) as unknown as T;
+async function view<T>(provider: JsonRpcProvider, contractId: string, method: string, args: Record<string, unknown>, finality: "final" | "optimistic" = "final"): Promise<T> {
+  return (await provider.callFunction({ contractId, method, args, finality })) as unknown as T;
 }
 
 /** Guest ids are derived from the browser's public key, so retries are idempotent and one key = one account. */
@@ -719,10 +720,10 @@ interface StallRow { merchant: string; open: boolean; need: string; delivered: s
 
 /** Rebuilds the four merchants from their on-chain balances and stall status so the shared rules in src/economy run
  *  on real state (a closed stall is closed for the planner, the pricing and the Guild alike). */
-export async function chainEconomy(provider: JsonRpcProvider, cfg: Config): Promise<EconomyState> {
+export async function chainEconomy(provider: JsonRpcProvider, cfg: Config, finality: "final" | "optimistic" = "final"): Promise<EconomyState> {
   const st = initialEconomy();
   st.flags.onchain = true;
-  for (const s of await view<StallRow[]>(provider, cfg.contractId, "get_stalls", {})) {
+  for (const s of await view<StallRow[]>(provider, cfg.contractId, "get_stalls", {}, finality)) {
     const id = s.merchant as MerchantId;
     if (!st.merchants[id]) continue;
     st.flags[`holders.${id}`] = s.holders;
@@ -736,7 +737,7 @@ export async function chainEconomy(provider: JsonRpcProvider, cfg: Config): Prom
     }
   }
   await Promise.all(MERCHANTS.map(async (id) => {
-    const rows = await view<[string, string][]>(provider, cfg.contractId, "get_balances", { account_id: `${id}.${cfg.relayerId}` });
+    const rows = await view<[string, string][]>(provider, cfg.contractId, "get_balances", { account_id: `${id}.${cfg.relayerId}` }, finality);
     const b = Object.fromEntries(rows.map(([t, v]) => [t, Number(v)]));
     const m = st.merchants[id];
     m.stock = { mango: b.mango ?? 0, lemon: b.lemon ?? 0, lassi: b.lassi ?? 0 };
@@ -746,6 +747,68 @@ export async function chainEconomy(provider: JsonRpcProvider, cfg: Config): Prom
 }
 
 const orderKey = (o: { merchant: string; token_id: string; side: string }): string => `${o.merchant}|${o.side}|${o.token_id}`;
+
+export interface StandingOrder { readonly side: "ask" | "bid"; readonly token: string; readonly qty: number; readonly price: number }
+/** The orders a merchant should have posted for this state: an ask for every good it sells (none while closed) and its
+ *  mango and lemon bids. `override` prices one order (the agent's lever). Used by the market turn and by `reprice`, so the
+ *  posted book and the price a player is offered come from one rule. Shares need no orders (fixed terms in the contract). */
+export function ruleOrders(st: EconomyState, id: MerchantId, override: (side: "ask" | "bid", good: string) => number | null = () => null): StandingOrder[] {
+  const m = st.merchants[id];
+  const out: StandingOrder[] = m.sells.map((good) => ({ side: "ask", token: good, qty: m.status === "open" ? m.stock[good] : 0, price: override("ask", good) ?? quote(st, id, good, false).price }));
+  for (const good of ["mango", "lemon"] as const) {
+    const b = bidFor(st, id, good);
+    const price = override("bid", good) ?? b?.price ?? 1;
+    out.push({ side: "bid", token: good, qty: b ? Math.min(b.qty, Math.floor(m.cash / Math.max(1, price))) : 0, price });
+  }
+  return out;
+}
+
+/** A player's trade moved a stall's stock and till, so the rule now prices it differently; its posted orders would stay
+ *  stale until the next market turn (the panel offered 4 c while the chain still showed a 5 c bid). This re-posts that
+ *  one merchant's changed orders from the state just executed. Skipped while a market turn runs (it reprices first and
+ *  signs with the same keys), at most once per merchant per 3 s, and only changed orders are sent. A lever order priced
+ *  by today's agent decision is left to the market turn. */
+const TICK_RUNNING = "vivolith:tick:running";
+async function reprice(cfg: Config, req: Request, env: RelayEnv): Promise<Response> {
+  const id = String((await readJson(req)).merchant ?? "") as MerchantId;
+  if (!(MERCHANTS as readonly string[]).includes(id)) throw new HttpError(400, "unknown merchant");
+  const secret = (env.NEAR_MERCHANT_SECRET ?? "").trim();
+  if (!secret) throw new HttpError(503, "merchant keys not configured");
+  if (!(await hit(cfg, `reprice:${id}`, 1, 3))) return json(200, { status: "skipped", message: "repriced moments ago" });
+  if (await kv(cfg, ["GET", TICK_RUNNING]).catch(() => null)) return json(200, { status: "skipped", message: "a market turn is repricing" });
+  const { provider } = account(cfg);
+  const st = await chainEconomy(provider, cfg, "optimistic");
+  const offers = await view<OfferRow[]>(provider, cfg.contractId, "get_offers", {}, "optimistic");
+  const r = await repostOrders(cfg, provider, secret, id, st, offers);
+  return json(200, { status: "onchain", merchant: id, ...r });
+}
+
+/** Sends this merchant's orders that differ from `ruleOrders` for `st` (one action per transaction, in sequence), never
+ *  the lever order a decision of today priced. Shared by `reprice` and the end of the market turn. */
+async function repostOrders(cfg: Config, provider: JsonRpcProvider, secret: string, id: MerchantId, st: EconomyState, offers: readonly OfferRow[]): Promise<{ orders: number; txHashes: string[]; failed: number; lines: string[] }> {
+  const posted = new Map(offers.filter((o) => o.merchant === id).map((o) => [orderKey(o), o]));
+  const lever = LEVERS[id];
+  const decided = lever ? await decisionFor(decisionStore(cfg), id, Math.floor(Date.now() / MARKET_DAY_MS)).catch(() => null) : null;
+  const calls: Call[] = [];
+  for (const o of ruleOrders(st, id)) {
+    if (decided && lever && lever.side === o.side && lever.good === o.token) continue;
+    const cur = posted.get(`${id}|${o.side}|${o.token}`);
+    if (o.qty <= 0) { if (cur && Number(cur.qty) > 0) calls.push(actions.functionCall(o.side === "ask" ? "list" : "bid", { token_id: o.token, qty: "0", price: "1" }, TICK_GAS, 0n)); continue; }
+    if (cur && Number(cur.qty) === o.qty && Number(cur.price) === o.price) continue;
+    calls.push(actions.functionCall(o.side === "ask" ? "list" : "bid", { token_id: o.token, qty: String(o.qty), price: String(o.price) }, TICK_GAS, 0n));
+  }
+  const me = new Account(`${id}.${cfg.relayerId}`, provider, new KeyPairSigner(merchantKey(id, secret)));
+  const txHashes: string[] = [], lines: string[] = [];
+  let failed = 0;
+  for (const call of calls) {
+    const r = outcome(await me.signAndSendTransaction({ receiverId: cfg.contractId, actions: [call], throwOnFailure: false }));
+    txHashes.push(r.txHash);
+    const a = JSON.parse(new TextDecoder().decode(call.functionCall!.args)) as { token_id: string; qty: string; price: string };
+    lines.push(`${id} re-posts ${call.functionCall!.methodName === "list" ? "ask" : "bid"} ${a.qty === "0" ? "withdrawn" : `${a.qty} x ${a.price} c`} for ${a.token_id}${r.ok ? "" : ` FAILED: ${r.error}`}`);
+    if (!r.ok) { failed++; break; } // the next market turn reposts from scratch
+  }
+  return { orders: calls.length, txHashes, failed, lines };
+}
 
 type Call = ReturnType<typeof actions.functionCall>;
 const coinMove = (from: string, to: string, amount: number, reason: string): Call[] => [
@@ -902,10 +965,11 @@ export async function residentTurn(cfg: Config, provider: JsonRpcProvider, relay
 
 /** The most transactions one market turn can sign: settle, rent and Guild (1 each); one per changed order (every ask
  *  and the mango and lemon bids of each stall); one per merchant-to-merchant buy (a bid per buyer and fruit); a
- *  resident's mint, sale, meal and burn; one operator batch, sent at most twice. Checked against every turn in turn.check.ts. */
+ *  resident's mint, sale, meal and burn; one operator batch, sent at most twice; every order once more at the end (3b).
+ *  Checked against every turn in turn.check.ts. */
 export function maxTxPerTurn(): number {
   const orders = MERCHANTS.reduce((n, id) => n + initialEconomy().merchants[id].sells.length + 2, 0);
-  return 3 + orders + MERCHANTS.length * 2 + RESIDENTS.length * 4 + 2;
+  return 3 + orders * 2 + MERCHANTS.length * 2 + RESIDENTS.length * 4 + 2;
 }
 
 /** One market turn. `trusted` = called by the scheduler route with its secret: only such turns may ask NEAR AI (and
@@ -918,6 +982,11 @@ async function tick(cfg: Config, env: RelayEnv, trusted = false, scope: "market"
   const ops = opsConfig(env);
   if (ops.driver === "scheduler" && !trusted) return json(200, { status: "scheduled", message: "market turns run on the city's own schedule" });
   if (!(await claimTick(cfg))) return json(200, { status: "skipped", message: "the merchants moved less than a minute ago" });
+  await kv(cfg, ["SET", TICK_RUNNING, "1", "EX", "90"]).catch(() => null); // `reprice` stays off the merchants' keys meanwhile
+  try { return await tickBody(cfg, env, trusted, scope, ops, full); } finally { await kv(cfg, ["DEL", TICK_RUNNING]).catch(() => null); }
+}
+
+async function tickBody(cfg: Config, env: RelayEnv, trusted: boolean, scope: "market" | "agents", ops: ReturnType<typeof opsConfig>, full: boolean): Promise<Response> {
   // bounded playtest (NEAR_TEST_TURNS): checked before any chain read or signature, for browser and scheduler turns alike
   const cap = await takeTestTurn(ops, decisionStore(cfg));
   if (!cap.ok) return json(200, { status: "capped", message: "the playtest's market turns are used up", run: ops.testRun, limit: ops.testTurns, used: cap.used });
@@ -943,7 +1012,11 @@ async function tick(cfg: Config, env: RelayEnv, trusted = false, scope: "market"
   // the Chronicle so far (for each decision: which recorded events changed the decider since its last decision)
   const history = await readChronicle(agentStore).catch(() => []);
   const events: ChronicleEvent[] = [];
-  const turn: AgentTurn = { replayOnly: !trusted, budget: () => spend(ops, agentStore, "decision"), memory, history, events };
+  // NEAR_AGENTS_IN_PLAY=1: turns driven by players' browsers may ask NEAR AI too (still one decision per agent per market
+  // day, inside NEAR_AI_DAILY_DECISIONS), so the agents decide during ordinary play, not only on scheduler turns
+  const inPlay = (env.NEAR_AGENTS_IN_PLAY ?? "").trim() === "1";
+  const mayDecide = trusted || inPlay;
+  const turn: AgentTurn = { replayOnly: !mayDecide, budget: () => spend(ops, agentStore, "decision"), memory, history, events };
   // each agent's opening position for its economic memory, read before this turn changes anything
   const snaps = new Map<string, Snapshot>();
   const day = Math.floor(Date.now() / MARKET_DAY_MS);
@@ -1049,18 +1122,10 @@ async function tick(cfg: Config, env: RelayEnv, trusted = false, scope: "market"
     // agents scope: only the lever's own order, and only when a decision prices it
     const skip = (side: "ask" | "bid", good: string): boolean => !full && (!isLever(side, good) || agent === null);
     // a closed stall sells nothing until it reopens (the contract refuses those sales anyway)
-    for (const good of m.sells) {
-      if (skip("ask", good)) continue;
-      if (skipLever && isLever("ask", good)) continue; // a concurrent tick owns this merchant's order today
-      want("ask", good, m.status === "open" ? m.stock[good] : 0, isLever("ask", good) && leverPrice !== null ? leverPrice : quote(st, id, good, false).price);
-    }
-    // Shares need no orders: their terms are fixed in the contract, which issues and buys back on demand.
-    for (const good of ["mango", "lemon"] as const) {
-      const b = bidFor(st, id, good);
-      const price = isLever("bid", good) && leverPrice !== null ? leverPrice : b?.price ?? 1;
-      if (skipLever && isLever("bid", good)) continue;
-      if (skip("bid", good)) continue;
-      want("bid", good, b ? Math.min(b.qty, Math.floor(m.cash / Math.max(1, price))) : 0, price);
+    for (const o of ruleOrders(st, id, (side, good) => (isLever(side, good) ? leverPrice : null))) {
+      if (skip(o.side, o.token)) continue;
+      if (skipLever && isLever(o.side, o.token)) continue; // a concurrent tick owns this merchant's order today
+      want(o.side, o.token, o.qty, o.price);
     }
     // Function-call keys allow one action per transaction: one tx per order, in sequence for this merchant.
     const hashes: string[] = [];
@@ -1184,13 +1249,23 @@ async function tick(cfg: Config, env: RelayEnv, trusted = false, scope: "market"
   }
   for (const [k, v] of plan.carry) await kv(cfg, ["SET", `vivolith:carry:${k}`, String(v)]).catch(() => null);
 
+  // 3b. The book after the turn: merchant trades, residents and shoppers moved stock and tills after step 1 priced them,
+  // so the orders that changed are re-posted (the same rule a player's trade triggers through `reprice`). The posted
+  // book then matches the price the game offers until the next trade.
+  if (full) {
+    const after = await chainEconomy(provider, cfg, "optimistic");
+    const book = await view<OfferRow[]>(provider, cfg.contractId, "get_offers", {}, "optimistic");
+    const res = await Promise.all(MERCHANTS.map((id) => repostOrders(cfg, provider, secret, id, after, book).catch(() => null)));
+    for (const r of res) if (r) { txs.push(...r.txHashes); log.push(...r.lines); }
+  }
+
   // 4. The Chronicle (this turn's recorded events, one write), agents' memory (read from chain, written by every driver)
   // and signature checks of NEAR AI decisions (scheduler turns only: they call NEAR AI, within their own daily budget).
   // None of these can change a balance.
   if (!(await chronicle(agentStore, events).catch(() => false))) log.push("chronicle not written (store busy or down)");
   const receiptsOf = (id: string): Promise<ChainReceipt[]> => view<ChainReceipt[]>(provider, cfg.contractId, "get_receipts", { account_id: `${id}.${cfg.relayerId}` });
   await recordMemories(agentStore, day, snaps, receiptsOf, log);
-  if (trusted && !halted && baseCfg.key) {
+  if (mayDecide && !halted && baseCfg.key) {
     await verifyPass(agentStore, day, (decisionId, ev) => verifyDecision(baseCfg.url, baseCfg.key!, decisionId, ev, fetch as never), () => spend(ops, agentStore, "verify"), log);
   }
 
@@ -1198,7 +1273,7 @@ async function tick(cfg: Config, env: RelayEnv, trusted = false, scope: "market"
   await refundTestTxs(ops, agentStore, worst - txs.length);
   const last = { at: Date.now(), day, txs: txs.length, failed: log.filter((l) => /FAILED/.test(l)).length, by: trusted ? "scheduler" : "players" };
   await kv(cfg, ["SET", LAST_TICK, JSON.stringify(last)]).catch(() => null);
-  return json(200, { status: "onchain", txHashes: txs, log, driver: trusted ? "scheduler" : "players", agents: { halted, enabled: [...agentCfg.enabled], replayOnly: !trusted } });
+  return json(200, { status: "onchain", txHashes: txs, log, driver: trusted ? "scheduler" : "players", agents: { halted, enabled: [...agentCfg.enabled], replayOnly: !mayDecide } });
 }
 
 /** The Mango Orchard: ORCHARD_PICK mangoes to a registered player, once per account per market day (atomic day
@@ -1367,6 +1442,7 @@ export async function handle(route: string, req: Request, env: RelayEnv): Promis
     if (route === "settle") return await settle(cfg);
     if (route === "deal") return await deal(cfg, req, env);
     if (route === "tick") return await tick(cfg, env);
+    if (route === "reprice") return await reprice(cfg, req, env);
     if (route === "pick") return await pick(cfg, req);
     if (route === "talk") return await talk(cfg, req, env);
     if (route === "social") return await social(cfg, req, env);

@@ -73,6 +73,11 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         sent.push({ signer, receiver: tx.transaction.receiverId, method, args });
         if (method === "operator_mint") add(args.account_id, args.token_id, Number(args.amount));
         if (method === "operator_burn") add(args.account_id, args.token_id, -Number(args.amount));
+        if (method === "list" || method === "bid") { // a merchant's standing order replaces its previous one (qty 0 withdraws)
+          const side = method === "list" ? "ask" : "bid", merchant = signer.split(".")[0];
+          offers = offers.filter((o) => !(o.merchant === merchant && o.side === side && o.token_id === args.token_id));
+          if (Number(args.qty) > 0) offers.push({ merchant, account_id: signer, token_id: args.token_id, side, qty: args.qty, price: args.price });
+        }
         if (method === "street_sale") { // shoppers take goods off the shelf (the contract panics past the stall's stock)
           const m = acct(args.merchant);
           if (refuseStreet || (next[m]?.[args.token_id] ?? 0) < Number(args.qty)) panic = `not enough ${args.token_id}`;
@@ -316,5 +321,30 @@ const calls = (method: string, filter: (a: Record<string, string>) => boolean = 
   refuseStreet = false;
   assert.equal(failedTx.filter((f) => f.signer === RELAYER).length, 2, "the operator batch is sent at most twice");
   assert.ok((u.log as string[]).some((l) => /operator FAILED/.test(l)));
+}
+// 11. after a player's trade the stall's posted orders follow the rule at once (route `reprice`), so the price the panel
+// offers, the price the deal executes at and the order on chain agree; nothing is sent when the book is already right.
+{
+  nextDay(); reset(); sent.length = 0; offers = [];
+  await turn();
+  const { ruleOrders, chainEconomy } = await import("./handlers.ts");
+  const rp = async (merchant: string) => { now += 4000; const r = await handle("reprice", new Request("http://localhost/api/near/reprice", { method: "POST", body: JSON.stringify({ merchant }) }), env); return { code: r.status, body: (await r.json()) as Record<string, unknown> }; };
+  for (const id of ids) { const x = await rp(id); assert.equal(x.body.orders, 0, `${id}: the turn left the book matching the rule ${JSON.stringify(x)}`); }
+  // a player sells Pema 3 mangoes (the deal moved her stock and till; her posted bid is now stale)
+  bal[acct("pema")].mango += 3; bal[acct("pema")].coin -= 12;
+  const before = sent.length;
+  const r = await rp("pema");
+  assert.equal(r.body.status, "onchain"); assert.equal(r.body.failed, 0);
+  assert.ok(Number(r.body.orders) > 0, "her stale orders are re-posted");
+  assert.ok(sent.slice(before).every((s) => s.signer === acct("pema") && ["list", "bid"].includes(s.method)), "only her own orders, signed by her");
+  const { provider } = { provider: new (await import("near-api-js")).JsonRpcProvider({ url: "http://rpc.mock" }) };
+  const st = await chainEconomy(provider, { relayerId: RELAYER, contractId: "market.x.testnet" } as never);
+  for (const o of ruleOrders(st, "pema")) {
+    const cur = offers.find((x) => x.merchant === "pema" && x.side === o.side && x.token_id === o.token);
+    if (o.qty > 0) assert.deepEqual([Number(cur?.qty), Number(cur?.price)], [o.qty, o.price], `posted ${o.side} ${o.token} = the rule's`);
+    else assert.ok(!cur, `no ${o.side} for ${o.token}`);
+  }
+  assert.equal((await rp("pema")).body.orders, 0, "a second call sends nothing");
+  assert.equal((await rp("nobody")).code, 400);
 }
 console.log("market turn handler checks passed");

@@ -68,15 +68,18 @@ async function post(route: string, body: unknown): Promise<Record<string, unknow
 
 export async function chainStatus(): Promise<ChainStatus> {
   if (status) return status;
-  try {
-    // ?offline: play with the local economy only (playtests and demos without touching NEAR); the HUD says "Offline"
-    if (new URLSearchParams(location.search).has("offline")) throw new Error("offline by request");
-    const r = await fetch("/api/near/status");
-    if (!r.ok) throw new Error(String(r.status));
-    status = (await r.json()) as ChainStatus;
-  } catch {
-    status = { configured: false, contractId: "", relayer: null, merchants: [], auth: null };
+  // ?offline: play with the local economy only (playtests and demos without touching NEAR); the HUD says "Offline"
+  const wanted = !new URLSearchParams(location.search).has("offline");
+  // a passing network error must not turn a real session into an offline one: three tries before giving up
+  for (let attempt = 0; wanted && !status && attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 1500 * attempt));
+    try {
+      const r = await fetch("/api/near/status");
+      if (r.ok) status = (await r.json()) as ChainStatus;
+      else if (r.status < 500) break; // the server answered: not configured here
+    } catch { /* network: try again */ }
   }
+  status ??= { configured: false, contractId: "", relayer: null, merchants: [], auth: null };
   return status;
 }
 
@@ -263,9 +266,20 @@ export async function connectGuest(): Promise<string | null> {
     store.set(KEY_STORE, secret);
   }
   const key = KeyPair.fromString(secret);
+  // guest and register are idempotent on the relayer (the id comes from this key): a passing failure is retried, so a
+  // real session does not fall back to offline play; a rate limit (429) is final
+  const retried = async (route: string, body: unknown): Promise<Record<string, unknown>> => {
+    let r: Record<string, unknown> = { status: "failed" };
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) await sleep(2000 * attempt);
+      r = await post(route, body).catch(() => ({ status: "failed" }));
+      if (r.status === "onchain" || Number(r.httpStatus) === 429 || (Number(r.httpStatus) >= 400 && Number(r.httpStatus) < 500)) break;
+    }
+    return r;
+  };
   let accountId = store.get(ACCOUNT_STORE);
   if (!accountId) {
-    const r = await post("guest", { publicKey: key.getPublicKey().toString() });
+    const r = await retried("guest", { publicKey: key.getPublicKey().toString() });
     if (r.status !== "onchain" || typeof r.accountId !== "string") return null;
     accountId = r.accountId;
     store.set(ACCOUNT_STORE, accountId);
@@ -273,7 +287,7 @@ export async function connectGuest(): Promise<string | null> {
   // A stored account may predate a market reset: make sure the current ledger knows it (idempotent on the relayer).
   const known = await view<boolean>("is_registered", { account_id: accountId }).catch(() => true);
   if (!known) {
-    const r = await post("register", { accountId });
+    const r = await retried("register", { accountId });
     if (r.status !== "onchain") return null;
   }
   player = new Account(accountId, provider, new KeyPairSigner(key));
@@ -386,6 +400,8 @@ export const receipts = (accountId: string): Promise<ChainReceipt[]> => view<Cha
 
 /** Asks the relayer to run the merchants' autonomous turn and the day's settlement (both throttled server-side). */
 export const marketTick = (): Promise<Record<string, unknown>> => post("tick", {}).catch(() => ({ status: "failed" }));
+/** After a player's trade the stall's posted orders follow the new price at once (server `reprice`), not a turn later. */
+export const repriceMerchant = (merchant: string): void => { void post("reprice", { merchant }).catch(() => null); };
 export const settleDay = (): Promise<Record<string, unknown>> => post("settle", {}).catch(() => ({ status: "failed" }));
 /** Pays the player every whole coin of dividends they are owed (the relayer checks get_pending first and sends nothing
  *  when nothing is owed). Their own trades claim too. */

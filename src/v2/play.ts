@@ -32,7 +32,7 @@ import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
 import {
   EXPLORER_ACCOUNT, EXPLORER_TX, agentDecision, finalHeight, type AgentDecision, type ChainReceipt, balances, buyPosted, sellPosted, connectGuest, haggleDeal, marketTick, merchantAccount, playerId, playerLabel, receipts as chainReceipts,
-  settleDay, claimDividends, lastMarketTurn, askMerchant, chainStatus, chronicleEvents, pickOrchard, marketDay, marketDayMs, isOffline, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
+  settleDay, claimDividends, repriceMerchant, lastMarketTurn, askMerchant, chainStatus, chronicleEvents, pickOrchard, marketDay, marketDayMs, isOffline, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
 } from "../near/chain";
 
 const GAME_MIN_PER_SEC = 2.4; // 09:00 -> 21:00 in five real minutes
@@ -494,6 +494,7 @@ export async function createPlay(game: Game): Promise<Play> {
       }
       const id = playerId();
       if (id && o.status !== "local") { void syncPlayer(id); void syncMerchants(); } // the chain is the ledger
+      if (o.status === "onchain") repriceMerchant(who); // the stall's posted orders follow the price this trade moved
       drawBoards(); walletKey = "";
       save();
     });
