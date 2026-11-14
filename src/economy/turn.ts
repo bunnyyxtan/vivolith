@@ -61,13 +61,13 @@ export function marketTurn(t: Town, day: number, rules: "old" | "new" = "new"): 
     const { rent, grace } = recovery ? rentToCharge(m, day, t.reopened[id] ?? null, () => once(t, `grace:${id}:${t.reopened[id]}`)) : { rent: m.rent, grace: false };
     if (grace) { t.log.push(`day ${day}: ${id} rent waived once (recovery grace)`); continue; }
     if (m.cash >= rent) { m.cash -= rent; burn(t, rent, "rent"); }
-    else { m.status = "closed"; st.flags[`reopenNeed.${id}`] = Math.max(1, closingNeed(st, id)); t.log.push(`day ${day}: ${id} closed (rent ${rent}, till ${Math.floor(m.cash)})`); }
+    else { m.status = "closed"; st.flags[`closedSince.${id}`] = day; st.flags[`reopenNeed.${id}`] = Math.max(1, closingNeed(st, id)); t.log.push(`day ${day}: ${id} closed (rent ${rent}, till ${Math.floor(m.cash)})`); }
   }
   // the Guild (guild_lend / guild_collect)
   const debt = Object.fromEntries(MERCHANT_IDS.map((id) => [id, debtOf(st, id)]));
   const rescueOf = (id: MerchantId): number => st.merchants[id].status === "open" ? 0 : Number(st.flags[`reopenNeed.${id}`] ?? 0) * (bidFor(st, id, "mango")?.price ?? 0);
   const moves = recovery
-    ? guildPlan(st, MERCHANT_IDS, t.guild, debt, rescueOf, (id) => once(t, `collect:${id}:${day}`))
+    ? guildPlan(st, MERCHANT_IDS, t.guild, debt, rescueOf, (id) => once(t, `collect:${id}:${day}`), (id) => once(t, `rescue:${id}:${st.flags[`closedSince.${id}`] ?? -1}`))
     : MERCHANT_IDS.flatMap((id): GuildMove[] => { // the rules before the recovery fixes (handlers.ts guildTurn as committed)
       const m = st.merchants[id], float = Math.max(GUILD_FLOAT, rescueOf(id));
       if (m.cash < float && t.guild > 0) { const amount = Math.min(float - m.cash, t.guild); return [{ merchant: id, kind: "lend", amount, repaid: 0, dues: 0 }]; }

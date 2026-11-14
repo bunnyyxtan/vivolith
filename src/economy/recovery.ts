@@ -41,8 +41,9 @@ export const guildFillTo = (st: EconomyState, ids: readonly MerchantId[], debt: 
 
 /** The Guild's moves for one turn, given the fund and each stall's debt. Mirrors the contract's guild_lend /
  *  guild_collect limits (it never lends more than it holds; repayment comes before dues; dues stop at the fund size).
- *  `collectToday(id)` must be true at most once per stall and market day (the caller's once-guard). */
-export function guildPlan(st: EconomyState, ids: readonly MerchantId[], fund: number, debt: Readonly<Record<string, number>>, rescueOf: (id: MerchantId) => number, collectToday: (id: MerchantId) => boolean): GuildMove[] {
+ *  `collectToday(id)` must be true at most once per stall and market day (the caller's once-guard); `rescueOnce(id)`
+ *  at most once per closure (keyed by the day the stall closed), so a stall over the cap gets one rescue per closure. */
+export function guildPlan(st: EconomyState, ids: readonly MerchantId[], fund: number, debt: Readonly<Record<string, number>>, rescueOf: (id: MerchantId) => number, collectToday: (id: MerchantId) => boolean, rescueOnce: (id: MerchantId) => boolean): GuildMove[] {
   const out: GuildMove[] = [];
   const fillTo = guildFillTo(st, ids, debt);
   let held = fund, lent = ids.reduce((n, id) => n + (debt[id] ?? 0), 0);
@@ -52,9 +53,9 @@ export function guildPlan(st: EconomyState, ids: readonly MerchantId[], fund: nu
     // Past DEBT_CAP a closed stall with an empty till still borrows one mango's restock price, so it can bid and a
     // delivery can reopen it; never a float, and nothing while it has a coin to bid with. Before, such a stall could
     // not bid, no delivery could reach it, and it stayed shut for good (live 2026-11-14: Pema, 0 c, owing 163 c, the
-    // stall every new player is sent to).
+    // stall every new player is sent to). Once per closure: a rescue the stall spent elsewhere is not refilled.
     const room = owes < DEBT_CAP ? Math.min(float - m.cash, DEBT_CAP - owes)
-      : m.status !== "open" && m.cash < 1 ? Math.round(m.baseCost.mango * CLOSED_RESTOCK) : 0;
+      : m.status !== "open" && m.cash < 1 && held > 0 && rescueOnce(id) ? Math.round(m.baseCost.mango * CLOSED_RESTOCK) : 0;
     if (m.cash < float && held > 0 && room > 0) {
       const amount = Math.min(room, held);
       if (amount > 0) { out.push({ merchant: id, kind: "lend", amount, repaid: 0, dues: 0 }); held -= amount; lent += amount; }

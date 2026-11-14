@@ -23,7 +23,7 @@ import { verifyDecision } from "./verify.ts";
 import type { ChainReceipt, MemoryRow, Snapshot } from "./memory.ts";
 import { addBond, bondFacts, chronicle, putDealRef, readBonds, readChronicle, takeDealRef } from "./ledger.ts";
 import { changedSince, countOf, decisionEvent, eventId, lastDecisionAt, type ChronicleEvent } from "../../src/economy/chronicle.ts";
-import { GRACE_DAYS, guildFillTo, guildPlan, harborDue, harborQty, rentToCharge, touristUnits } from "../../src/economy/recovery.ts";
+import { DEBT_CAP, GRACE_DAYS, guildFillTo, guildPlan, harborDue, harborQty, rentToCharge, touristUnits } from "../../src/economy/recovery.ts";
 import { ORCHARD_PICK, agentPriceKey, bidFor, dealBounds, planMerchantTrades, quote } from "../../src/economy/pricing.ts";
 import { newcomerPrice, verifyDealUnit } from "../../src/economy/haggle.ts";
 import { closingNeed, shopperWant } from "../../src/economy/sim.ts";
@@ -742,7 +742,7 @@ async function cloudLoad(cfg: Config, req: Request): Promise<Response> {
 const TICK_HOURS = 2;
 const TICK_GAS = teraToGas("30");
 
-interface StallRow { merchant: string; open: boolean; need: string; delivered: string; holders: number; supply: string; debt: string; last_settled: number | null; last_rent: number | null }
+interface StallRow { merchant: string; open: boolean; since_day?: number | null; need: string; delivered: string; holders: number; supply: string; debt: string; last_settled: number | null; last_rent: number | null }
 
 /** Rebuilds the four merchants from their on-chain balances and stall status so the shared rules in src/economy run
  *  on real state (a closed stall is closed for the planner, the pricing and the Guild alike). */
@@ -760,6 +760,7 @@ export async function chainEconomy(provider: JsonRpcProvider, cfg: Config, final
     if (!s.open) {
       st.merchants[id].status = "closed";
       st.flags[`reopenNeed.${id}`] = Math.max(0, Number(s.need) - Number(s.delivered));
+      st.flags[`closedSince.${id}`] = s.since_day ?? -1; // names this closure: one Guild rescue per closure
     }
   }
   await Promise.all(MERCHANTS.map(async (id) => {
@@ -859,7 +860,15 @@ async function guildTurn(cfg: Config, provider: JsonRpcProvider, st: EconomyStat
   const rescueOf = (id: MerchantId): number => st.merchants[id].status === "open" ? 0 : Number(st.flags[`reopenNeed.${id}`] ?? 0) * (bidFor(st, id, "mango")?.price ?? 0);
   const fillTo = guildFillTo(st, MERCHANTS, debt);
   const calls: Call[] = [];
-  for (const g of guildPlan(st, MERCHANTS, fund, debt, rescueOf, () => true)) {
+  // Past the debt cap a closed, broke stall gets one rescue per closure (src/economy/recovery.ts guildPlan): claimed
+  // here, keyed by the day the contract closed it, so repeated turns cannot drain the fund into the same closure.
+  const rescued = new Set<MerchantId>();
+  for (const id of MERCHANTS) {
+    const m = st.merchants[id];
+    if (m.status !== "open" && debt[id] >= DEBT_CAP && m.cash < 1 && fund > 0
+      && (await hit(cfg, `rescue:${id}:${st.flags[`closedSince.${id}`] ?? -1}`, 1, 30 * 24 * 3600))) rescued.add(id);
+  }
+  for (const g of guildPlan(st, MERCHANTS, fund, debt, rescueOf, () => true, (id) => rescued.has(id))) {
     const m = st.merchants[g.merchant];
     if (g.kind === "lend") {
       // Loans may come every merchant turn (ticks run at most once a minute): a till that fell short mid-day can pay

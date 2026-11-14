@@ -7,8 +7,28 @@
 //   - the local save is never written (the inspected state is the chain's, not this browser's story)
 // Recorded voice files still play (static files, free); lines without a recording show as silent subtitles.
 
-/** The inspect parameter of a page URL: null when not inspecting, "" for `?inspect` alone, else the account id. */
-export const inspectParam = (search: string): string | null => new URLSearchParams(search).get("inspect");
+/** The inspected account of a page URL: `/inspect/<account>` (public route) or the older `?inspect=<account>`. Null when
+ *  not inspecting, "" for `/inspect` or `?inspect` alone, else the account id. */
+export const inspectParam = (search: string, pathname = ""): string | null => {
+  const p = /^\/inspect(?:\/([^/]*))?\/?$/.exec(pathname);
+  return p ? decodeURIComponent(p[1] ?? "") : new URLSearchParams(search).get("inspect");
+};
+
+/** The judges' ledger view: `/ledger` (public route) or the older `?ledger`. */
+export const ledgerView = (search: string, pathname: string): boolean => /^\/ledger\/?$/.test(pathname) || new URLSearchParams(search).has("ledger");
+
+/** The clean address for an old query-style link (`/?ledger` -> `/ledger`, `/?inspect=a` -> `/inspect/a`), keeping
+ *  any other parameters; null when the address is already clean. Old bookmarks keep working and then show the route. */
+export function cleanUrl(pathname: string, search: string): string | null {
+  if (pathname !== "/" && pathname !== "/index.html") return null;
+  const q = new URLSearchParams(search), acct = q.get("inspect");
+  let path: string;
+  if (acct !== null) { path = acct ? `/inspect/${encodeURIComponent(acct)}` : "/inspect"; q.delete("inspect"); }
+  else if (q.has("ledger")) { path = "/ledger"; q.delete("ledger"); }
+  else return null;
+  const rest = q.toString();
+  return rest ? `${path}?${rest}` : path;
+}
 
 /** True when this request could change the economy or spend credits: any non-GET request to the game's API. */
 export function mutating(method: string | undefined, url: string): boolean {
@@ -19,7 +39,7 @@ export function mutating(method: string | undefined, url: string): boolean {
   return path.startsWith("/api/");
 }
 
-const param = typeof location === "undefined" ? null : inspectParam(location.search);
+const param = typeof location === "undefined" ? null : inspectParam(location.search, location.pathname ?? "");
 /** This page is a read-only inspection. */
 export const READ_ONLY = param !== null;
 /** The account whose wallet the inspection shows (no key: view calls only); null when none was given. */

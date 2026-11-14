@@ -26,7 +26,7 @@ Rule of thumb: **connected, the chain decides value and open/closed; the browser
 | Fails closed | Store down = no turn, no paid call, agents halted. Test caps `NEAR_TEST_TURNS`/`NEAR_TEST_TXS` reserve before signing |
 | Posted book | `ruleOrders()` is the one rule for every merchant's standing orders. The turn posts them in step 1 and re-posts the changed ones at its end (3b); a player's confirmed trade calls `reprice` for that stall. A lever order stays at its NEAR AI price for the day only when the decision was genuinely AI (`source: ai`, tx); the turn plans its merchant trades and shoppers with that price, and the game shows it (`syncAgentPrice`, refreshed on every sync) |
 | Autonomy | `NEAR_AGENT_MERCHANTS` (which agents) + `NEAR_AGENTS_IN_PLAY=1` (turns driven by players' browsers may ask NEAR AI, not only scheduler turns). Bounded by one decision per agent per market day and `NEAR_AI_DAILY_DECISIONS/VERIFIES/CHATS` (defaults 200/200/300); kill switch `scripts/near/agents.ts halt` |
-| Dangerous | `tick`, `settle`, `claim`, `pick`, `guest`, `register`, `relay`, `deal`, `reprice`, `market-turn` all write to testnet. Opening the connected game at a bare URL creates a guest and ticks every 60 s. For QA use `?inspect=<account>` with a dev server started with `VIVOLITH_READ_ONLY=1`, or `?offline` |
+| Dangerous | `tick`, `settle`, `claim`, `pick`, `guest`, `register`, `relay`, `deal`, `reprice`, `market-turn` all write to testnet. Opening the connected game at a bare URL creates a guest and ticks every 60 s. For QA use `/inspect/<account>` with a dev server started with `VIVOLITH_READ_ONLY=1`, or `?offline` |
 
 ## Merchant lifecycle
 
@@ -61,7 +61,7 @@ Rule of thumb: **connected, the chain decides value and open/closed; the browser
 |---|---|
 | UI mode | `play.ts` `Mode`: `walk` / `trade` / `talk` / `card`. `endPanel`, `openCard`, `closeOverlay` are the only exits; leaving a trade or talk panel calls `hush()` (stops voice, drops the pending answer) |
 | Voice | `audio.ts`: every new line bumps `lineSeq` and aborts the previous request; a stale piece checks `my !== lineSeq` and stops. The mouth moves only while audio plays (`onVoice`). Server voice speaks only approved sentences (`server/near/lines.json`, generated: run `node scripts/audio/lines.ts` after changing any game text, or `voice.check.ts` fails) |
-| Connection | `chainStatus()` is read once per page: configured -> connected, else offline for the session (chip says "Offline"). `?inspect` shows "read-only, nothing saved" |
+| Connection | `chainStatus()` is read once per page: configured -> connected, else offline for the session (chip says "Offline"). `/inspect/<account>` shows "read-only, nothing saved" |
 
 ## Checks (no network, no credits)
 

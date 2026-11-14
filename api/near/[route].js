@@ -12912,6 +12912,9 @@ var lines_default = {
 		"/api/near/voice",
 		"/brand/near-symbol.svg",
 		"/brand/near-wordmark.svg",
+		"/index.html",
+		"/inspect",
+		"/ledger",
 		"/models/spire.glb",
 		"/models/v2/kavi.glb",
 		"/models/v2/plaza.glb",
@@ -13004,6 +13007,7 @@ var lines_default = {
 		"Bundle?",
 		"Busy morning at the Harbor Depot.",
 		"But a later rent caught me short, and the shutters are down again.",
+		"But my till is empty, so I can't pay for them yet.",
 		"But...",
 		"Buy",
 		"Buy a few shares, dear, and you share in every mango I sell.",
@@ -13333,6 +13337,7 @@ var lines_default = {
 		"My shelves were full, so I opened again.",
 		"My shutters are down until rent is sorted.",
 		"My shutters are down, dear: the rent came and my till came up short.",
+		"My till is empty, so I can't pay yet: the market guild may advance me enough for one.",
 		"N",
 		"N Spire",
 		"N2lVS1w4EtoT3dr4eOWO",
@@ -13670,6 +13675,7 @@ var lines_default = {
 		"The market charged the rent and my till came up short, and the shutters came down.",
 		"The market charged the rent and my till came up short.",
 		"The market didn't confirm in time.",
+		"The market guild may advance me enough for one: check back after the next market turn.",
 		"The market square ahead runs on trade.",
 		"The new courier brought her mangoes.",
 		"The night Pema almost closed",
@@ -13685,6 +13691,7 @@ var lines_default = {
 		"The trade didn't go through.",
 		"The trees need a rest.",
 		"Then go.",
+		"Then mangoes reached my stall, and I opened again.",
 		"Then you brought me mangoes, and I opened again.",
 		"There you go.",
 		"There.",
@@ -14351,6 +14358,7 @@ var lines_default = {
 		"rent_ok",
 		"rent_risk",
 		"reopen",
+		"reopenNeed.pema",
 		"reopenNeed.tomas",
 		"reopened",
 		"report.from",
@@ -14628,6 +14636,7 @@ var lines_default = {
 		"&#\\d{1,6}(?:[.,:]\\d{1,3})?;",
 		"(?:Her till covered the rent\\.|Rent was charged and her till came up short\\.|Her till came up short at 21:00\\.)",
 		"(?:Her till covered the rent\\.|Rent was charged and her till came up short\\.|Her till came up short at 21:00\\.) A later rent has closed her since\\.",
+		"(?:Then you brought me mangoes, and I opened again\\.|Then mangoes reached my stall, and I opened again\\.|My shelves were full, so I opened again\\.)",
 		"(?:ask|bid):",
 		"(?:bad|good)",
 		"(?:lemon|lassi)",
@@ -14865,13 +14874,13 @@ var lines_default = {
 		"\\d{1,6}(?:[.,:]\\d{1,3})? more mango and I can open again\\.",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? more mango and I can reopen\\.",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? more mango and I reopen\\.",
+		"\\d{1,6}(?:[.,:]\\d{1,3})? more mango delivered to my stall and I open again\\.",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? more mango on her shelves and she reopens\\.",
-		"\\d{1,6}(?:[.,:]\\d{1,3})? more mango on my shelves and I open again\\.",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? more mangoes and I can open again\\.",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? more mangoes and I can reopen\\.",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? more mangoes and I reopen\\.",
+		"\\d{1,6}(?:[.,:]\\d{1,3})? more mangoes delivered to my stall and I open again\\.",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? more mangoes on her shelves and she reopens\\.",
-		"\\d{1,6}(?:[.,:]\\d{1,3})? more mangoes on my shelves and I open again\\.",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? of \\d{1,6}(?:[.,:]\\d{1,3})? c in her till",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? on the stall",
 		"\\d{1,6}(?:[.,:]\\d{1,3})? share",
@@ -14887,6 +14896,7 @@ var lines_default = {
 		"at \\d{1,6}(?:[.,:]\\d{1,3})?:00 on Day \\d{1,6}(?:[.,:]\\d{1,3})?",
 		"body\\.(?:vv-look), body\\.(?:vv-look) \\* \\{ cursor: none !important; \\} body\\.(?:vv-look) \\.hud, body\\.(?:vv-look) \\.hud \\* \\{ pointer-events: none !important; \\}",
 		"bought \\d{1,6}(?:[.,:]\\d{1,3})? (?:mango|lemon|lassi)s from",
+		"closedSince\\.(?:pema|tomas|mira|arin)",
 		"collect:(?:pema|tomas|mira|arin):\\d{1,6}(?:[.,:]\\d{1,3})?",
 		"d:[A-Z][a-z]{1,13}",
 		"day \\d{1,6}(?:[.,:]\\d{1,3})?: (?:pema|tomas|mira|arin) closed \\(rent \\d{1,6}(?:[.,:]\\d{1,3})?, till \\d{1,6}(?:[.,:]\\d{1,3})?\\)",
@@ -17081,15 +17091,16 @@ const impairedDebt = (st, ids, debt) => ids.reduce((n, id) => n + (st.merchants[
 const guildFillTo = (st, ids, debt) => 200 + impairedDebt(st, ids, debt);
 /** The Guild's moves for one turn, given the fund and each stall's debt. Mirrors the contract's guild_lend /
 *  guild_collect limits (it never lends more than it holds; repayment comes before dues; dues stop at the fund size).
-*  `collectToday(id)` must be true at most once per stall and market day (the caller's once-guard). */
-function guildPlan(st, ids, fund, debt, rescueOf, collectToday) {
+*  `collectToday(id)` must be true at most once per stall and market day (the caller's once-guard); `rescueOnce(id)`
+*  at most once per closure (keyed by the day the stall closed), so a stall over the cap gets one rescue per closure. */
+function guildPlan(st, ids, fund, debt, rescueOf, collectToday, rescueOnce) {
 	const out = [];
 	const fillTo = guildFillTo(st, ids, debt);
 	let held = fund, lent = ids.reduce((n, id) => n + (debt[id] ?? 0), 0);
 	for (const id of ids) {
 		const m = st.merchants[id], owes = debt[id] ?? 0;
 		const float = Math.max(18, rescueOf(id));
-		const room = owes < 120 ? Math.min(float - m.cash, 120 - owes) : m.status !== "open" && m.cash < 1 ? Math.round(m.baseCost.mango * CLOSED_RESTOCK) : 0;
+		const room = owes < 120 ? Math.min(float - m.cash, 120 - owes) : m.status !== "open" && m.cash < 1 && held > 0 && rescueOnce(id) ? Math.round(m.baseCost.mango * CLOSED_RESTOCK) : 0;
 		if (m.cash < float && held > 0 && room > 0) {
 			const amount = Math.min(room, held);
 			if (amount > 0) {
@@ -18171,6 +18182,7 @@ async function chainEconomy(provider, cfg, finality = "final") {
 		if (!s.open) {
 			st.merchants[id].status = "closed";
 			st.flags[`reopenNeed.${id}`] = Math.max(0, Number(s.need) - Number(s.delivered));
+			st.flags[`closedSince.${id}`] = s.since_day ?? -1;
 		}
 	}
 	await Promise.all(MERCHANTS.map(async (id) => {
@@ -18298,7 +18310,12 @@ async function guildTurn(cfg, provider, st, day, log) {
 	const rescueOf = (id) => st.merchants[id].status === "open" ? 0 : Number(st.flags[`reopenNeed.${id}`] ?? 0) * (bidFor(st, id, "mango")?.price ?? 0);
 	const fillTo = guildFillTo(st, MERCHANTS, debt);
 	const calls = [];
-	for (const g of guildPlan(st, MERCHANTS, fund, debt, rescueOf, () => true)) {
+	const rescued = /* @__PURE__ */ new Set();
+	for (const id of MERCHANTS) {
+		const m = st.merchants[id];
+		if (m.status !== "open" && debt[id] >= 120 && m.cash < 1 && fund > 0 && await hit(cfg, `rescue:${id}:${st.flags[`closedSince.${id}`] ?? -1}`, 1, 2592e3)) rescued.add(id);
+	}
+	for (const g of guildPlan(st, MERCHANTS, fund, debt, rescueOf, () => true, (id) => rescued.has(id))) {
 		const m = st.merchants[g.merchant];
 		if (g.kind === "lend") {
 			calls.push(actions.functionCall("guild_lend", {

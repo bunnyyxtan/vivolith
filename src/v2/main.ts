@@ -1,9 +1,12 @@
 import { createGame } from "./game";
 import { createPlay } from "./play";
 import { createBoot, createMenu } from "./menu";
-import { installInspectGuard } from "../near/inspect";
+import { cleanUrl, installInspectGuard } from "../near/inspect";
 
-installInspectGuard(); // ?inspect: read-only, before the game makes any request (src/near/inspect.ts)
+installInspectGuard(); // /inspect/<account>: read-only, before the game makes any request (src/near/inspect.ts)
+// old query-style links (?ledger, ?inspect=) keep working; the address bar then shows the clean route
+const clean = cleanUrl(location.pathname, location.search);
+if (clean) history.replaceState(null, "", clean + location.hash);
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 const loader = createBoot();
 

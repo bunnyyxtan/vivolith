@@ -21,7 +21,7 @@ import { MOODS, VOICES, type LineId, type Mood } from "./audio-manifest";
 import { factsFor, goodsOf, moodOf as voiceMood, scriptFor, sentencesOf } from "../../server/near/talk";
 import { createOrchardBasket, type OrchardBasket } from "./orchard";
 import { night, startNight, updateNight, type Clock, type NightOutcome } from "./story";
-import { READ_ONLY } from "../near/inspect";
+import { READ_ONLY, ledgerView } from "../near/inspect";
 import { moves } from "../near/moves";
 
 /** Metres per footstep sound, and how close to the stalls the market music and murmur take over. */
@@ -163,7 +163,9 @@ const PEMA_INTRO: Conversation = {
       // the stall's real till and rent (read from NEAR when connected): the stake is the player's to see, not a script's
       text: (s) => {
         const m = s.merchants.pema, c = Math.floor(m.cash), till = `My till has ${c} ${c === 1 ? "coin" : "coins"} and rent is ${m.rent}.`;
-        if (m.status !== "open") return `${till} A little stock on my shelves and I can open again.`;
+        // the contract reopens a stall on mangoes delivered to it, not on what is already on its shelves
+        const need = Number(s.flags["reopenNeed.pema"] ?? 1);
+        if (m.status !== "open") return `${till} ${need} more ${need === 1 ? "mango" : "mangoes"} delivered to my stall and I can open again.`;
         return m.cash >= m.rent ? `${till} Enough, if I can keep selling. With empty shelves I can't.` : `${till} If it isn't there when rent is charged, the shutters come down.`;
       },
       choices: [
@@ -172,7 +174,7 @@ const PEMA_INTRO: Conversation = {
     },
     deal: {
       speaker: "Auntie Pema",
-      text: (s) => { const b = bidFor(s, "pema", "mango")?.price; return b ? `You would? Bless you. I pay ${b} ${b === 1 ? "coin" : "coins"} a mango, what I can still sell them on for. Three would get me through today.` : "You would? Bless you. My shelves are stocked for now, but rent is rent: every sale counts."; },
+      text: (s) => { const b = bidFor(s, "pema", "mango")?.price; return b ? `You would? Bless you. I pay ${b} ${b === 1 ? "coin" : "coins"} a mango, what I can still sell them on for. Three would get me through today.` : s.merchants.pema.status !== "open" ? "You would? Bless you. But my till is empty, so I can't pay for them yet. The market guild may advance me enough for one: check back after the next market turn." : "You would? Bless you. My shelves are stocked for now, but rent is rent: every sale counts."; },
       next: null,
     },
   },
@@ -190,8 +192,8 @@ const pemaEpilogue = (s: EconomyState, outcome: NightOutcome, connected: boolean
     : `I made rent that night. But a later rent caught me short, and the shutters are down again.${gap > 0 ? ` ${gap} more ${gap === 1 ? "mango" : "mangoes"} and I reopen.` : ""}`;
   const shut = s.merchants.pema.status === "open"
     // who reopened her: the player's own mangoes after the closure (same test as the street bubble), else her shelves
-    ? `${connected ? "The market charged the rent and" : "At nine,"} my till came up short, and the shutters came down. ${Number(s.flags["help.pema.sold"] ?? 0) > Number(s.flags["night.soldAtClose"] ?? 0) ? "Then you brought me mangoes, and I opened again." : "My shelves were full, so I opened again."}`
-    : `The shutters are down. ${connected ? "The market charged the rent and" : "At nine,"} my till came up short.${gap > 0 ? ` ${gap} more ${gap === 1 ? "mango" : "mangoes"} on my shelves and I open again. I'll pay for every one.` : ""}`;
+    ? `${connected ? "The market charged the rent and" : "At nine,"} my till came up short, and the shutters came down. ${Number(s.flags["help.pema.sold"] ?? 0) > Number(s.flags["night.soldAtClose"] ?? 0) ? "Then you brought me mangoes, and I opened again." : connected ? "Then mangoes reached my stall, and I opened again." : "My shelves were full, so I opened again."}`
+    : `The shutters are down. ${connected ? "The market charged the rent and" : "At nine,"} my till came up short.${gap > 0 ? ` ${gap} more ${gap === 1 ? "mango" : "mangoes"} delivered to my stall and I open again.${bidFor(s, "pema", "mango") ? " I'll pay for every one." : " My till is empty, so I can't pay yet: the market guild may advance me enough for one."}` : ""}`;
   const why = helped ? `${playerName(s)}, ${thanks}.` : elsewhere ? `You sold your mangoes to ${elsewhere[0].toUpperCase()}${elsewhere.slice(1)}. Fair is fair: it was your trade to make.` : "You were busy elsewhere. I noticed.";
   return {
     npcId: "pema", name: "Auntie Pema", role: "Fruit seller", accent: "#f39a2c",
@@ -211,8 +213,8 @@ const pemaEpilogue = (s: EconomyState, outcome: NightOutcome, connected: boolean
 };
 
 export async function createPlay(game: Game): Promise<Play> {
-  // the ledger (balances, transactions, decision evidence) is for judges and demos only: ?ledger in the URL
-  const LEDGER = new URLSearchParams(location.search).has("ledger");
+  // the ledger (balances, transactions, decision evidence) is for judges and demos only: /ledger (or the old ?ledger)
+  const LEDGER = ledgerView(location.search, location.pathname);
   const { state, restored } = loadGame();
   const market = await createMarket(game.look.scene, game.colliders);
   // a character's mouth and talking gesture follow their own voice: on when it starts, off when it ends or is cut

@@ -15,12 +15,12 @@ const env: Record<string, string | undefined> = {
 };
 
 // ---------------------------------------------------------------- the fake contract ----
-interface StallRow { merchant: string; open: boolean; need: string; delivered: string; holders: number; supply: string; debt: string; last_settled: number | null; last_rent: number | null }
+interface StallRow { merchant: string; open: boolean; since_day?: number | null; need: string; delivered: string; holders: number; supply: string; debt: string; last_settled: number | null; last_rent: number | null }
 const ids = ["pema", "tomas", "mira", "arin"] as const;
 let stalls: StallRow[] = [], bal: Record<string, Record<string, number>> = {}, offers: { merchant: string; account_id: string; token_id: string; side: string; qty: string; price: string }[] = [];
 const acct = (id: string) => `${id}.${RELAYER}`;
-function reset(over: Partial<Record<(typeof ids)[number], { open?: boolean; coin?: number; mango?: number; debt?: number; need?: number; lastRent?: number }>> = {}, guild = 0, residents = true): void {
-  stalls = ids.map((id) => { const o = over[id] ?? {}; return { merchant: id, open: o.open ?? true, need: String(o.need ?? 0), delivered: "0", holders: 0, supply: "300", debt: String(o.debt ?? 0), last_settled: 999_999_999, last_rent: o.lastRent ?? null }; });
+function reset(over: Partial<Record<(typeof ids)[number], { open?: boolean; coin?: number; mango?: number; debt?: number; need?: number; lastRent?: number; since?: number }>> = {}, guild = 0, residents = true): void {
+  stalls = ids.map((id) => { const o = over[id] ?? {}; return { merchant: id, open: o.open ?? true, since_day: o.open === false ? o.since ?? 1 : null, need: String(o.need ?? 0), delivered: "0", holders: 0, supply: "300", debt: String(o.debt ?? 0), last_settled: 999_999_999, last_rent: o.lastRent ?? null }; });
   bal = Object.fromEntries(ids.map((id) => { const o = over[id] ?? {}; return [acct(id), { coin: o.coin ?? 60, mango: o.mango ?? (id === "arin" ? 2 : 10), lemon: id === "arin" ? 0 : 10, lassi: id === "arin" ? 8 : 0 }]; }));
   bal[GUILD] = { coin: guild };
   bal[acct("picker")] = { coin: 0 }; bal[acct("porter")] = { coin: 0 };
@@ -457,6 +457,18 @@ const calls = (method: string, filter: (a: Record<string, string>) => boolean = 
   const lend = calls("guild_lend", (a) => a.merchant === "pema");
   assert.equal(lend.length, 1, "the Guild funds the closed stall's reopening bid past the cap");
   assert.ok(Number(lend[0].args.amount) > 0 && Number(lend[0].args.amount) <= 10, `one mango's worth, not a float (lent ${lend[0].args.amount} c)`);
+  // the rescue is once per closure: Pema spent it (here: still 0 c) and later turns of the same closure lend nothing,
+  // so repeated turns cannot drain the fund; a new closure (another since_day) is a new recovery event
+  for (let k = 0; k < 3; k++) {
+    nextDay(); sent.length = 0;
+    reset({ pema: { open: false, coin: 0, mango: 8, debt: 168, need: 1 } }, 48, false);
+    await turn();
+    assert.equal(calls("guild_lend", (a) => a.merchant === "pema").length, 0, `no second rescue for the same closure (turn ${k + 2})`);
+  }
+  nextDay(); sent.length = 0;
+  reset({ pema: { open: false, coin: 0, mango: 8, debt: 168, need: 1, since: 7 } }, 48, false);
+  await turn();
+  assert.equal(calls("guild_lend", (a) => a.merchant === "pema").length, 1, "a new closure gets its own rescue");
   // an open stall over the cap still gets nothing
   nextDay(); sent.length = 0;
   reset({ pema: { coin: 0, mango: 8, debt: 163 } }, 48, false);

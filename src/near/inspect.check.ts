@@ -8,11 +8,23 @@ const g = globalThis as unknown as Record<string, unknown>;
 g.location = { search: "?inspect=kavi-qa.bunnyy-nearworld.testnet" };
 g.window = globalThis;
 g.fetch = (input: string, init?: RequestInit): Promise<Response> => { sent.push(`${init?.method ?? "GET"} ${input}`); return Promise.resolve(new Response("{}")); };
-const { READ_ONLY, INSPECT_ACCOUNT, inspectParam, installInspectGuard, mutating } = await import("./inspect.ts");
+const { READ_ONLY, INSPECT_ACCOUNT, cleanUrl, inspectParam, installInspectGuard, ledgerView, mutating } = await import("./inspect.ts");
 
 assert.equal(inspectParam(""), null, "a normal page is not an inspection");
 assert.equal(inspectParam("?ledger"), null);
 assert.equal(inspectParam("?inspect"), "");
+// public routes: /inspect/<account> and /ledger; the old query links still work and are shown as the clean route
+assert.equal(inspectParam("", "/inspect/kavi.x.testnet"), "kavi.x.testnet");
+assert.equal(inspectParam("", "/inspect/kavi.x.testnet/"), "kavi.x.testnet");
+assert.equal(inspectParam("", "/inspect"), "");
+assert.equal(inspectParam("", "/ledger"), null);
+assert.equal(inspectParam("", "/inspector"), null, "only the exact route inspects");
+assert.ok(ledgerView("", "/ledger") && ledgerView("?ledger", "/") && !ledgerView("", "/") && !ledgerView("", "/inspect/a"));
+assert.equal(cleanUrl("/", "?ledger"), "/ledger");
+assert.equal(cleanUrl("/", "?inspect=kavi.x.testnet"), "/inspect/kavi.x.testnet");
+assert.equal(cleanUrl("/", "?offline&inspect=a.testnet"), "/inspect/a.testnet?offline=", "other parameters are kept");
+assert.equal(cleanUrl("/", ""), null);
+assert.equal(cleanUrl("/ledger", "?ledger"), null, "an address on a route is left alone");
 assert.ok(READ_ONLY && INSPECT_ACCOUNT === "kavi-qa.bunnyy-nearworld.testnet");
 
 // every route the client posts to (read from chain.ts, moves.ts and audio.ts), plus every mutating server route

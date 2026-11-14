@@ -4,6 +4,22 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "functions": {
-    "api/near/[route].js": { "maxDuration": 60 }
-  }
+    "api/near/[route].js": {
+      "maxDuration": 60
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/ledger",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/inspect",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/inspect/:account",
+      "destination": "/index.html"
+    }
+  ]
 }

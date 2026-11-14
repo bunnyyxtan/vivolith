@@ -16,13 +16,13 @@ Anything not in this table is not claimed. Commands need no keys.
 | Free-form conversation is phrased by a NEAR AI chat model but cannot invent facts | `server/near/talk.ts` (every number must appear in the chain facts, no chain or AI words, 280 characters; otherwise a scripted line) | `npm test` (`autonomy.check.ts`) | `docs/media/ask-merchant-grounded.jpg`: Pema's answer matches her on-chain till and rent |
 | Voice is generated only for sentences the game can produce | `server/near/voice.ts`, `server/near/lines.json` (built by `scripts/audio/lines.ts`), `lines-match.ts` | `npm test` (`voice.check.ts`) | `POST /api/near/voice` with arbitrary text answers 403 |
 | Coin is conserved: it enters only as starter purses and street shoppers and leaves only as rent and harbor freight | contract `audit`; `src/economy/turn.ts` (a model of the market turn) | `npm test` (`recovery.check.ts`, `economy.check.ts`) | `npm run verify`: "Audit (computed by the contract from live state): OK" |
-| Anyone can inspect any player's wallet without writing anything | `src/near/inspect.ts` (refuses every write route in the page) | `npm test` (`inspect.check.ts`: 15 write routes refused) | `https://vivolith.world/?inspect=<account>` |
+| Anyone can inspect any player's wallet without writing anything | `src/near/inspect.ts` (refuses every write route in the page) | `npm test` (`inspect.check.ts`: 15 write routes refused) | `https://vivolith.world/inspect/<account>` |
 
 ## Simulated, and labelled so in the game
 
 - The week fast-forward (key T) runs on a copy of the town; its clock reads "forecast, not real trades".
 - Walking townsfolk, cars and the day-night look.
-- Offline play (`?offline`, or no relayer configured) runs the same rules locally and says "Playing offline".
+- Offline play (`?offline`, a test switch, or no relayer configured) runs the same rules locally and says "Playing offline".
 
 ## Not built or not verified
 

@@ -46,12 +46,13 @@ Your first decision comes within a minute of arriving.
 | Press **Haggle** in a trade, or open **Invest** | Tactics against a patience bar; shares that pay dividends from every later sale |
 | Play on to 21:00 (Rent Night) | Each merchant reports their evening; a stall that cannot pay closes |
 
-**Judge tools:** [vivolith.world/?ledger](https://vivolith.world/?ledger) then **N** shows your NEAR account, receipts
-with explorer links and decision evidence. `vivolith.world/?inspect=<account>` opens any player's wallet read-only.
+**Judge tools:** [vivolith.world/ledger](https://vivolith.world/ledger) then **N** shows your NEAR account, receipts
+with explorer links and decision evidence. `vivolith.world/inspect/<account>` opens any player's wallet read-only: it
+can look, never sign or spend.
 **C** opens town news; **T** (unlocked by the goals) shows a week in a minute, labelled as a forecast.
 
 Controls: **WASD** move, **Shift** run, mouse or **Q/E** look, **F** talk or trade, **B** bag, **J** goals, **M** map,
-**H** help, **Esc** menu. `?offline` runs the same rules locally and says so.
+**H** help, **Esc** menu.
 
 ![Pema explains, from her on-chain till, why her stall closed](docs/media/ask-merchant-grounded.jpg)
 
