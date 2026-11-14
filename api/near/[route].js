@@ -12836,6 +12836,7 @@ var lines_default = {
 		"../economy/state.ts",
 		"../near/chain",
 		"../near/inspect",
+		"../near/moves",
 		"../physics/collision",
 		"../quests/dialogue",
 		"../quests/mango",
@@ -12846,6 +12847,7 @@ var lines_default = {
 		"./avoid",
 		"./brand",
 		"./camera",
+		"./chain.ts",
 		"./chronicle.ts",
 		"./dialogue.ts",
 		"./floor",
@@ -12862,6 +12864,7 @@ var lines_default = {
 		"./market",
 		"./memory.ts",
 		"./menu",
+		"./moves",
 		"./nav",
 		"./npc",
 		"./npcfx",
@@ -14664,6 +14667,8 @@ var lines_default = {
 		"Mangoes are on their way \\(Day \\d{1,4} \\d{2}:\\d{2}\\)\\.",
 		"Max \\d{1,6}(?:[.,:]\\d{1,3})?",
 		"Meanwhile Tomas Vell sells his at \\d{1,6}(?:[.,:]\\d{1,3})? coins and smiles about it\\.",
+		"My next rent is \\d{1,6}(?:[.,:]\\d{1,3})? coins and my till holds \\d{1,6}(?:[.,:]\\d{1,3})?, so I can pay it\\.",
+		"My next rent is \\d{1,6}(?:[.,:]\\d{1,3})? coins and my till holds only \\d{1,6}(?:[.,:]\\d{1,3})?\\.",
 		"My till has \\d{1,6}(?:[.,:]\\d{1,3})? coins and rent is \\d{1,6}(?:[.,:]\\d{1,3})?\\.",
 		"My till holds \\d{1,6}(?:[.,:]\\d{1,3})? coins and rent is \\d{1,6}(?:[.,:]\\d{1,3})?\\.",
 		"My till holds \\d{1,6}(?:[.,:]\\d{1,3})? coins\\.",
@@ -14693,8 +14698,6 @@ var lines_default = {
 		"Rent \\d{1,6}(?:[.,:]\\d{1,3})? c · covered",
 		"Rent \\d{1,6}(?:[.,:]\\d{1,3})? c · till only \\d{1,6}(?:[.,:]\\d{1,3})? c",
 		"Rent due, \\d{1,6}(?:[.,:]\\d{1,3})? of \\d{1,6}(?:[.,:]\\d{1,3})? c",
-		"Rent is \\d{1,6}(?:[.,:]\\d{1,3})? coins and my till holds \\d{1,6}(?:[.,:]\\d{1,3})?, so I can pay it\\.",
-		"Rent is \\d{1,6}(?:[.,:]\\d{1,3})? coins and my till holds only \\d{1,6}(?:[.,:]\\d{1,3})?\\.",
 		"Rent is \\d{1,6}(?:[.,:]\\d{1,3})? coins every \\d{1,6}(?:[.,:]\\d{1,3})? market days\\.",
 		"Rent night: Pema is \\d{1,6}(?:[.,:]\\d{1,3})? c short",
 		"Restocking to reopen: only \\d{1,6}(?:[.,:]\\d{1,3})? c in the till",
@@ -15631,7 +15634,7 @@ function factsFor(st, id, offers, receipts, extra = {}) {
 	const price = m.status !== "open" ? `My shutters are down until rent is sorted. My till holds ${Math.floor(m.cash)} coins.` : `${q.price} coins a ${good} today${reasons.length ? `: ${reasons[0].toLowerCase()}` : ", a normal day"}. My till holds ${Math.floor(m.cash)} coins and rent is ${m.rent}.`;
 	const topics = {
 		price,
-		rent: m.cash >= m.rent ? `Rent is ${m.rent} coins and my till holds ${Math.floor(m.cash)}, so I can pay it.` : `Rent is ${m.rent} coins and my till holds only ${Math.floor(m.cash)}. I need to sell.`,
+		rent: m.cash >= m.rent ? `My next rent is ${m.rent} coins and my till holds ${Math.floor(m.cash)}, so I can pay it.` : `My next rent is ${m.rent} coins and my till holds only ${Math.floor(m.cash)}. I need to sell.`,
 		stock: `I have ${m.stock.mango} mangoes, ${m.stock.lemon} lemons and ${m.stock.lassi} lassi right now.`
 	};
 	if (dFacts.length) topics.decision = firstPerson(dFacts[0]);
@@ -16848,6 +16851,114 @@ async function usage(store, now = Date.now()) {
 		return null;
 	}
 }
+// server/near/ledger.ts
+const CHRONICLE_KEY = "vivolith:chronicle";
+const CHRONICLE_TTL = 604800;
+const BOND_TTL = 2592e3;
+const DEAL_REF_TTL = 300;
+const bondKey = (npc, player) => `vivolith:bond:${npc}:${player}`;
+const dealRefKey = (player, nonce) => `vivolith:dealref:${player}:${nonce}`;
+const validEvent = (x) => {
+	const e = x;
+	return !!e && typeof e === "object" && typeof e.id === "string" && typeof e.at === "number" && typeof e.text === "string" && Array.isArray(e.actors) && Array.isArray(e.changes) && Array.isArray(e.since);
+};
+async function readChronicle(store) {
+	const raw = await store.get(CHRONICLE_KEY);
+	if (!raw) return [];
+	try {
+		const l = JSON.parse(raw);
+		return Array.isArray(l) ? l.filter(validEvent) : [];
+	} catch {
+		return [];
+	}
+}
+/** Appends events under a short lock (the market turn and players' relays both write). If the lock cannot be taken the
+*  events are not written and false is returned: the Chronicle may miss an entry, it never holds a wrong one.
+*  ponytail: one list and one lock; per-day lists if writes ever contend. */
+async function chronicle(store, events, sleep = (ms) => new Promise((r) => setTimeout(r, ms))) {
+	if (!events.length) return true;
+	return editChronicle(store, (list) => events.reduce(appendEvent, list), sleep);
+}
+/** The one way to change the stored Chronicle: read, edit and write under the same short lock as appends. */
+async function editChronicle(store, edit, sleep) {
+	const lock = `${CHRONICLE_KEY}:lock`;
+	for (let k = 0; k < 5; k++) {
+		if (await store.setNx(lock, "1", 10)) try {
+			await store.set(CHRONICLE_KEY, JSON.stringify(edit(await readChronicle(store))), CHRONICLE_TTL);
+			return true;
+		} finally {
+			await store.del(lock).catch(() => void 0);
+		}
+		await sleep(120);
+	}
+	return false;
+}
+/** A decision event copies the signature status when the turn writes it ("pending"); the check finishes on a later
+*  turn. This carries the final status (signed, unverified, failed) onto the matching event, so the Chronicle never
+*  keeps saying "pending" for a decision whose check is over. Only events of that decision id change. */
+async function settleVerification(store, decisionId, status, sleep = (ms) => new Promise((r) => setTimeout(r, ms))) {
+	return editChronicle(store, (list) => list.map((e) => e.decision?.decisionId === decisionId && e.decision.verification !== status ? {
+		...e,
+		decision: {
+			...e.decision,
+			verification: status
+		}
+	} : e), sleep);
+}
+const validBond = (x) => {
+	const b = x;
+	return !!b && typeof b === "object" && typeof b.at === "number" && [
+		"delivered",
+		"bought",
+		"refused"
+	].includes(b.kind) && typeof b.qty === "number" && typeof b.unit === "number";
+};
+async function readBonds(store, npc, player) {
+	const raw = await store.get(bondKey(npc, player));
+	if (!raw) return [];
+	try {
+		const l = JSON.parse(raw);
+		return Array.isArray(l) ? l.filter(validBond).slice(-20) : [];
+	} catch {
+		return [];
+	}
+}
+/** Adds a bond, once per transaction (a retried relay never records a delivery twice). */
+async function addBond(store, npc, player, b) {
+	const list = await readBonds(store, npc, player);
+	if (b.txHash && list.some((x) => x.txHash === b.txHash)) return;
+	await store.set(bondKey(npc, player), JSON.stringify([...list, b].slice(-20)), BOND_TTL);
+}
+/** Plain sentences for a character's dialogue facts, keeping facts and interpretations apart. Never a promise. */
+function bondFacts(bonds, noun) {
+	const out = [];
+	const confirmed = bonds.filter((b) => b.evidence === "chain");
+	const delivered = confirmed.filter((b) => b.kind === "delivered");
+	if (delivered.length) {
+		const qty = delivered.reduce((n, b) => n + b.qty, 0);
+		out.push(`Fact (recorded on NEAR): this customer has delivered ${noun("mango", qty)} to you in ${delivered.length} sale${delivered.length > 1 ? "s" : ""}.`);
+		const under = delivered.filter((b) => b.reference !== null && b.unit < b.reference);
+		if (under.length) {
+			const kept = under.reduce((n, b) => n + (b.reference - b.unit) * b.qty, 0);
+			out.push(`Interpretation: in ${under.length} of those sales they accepted less than your own bid, which left ${kept} coins more in your till than your bid would have.`);
+		}
+	}
+	const bought = confirmed.filter((b) => b.kind === "bought");
+	if (bought.length) out.push(`Fact (recorded on NEAR): this customer has bought ${noun("mango", bought.reduce((n, b) => n + b.qty, 0))} from you.`);
+	const refused = bonds.filter((b) => b.kind === "refused").slice(-2);
+	for (const r of refused) out.push(`Fact (no trade happened): an offer of ${r.unit} coins each for ${noun(r.good, r.qty)} was refused${r.note ? `: ${r.note}` : ""}.`);
+	return out;
+}
+const putDealRef = (store, player, nonce, ref) => store.set(dealRefKey(player, nonce), JSON.stringify(ref), DEAL_REF_TTL);
+async function takeDealRef(store, player, nonce) {
+	const raw = await store.get(dealRefKey(player, nonce)).catch(() => null);
+	if (!raw) return null;
+	try {
+		return JSON.parse(raw);
+	} catch {
+		return null;
+	}
+}
 // server/near/autonomy.ts
 /** The six economic agents: four merchants and two residents. */
 const AGENTS = [
@@ -16903,100 +17014,7 @@ async function verifyPass(store, day, check, budget, log) {
 		}
 		const next = await verifyStored(store, id, d, check).catch(() => null);
 		if (next) log.push(`${id} decision for day ${d}: ${next.receipt.status} (${next.receipt.note.slice(0, 80)})`);
-	}
-}
-// server/near/ledger.ts
-const CHRONICLE_KEY = "vivolith:chronicle";
-const CHRONICLE_TTL = 604800;
-const BOND_TTL = 2592e3;
-const DEAL_REF_TTL = 300;
-const bondKey = (npc, player) => `vivolith:bond:${npc}:${player}`;
-const dealRefKey = (player, nonce) => `vivolith:dealref:${player}:${nonce}`;
-const validEvent = (x) => {
-	const e = x;
-	return !!e && typeof e === "object" && typeof e.id === "string" && typeof e.at === "number" && typeof e.text === "string" && Array.isArray(e.actors) && Array.isArray(e.changes) && Array.isArray(e.since);
-};
-async function readChronicle(store) {
-	const raw = await store.get(CHRONICLE_KEY);
-	if (!raw) return [];
-	try {
-		const l = JSON.parse(raw);
-		return Array.isArray(l) ? l.filter(validEvent) : [];
-	} catch {
-		return [];
-	}
-}
-/** Appends events under a short lock (the market turn and players' relays both write). If the lock cannot be taken the
-*  events are not written and false is returned: the Chronicle may miss an entry, it never holds a wrong one.
-*  ponytail: one list and one lock; per-day lists if writes ever contend. */
-async function chronicle(store, events, sleep = (ms) => new Promise((r) => setTimeout(r, ms))) {
-	if (!events.length) return true;
-	const lock = `${CHRONICLE_KEY}:lock`;
-	for (let k = 0; k < 5; k++) {
-		if (await store.setNx(lock, "1", 10)) try {
-			let list = await readChronicle(store);
-			for (const e of events) list = appendEvent(list, e);
-			await store.set(CHRONICLE_KEY, JSON.stringify(list), CHRONICLE_TTL);
-			return true;
-		} finally {
-			await store.del(lock).catch(() => void 0);
-		}
-		await sleep(120);
-	}
-	return false;
-}
-const validBond = (x) => {
-	const b = x;
-	return !!b && typeof b === "object" && typeof b.at === "number" && [
-		"delivered",
-		"bought",
-		"refused"
-	].includes(b.kind) && typeof b.qty === "number" && typeof b.unit === "number";
-};
-async function readBonds(store, npc, player) {
-	const raw = await store.get(bondKey(npc, player));
-	if (!raw) return [];
-	try {
-		const l = JSON.parse(raw);
-		return Array.isArray(l) ? l.filter(validBond).slice(-20) : [];
-	} catch {
-		return [];
-	}
-}
-/** Adds a bond, once per transaction (a retried relay never records a delivery twice). */
-async function addBond(store, npc, player, b) {
-	const list = await readBonds(store, npc, player);
-	if (b.txHash && list.some((x) => x.txHash === b.txHash)) return;
-	await store.set(bondKey(npc, player), JSON.stringify([...list, b].slice(-20)), BOND_TTL);
-}
-/** Plain sentences for a character's dialogue facts, keeping facts and interpretations apart. Never a promise. */
-function bondFacts(bonds, noun) {
-	const out = [];
-	const confirmed = bonds.filter((b) => b.evidence === "chain");
-	const delivered = confirmed.filter((b) => b.kind === "delivered");
-	if (delivered.length) {
-		const qty = delivered.reduce((n, b) => n + b.qty, 0);
-		out.push(`Fact (recorded on NEAR): this customer has delivered ${noun("mango", qty)} to you in ${delivered.length} sale${delivered.length > 1 ? "s" : ""}.`);
-		const under = delivered.filter((b) => b.reference !== null && b.unit < b.reference);
-		if (under.length) {
-			const kept = under.reduce((n, b) => n + (b.reference - b.unit) * b.qty, 0);
-			out.push(`Interpretation: in ${under.length} of those sales they accepted less than your own bid, which left ${kept} coins more in your till than your bid would have.`);
-		}
-	}
-	const bought = confirmed.filter((b) => b.kind === "bought");
-	if (bought.length) out.push(`Fact (recorded on NEAR): this customer has bought ${noun("mango", bought.reduce((n, b) => n + b.qty, 0))} from you.`);
-	const refused = bonds.filter((b) => b.kind === "refused").slice(-2);
-	for (const r of refused) out.push(`Fact (no trade happened): an offer of ${r.unit} coins each for ${noun(r.good, r.qty)} was refused${r.note ? `: ${r.note}` : ""}.`);
-	return out;
-}
-const putDealRef = (store, player, nonce, ref) => store.set(dealRefKey(player, nonce), JSON.stringify(ref), DEAL_REF_TTL);
-async function takeDealRef(store, player, nonce) {
-	const raw = await store.get(dealRefKey(player, nonce)).catch(() => null);
-	if (!raw) return null;
-	try {
-		return JSON.parse(raw);
-	} catch {
-		return null;
+		if (next?.receipt.id && next.receipt.status !== "pending") await settleVerification(store, next.receipt.id, next.receipt.status).catch(() => false);
 	}
 }
 /** Loans owed by closed stalls: still on the books (never deleted), but not counted as the Guild's working size, so
@@ -18728,6 +18746,7 @@ async function tick(cfg, env, trusted = false, scope = "market") {
 		log.push(`${t.buyer} bought ${t.qty} ${t.good} from ${t.seller} at ${t.price} c (${t.reason})${r.ok ? "" : ` FAILED: ${r.error}`}`);
 	}
 	const ate = full ? await residentTurn(cfg, provider, relayer, secret, day, log, txs, agentCfg, agentStore, true, turn) : {};
+	if (full) st.merchants = (await chainEconomy(provider, cfg)).merchants;
 	const op = [];
 	for (const id of full ? MERCHANTS : []) {
 		const m = st.merchants[id];

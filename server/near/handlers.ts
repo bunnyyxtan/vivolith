@@ -1113,6 +1113,10 @@ async function tick(cfg: Config, env: RelayEnv, trusted = false, scope: "market"
   const ate = full ? await residentTurn(cfg, provider, relayer, secret, day, log, txs, agentCfg, agentStore, true, turn) : {};
 
   // 3. Operator: tourists (street shoppers), the harbor contract, the tea kitchen.
+  // Stock as it is now, not at the start of the turn: merchant trades and residents' meals above moved goods, and a street
+  // sale past a stall's real stock panics and reverts this whole batch (testnet 2026-11-13: Lin and Dev had eaten Arin's
+  // lassi, "not enough lassi", every stall's shoppers and the kitchen lost). turn.check.ts case 9.
+  if (full) st.merchants = (await chainEconomy(provider, cfg)).merchants;
   const op: ReturnType<typeof actions.functionCall>[] = [];
   for (const id of full ? MERCHANTS : []) {
     const m = st.merchants[id];

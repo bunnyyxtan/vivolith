@@ -4,6 +4,7 @@
 import { decisionFor, verifyStored, type Decision, type DecisionStore } from "./agent.ts";
 import { readMemory, updateRows, memoryKey, MEMORY_TTL, type ChainReceipt, type MemoryRow, type RememberedDecision, type Snapshot } from "./memory.ts";
 import type { Evidence, VerifyResult } from "./verify.ts";
+import { settleVerification } from "./ledger.ts";
 
 /** The six economic agents: four merchants and two residents. */
 export const AGENTS = ["pema", "tomas", "mira", "arin", "picker", "porter"] as const;
@@ -49,6 +50,8 @@ export async function verifyPass(store: DecisionStore, day: number, check: (deci
       if (!(await budget())) { log.push("signature checks paused: today's verification limit is reached"); return; }
       const next = await verifyStored(store, id, d, check).catch(() => null);
       if (next) log.push(`${id} decision for day ${d}: ${next.receipt.status} (${next.receipt.note.slice(0, 80)})`);
+      // the Chronicle's copy of the status follows once the check is over (a lost write leaves it "pending", never wrong)
+      if (next?.receipt.id && next.receipt.status !== "pending") await settleVerification(store, next.receipt.id, next.receipt.status).catch(() => false);
     }
   }
 }

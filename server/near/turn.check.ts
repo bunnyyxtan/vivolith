@@ -31,6 +31,7 @@ let registeredResidents = true;
 
 let txCount = 0, worstSeen = 0; // signed transactions (a batch of actions is one)
 const sent: { signer: string; receiver: string; method: string; args: Record<string, string> }[] = [];
+const failedTx: { signer: string; panic: string }[] = []; // batches the fake contract refused (reverted whole)
 type ChatBody = { model: string; messages: { role: string; content: string }[] };
 const chatCalls: ChatBody[] = [];
 let chatMode: "ok" | "error" | "timeout" | "malformed" = "ok", chatReply = "";
@@ -58,13 +59,33 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       txCount++;
       const raw = (params as { signed_tx_base64?: string }).signed_tx_base64 ?? String((params as unknown as string[])[0]);
       const tx = deserialize(SCHEMA.SignedTransaction, Buffer.from(raw, "base64")) as { transaction: { signerId: string; receiverId: string; actions: { functionCall?: { methodName: string; args: Uint8Array } }[] } };
-      for (const a of tx.transaction.actions) if (a.functionCall) {
+      // the fake contract applies a batch like NEAR: in order, all or nothing (a panic in any action reverts the batch)
+      const next: typeof bal = JSON.parse(JSON.stringify(bal));
+      const add = (who: string, token: string, d: number): void => { const b = (next[who] ??= {}); b[token] = (b[token] ?? 0) + d; };
+      let panic: string | null = null;
+      for (const a of tx.transaction.actions) if (a.functionCall && !panic) {
         const args = JSON.parse(Buffer.from(a.functionCall.args).toString()) as Record<string, string>;
-        sent.push({ signer: tx.transaction.signerId, receiver: tx.transaction.receiverId, method: a.functionCall.methodName, args });
-        // the fake contract applies minting and burning (what the turn reads back right after)
-        const sign = a.functionCall.methodName === "operator_mint" ? 1 : a.functionCall.methodName === "operator_burn" ? -1 : 0;
-        if (sign) { const b = (bal[args.account_id] ??= {}); b[args.token_id] = (b[args.token_id] ?? 0) + sign * Number(args.amount); }
+        const method = a.functionCall.methodName, signer = tx.transaction.signerId;
+        sent.push({ signer, receiver: tx.transaction.receiverId, method, args });
+        if (method === "operator_mint") add(args.account_id, args.token_id, Number(args.amount));
+        if (method === "operator_burn") add(args.account_id, args.token_id, -Number(args.amount));
+        if (method === "street_sale") { // shoppers take goods off the shelf (the contract panics past the stall's stock)
+          const m = acct(args.merchant);
+          if ((next[m]?.[args.token_id] ?? 0) < Number(args.qty)) panic = `not enough ${args.token_id}`;
+          else { add(m, args.token_id, -Number(args.qty)); add(m, "coin", Number(args.qty) * Number(args.unit_price)); }
+        }
+        if (method === "buy" && !args.token_id.startsWith("share:")) { // a resident's meal or purchase from a stall's ask
+          const seller = args.seller, cost = Number(args.max_price);
+          if ((next[seller]?.[args.token_id] ?? 0) < Number(args.qty)) panic = `not enough ${args.token_id}`;
+          else { add(seller, args.token_id, -Number(args.qty)); add(signer, args.token_id, Number(args.qty)); add(signer, "coin", -cost); add(seller, "coin", cost); }
+        }
       }
+      if (panic) {
+        failedTx.push({ signer: tx.transaction.signerId, panic });
+        const bad = { Failure: { ActionError: { index: 0, kind: { FunctionCallError: { ExecutionError: `Smart contract panicked: ${panic}` } } } } };
+        return res({ final_execution_status: "FINAL", status: bad, transaction: { hash: `tx${sent.length}`, signer_id: tx.transaction.signerId }, transaction_outcome: { id: "t", outcome: { status: { SuccessValue: "" }, logs: [], receipt_ids: [] } }, receipts_outcome: [{ outcome: { status: bad } }] });
+      }
+      bal = next;
       const ok1 = { SuccessValue: "" };
       return res({ final_execution_status: "FINAL", status: ok1, transaction: { hash: `tx${sent.length}`, signer_id: tx.transaction.signerId }, transaction_outcome: { id: "t", outcome: { status: ok1, logs: [], receipt_ids: [] } }, receipts_outcome: [] });
     }
@@ -253,5 +274,20 @@ const calls = (method: string, filter: (a: Record<string, string>) => boolean = 
   nextDay(); reset();
   assert.equal((await turn({ NEAR_TEST_TXS: String(worst - 1), NEAR_TEST_RUN: "tiny" })).status, "capped", "a budget under one worst-case turn allows none");
   console.log(`tx budget: worst case ${worst}/turn, most seen ${worstSeen}; ${statuses.filter((s) => s === "onchain").length} turns signed ${total} of ${budget}`);
+}
+// 9. testnet 2026-11-13 19:41 and 19:52 UTC (GwhFDv3y..., 4cVR2Xtz...): the operator batch panicked "not enough lassi".
+// Lin and Dev bought Arin's lassi earlier in the same turn, but street shoppers were still capped by the stock read at
+// the start of the turn; the over-sized street_sale reverted the whole batch (every stall's shoppers and the kitchen).
+{
+  nextDay(); reset({ arin: { coin: 60, mango: 0 } }); sent.length = 0; failedTx.length = 0;
+  bal[acct("arin")].lassi = 3; bal[acct("picker")] = { coin: 12 }; bal[acct("porter")] = { coin: 12 };
+  offers = [{ merchant: "arin", account_id: acct("arin"), token_id: "lassi", side: "ask", qty: "3", price: "3" }];
+  const t = await turn();
+  const meals = calls("buy", (a) => a.token_id === "lassi").length;
+  const street = calls("street_sale", (a) => a.merchant === "arin").map((s) => Number(s.args.qty));
+  assert.ok(meals > 0, "residents ate Arin's lassi in this turn (the race the live turns hit)");
+  assert.deepEqual(failedTx, [], `no refused batch: ${JSON.stringify(failedTx)} (street sale ${street}, ${meals} meals)`);
+  assert.ok(!(t.log as string[]).some((l) => /operator FAILED/.test(l)));
+  assert.ok((bal[acct("arin")].lassi ?? 0) >= 0);
 }
 console.log("market turn handler checks passed");

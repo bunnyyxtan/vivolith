@@ -11,6 +11,8 @@ import { KILL_KEY, agentsHalted, budgetKey, fromScheduler, opsConfig, spend } fr
 import { attestedSigners, ed25519Ok, evidenceOf, expectedText, verifyDecision, type Evidence } from "./verify.ts";
 import { answer, clean, decisionFacts, factsFor, grounded, playerFacts, residentFacts, scriptFor, sentencesOf } from "./talk.ts";
 import { recordMemories, verifyPass } from "./autonomy.ts";
+import { CHRONICLE_KEY, readChronicle, settleVerification } from "./ledger.ts";
+import { decisionEvent } from "../../src/economy/chronicle.ts";
 
 function memStore(): DecisionStore & { down: boolean; data: Map<string, string>; sets: number } {
   const data = new Map<string, string>();
@@ -236,6 +238,36 @@ const noBytes: FetchLike = async () => { calls++; return { ok: true, status: 200
   assert.equal((await decisionFor(store, "tomas", DAY))!.receipt.status, "signed");
   assert.equal((await decisionFor(store, "mira", DAY))!.receipt.status, "pending", "over budget: left for a later turn");
   assert.ok(log.some((l) => /limit/.test(l)));
+
+  // the Chronicle's copy of the signature status follows the finished check (it used to stay "pending" forever)
+  const facts = (decisionId: string) => ({ source: "ai" as const, action: "raise", from: 5, to: 6, side: "bid", good: "mango", model: ev.model, decisionId, verification: "pending", inputs: [] });
+  const evA = decisionEvent("arin", "Arin", [], facts("gen-a"), { hash: "txa", ok: true }, DAY, 10);
+  const evB = decisionEvent("pema", "Pema", [], facts("gen-b"), { hash: "txb", ok: true }, DAY, 11);
+  const evC = decisionEvent("porter", "Dev", [], facts("gen-c"), { hash: "txc", ok: true }, DAY, 12);
+  await store.set(CHRONICLE_KEY, JSON.stringify([evA, evB, evC]), 60);
+  const seen = async () => Object.fromEntries((await readChronicle(store)).map((e) => [e.decision!.decisionId, e.decision!.verification]));
+  await store.set(decisionKey("arin", DAY), JSON.stringify({ ...d, merchant: "arin", receipt: { ...d.receipt, id: "gen-a" } }), 60);
+  await store.set(decisionKey("pema", DAY), JSON.stringify({ ...d, receipt: { ...d.receipt, id: "gen-b", attempts: 2 } }), 60);
+  await store.set(decisionKey("porter", DAY), JSON.stringify({ ...d, merchant: "porter", receipt: { ...d.receipt, id: "gen-c" } }), 60);
+  for (const k of ["tomas", "mira"]) store.data.delete(decisionKey(k, DAY));
+  // arin: signed; pema: third attempt without a signature -> unverified; porter: still no signature -> stays pending
+  const byId = async (id: string, e: Evidence) => verifyDecision(base, "k", id, e, id === "gen-a" ? server(good, report) : server(null, report, 404));
+  await verifyPass(store, DAY, byId, async () => true, []);
+  assert.deepEqual(await seen(), { "gen-a": "signed", "gen-b": "unverified", "gen-c": "pending" });
+  const count = JSON.parse(store.data.get(CHRONICLE_KEY)!).length;
+  // a check that throws (network) leaves every status as it was
+  await store.set(decisionKey("porter", DAY), JSON.stringify({ ...d, merchant: "porter", receipt: { ...d.receipt, id: "gen-c" } }), 60);
+  await verifyPass(store, DAY, async () => { throw new Error("offline"); }, async () => true, []);
+  assert.deepEqual(await seen(), { "gen-a": "signed", "gen-b": "unverified", "gen-c": "pending" });
+  assert.equal(JSON.parse(store.data.get(CHRONICLE_KEY)!).length, count, "events are edited, never added or dropped");
+  // a failed check is carried too, and only to its own event
+  assert.ok(await settleVerification(store, "gen-c", "failed", async () => undefined));
+  assert.deepEqual(await seen(), { "gen-a": "signed", "gen-b": "unverified", "gen-c": "failed" });
+  // the lock held elsewhere: nothing is written, the event keeps its old status (never a wrong one)
+  await store.setNx(`${CHRONICLE_KEY}:lock`, "1", 10);
+  assert.equal(await settleVerification(store, "gen-a", "failed", async () => undefined), false);
+  assert.equal((await seen())["gen-a"], "signed");
+  store.data.delete(`${CHRONICLE_KEY}:lock`);
 }
 
 // ---------------------------------------------------------------- conversation ----
@@ -249,7 +281,10 @@ const noBytes: FetchLike = async () => { calls++; return { ok: true, status: 200
   const player = playerFacts([{ kind: "bought", token_id: "mango", qty: "3", price: "6", counterparty: "pema.bunnyy-nearworld.testnet" }], "pema.bunnyy-nearworld.testnet");
   const f = factsFor(st, "pema", [], [], { decision: dAi, memory: mem, player });
   assert.ok(f.facts.some((x) => x.startsWith("This customer bought 3 mango from you at 6 coins")));
-  assert.match(scriptFor("Will you make rent?", f.script, f.topics), /^Rent is \d+ coins/);
+  assert.match(scriptFor("Will you make rent?", f.script, f.topics), /^My next rent is \d+ coins/);
+  // right after paying, a till under rent is about the next charge: never worded as if tonight's rent were unpaid
+  const paid = factsFor({ ...st, merchants: { ...st.merchants, pema: { ...st.merchants.pema, cash: 3 } } }, "pema", [], []);
+  assert.equal(paid.topics.rent, `My next rent is ${st.merchants.pema.rent} coins and my till holds only 3. I need to sell.`);
   assert.match(scriptFor("What happened yesterday?", f.script, f.topics), /^On the last market day I raised my price/);
   assert.match(scriptFor("Did I buy from you before?", f.script, f.topics), /^You bought 3 mango from me at 6 coins/);
   assert.match(scriptFor("Why did you change your bid today?", f.script, f.topics), /^Today I raised my mango buying price/);

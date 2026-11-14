@@ -111,7 +111,8 @@ export function factsFor(st: EconomyState, id: MerchantId, offers: readonly Offe
     : `${q.price} coins a ${good} today${reasons.length ? `: ${reasons[0].toLowerCase()}` : ", a normal day"}. My till holds ${Math.floor(m.cash)} coins and rent is ${m.rent}.`;
   const topics: Record<string, string> = {
     price,
-    rent: m.cash >= m.rent ? `Rent is ${m.rent} coins and my till holds ${Math.floor(m.cash)}, so I can pay it.` : `Rent is ${m.rent} coins and my till holds only ${Math.floor(m.cash)}. I need to sell.`,
+    // "next": true before and after tonight's charge (a till under rent right after paying is about the next one)
+    rent: m.cash >= m.rent ? `My next rent is ${m.rent} coins and my till holds ${Math.floor(m.cash)}, so I can pay it.` : `My next rent is ${m.rent} coins and my till holds only ${Math.floor(m.cash)}. I need to sell.`,
     stock: `I have ${m.stock.mango} mangoes, ${m.stock.lemon} lemons and ${m.stock.lassi} lassi right now.`,
   };
   if (dFacts.length) topics.decision = firstPerson(dFacts[0]);

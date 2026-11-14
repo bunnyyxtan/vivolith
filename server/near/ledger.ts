@@ -35,19 +35,29 @@ export async function readChronicle(store: DecisionStore): Promise<ChronicleEven
  *  ponytail: one list and one lock; per-day lists if writes ever contend. */
 export async function chronicle(store: DecisionStore, events: readonly ChronicleEvent[], sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))): Promise<boolean> {
   if (!events.length) return true;
+  return editChronicle(store, (list) => events.reduce(appendEvent, list), sleep);
+}
+
+/** The one way to change the stored Chronicle: read, edit and write under the same short lock as appends. */
+async function editChronicle(store: DecisionStore, edit: (list: ChronicleEvent[]) => ChronicleEvent[], sleep: (ms: number) => Promise<unknown>): Promise<boolean> {
   const lock = `${CHRONICLE_KEY}:lock`;
   for (let k = 0; k < 5; k++) {
     if (await store.setNx(lock, "1", 10)) {
       try {
-        let list = await readChronicle(store);
-        for (const e of events) list = appendEvent(list, e);
-        await store.set(CHRONICLE_KEY, JSON.stringify(list), CHRONICLE_TTL);
+        await store.set(CHRONICLE_KEY, JSON.stringify(edit(await readChronicle(store))), CHRONICLE_TTL);
         return true;
       } finally { await store.del(lock).catch(() => undefined); }
     }
     await sleep(120);
   }
   return false;
+}
+
+/** A decision event copies the signature status when the turn writes it ("pending"); the check finishes on a later
+ *  turn. This carries the final status (signed, unverified, failed) onto the matching event, so the Chronicle never
+ *  keeps saying "pending" for a decision whose check is over. Only events of that decision id change. */
+export async function settleVerification(store: DecisionStore, decisionId: string, status: string, sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))): Promise<boolean> {
+  return editChronicle(store, (list) => list.map((e) => (e.decision?.decisionId === decisionId && e.decision.verification !== status ? { ...e, decision: { ...e.decision, verification: status } } : e)), sleep);
 }
 
 // ------------------------------------------------------------------ bonds ----
