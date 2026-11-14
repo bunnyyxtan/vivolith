@@ -24,19 +24,24 @@ export interface Step {
 
 const f = (s: EconomyState, k: string): boolean => s.flags[k] === true;
 
-/** The newcomer's price floor at the tutorial seller (the relayer's newcomerPrice allows a buy down to 3 c once), so the
- *  first resale to Pema at her real bid (usually 4 c) makes a profit. Pema's delivery is paid at her real posted bid: a
- *  scripted price above what she resells for would sink her. */
+/** The newcomer's price floor at the tutorial seller (the relayer's newcomerPrice allows a buy down to 3 c once). It makes
+ *  a first resale likely to pay, never certain: Pema's real bid moves with her till and her NEAR AI decisions, so no step
+ *  promises a profit. Pema's delivery is paid at her real posted bid. */
 export const NEWCOMER_FLOOR = 3;
+
+const canSell3 = (s: EconomyState, id: MerchantId): boolean => s.merchants[id].status === "open" && s.merchants[id].stock.mango >= 3;
+/** No stall can sell the tutorial 3 mangoes right now (closed, sold out or both on the shared market). */
+export const noSeller = (s: EconomyState): boolean => !(["tomas", "mira", "pema"] as const).some((id) => canSell3(s, id));
+/** Nobody bids for mangoes right now (a closed stall still takes reopening deliveries, so this is rare). */
+const noBuyer = (s: EconomyState): boolean => MERCHANT_IDS.every((id) => !bidFor(s, id, "mango"));
 
 /** Who sells the tutorial its mangoes: Tomas, unless the shared market has closed him or emptied his crates. */
 export const tutorSeller = (s: EconomyState): MerchantId => {
-  const ok = (id: MerchantId): boolean => s.merchants[id].status === "open" && s.merchants[id].stock.mango >= 3;
-  if (ok("tomas")) return "tomas";
-  if (ok("mira")) return "mira";
+  if (canSell3(s, "tomas")) return "tomas";
+  if (canSell3(s, "mira")) return "mira";
   // the shared market can have both shut (live 2026-11-14: a new player was stuck at "Buy 3 mangoes from Tomas" with
   // Tomas closed): Pema sells too, and coins are what she lacks
-  return ok("pema") ? "pema" : "tomas";
+  return canSell3(s, "pema") ? "pema" : "tomas";
 };
 export const titleOf = (st: Step, s: EconomyState): string => (typeof st.title === "function" ? st.title(s) : st.title);
 
@@ -70,11 +75,15 @@ export const STEPS: readonly Step[] = [
     done: (s) => f(s, "talkedPema"), reward: "",
   },
   {
-    id: "buy", title: (s) => `Buy 3 mangoes from ${NAMES[tutorSeller(s)]}`, target: tutorSeller,
-    detail: (s) => tutorSeller(s) === "tomas" ? "Tomas has more mangoes than he can sell. His stall is across the square."
+    // never a dead end: when no stall can sell 3 (closed or sold out on the shared market) the step asks for 3 mangoes
+    // from anywhere, and the Orchard's free pick counts
+    id: "buy", title: (s) => (noSeller(s) ? "Get 3 mangoes" : `Buy 3 mangoes from ${NAMES[tutorSeller(s)]}`),
+    target: (s) => (noSeller(s) ? "orchard" : tutorSeller(s)),
+    detail: (s) => noSeller(s) ? `No stall can sell 3 mangoes right now: their shutters are down or their crates are empty. Pick 3 free at the Mango Orchard (${orchardWhen(s)}), or check back after the next market turn, when the harbor and the pickers restock the stalls.`
+      : tutorSeller(s) === "tomas" ? "Tomas has more mangoes than he can sell. His stall is across the square."
       : tutorSeller(s) === "mira" ? "Tomas has none to spare today, but Mira undercuts him anyway. Her stall is up the row."
       : "Tomas and Mira have their shutters down today. Pema sells mangoes too, and every coin you pay her goes into her till.",
-    done: (s) => f(s, "boughtTomas"), reward: "The mangoes are in your bag. Press B to look.",
+    done: (s) => f(s, "boughtTomas") || s.player.inventory.mango >= 3, reward: "The mangoes are in your bag. Press B to look.",
   },
   {
     id: "deliver", title: (s) => (s.flags.tutSeller === "pema" ? "Sell your mangoes where they pay most" : "Sell your mangoes: Pema needs them"), target: "pema",
@@ -84,13 +93,16 @@ export const STEPS: readonly Step[] = [
       // her shelves are full and her till is what's short (seen live): selling her stock cannot help; coins can
       return `Pema's shelves are full and she isn't buying: what she lacks is coins. Sell your mangoes where they pay, or buy from her to fill her till.`;
     },
-    done: (s) => f(s, "deliveredPema") || f(s, "soldElsewhere"),
+    // nobody bidding at all would block the lesson: then it moves on (the mangoes stay in the bag for later)
+    done: (s) => f(s, "deliveredPema") || f(s, "soldElsewhere") || noBuyer(s),
     reward: "",
   },
   {
     id: "haggle", title: (s) => `Haggle with ${NAMES[tutorSeller(s)]}`, target: tutorSeller,
     detail: () => "Buy again, but press Haggle and try a tactic. Watch the patience bar.",
-    done: (s) => f(s, "haggled"), reward: "You can haggle with every merchant now.",
+    // a haggle needs a stall that can sell 3 and a purse for them; with neither, the lesson waits for no one
+    done: (s) => f(s, "haggled") || noSeller(s) || s.player.coins < 3 * quote(s, tutorSeller(s), "mango").price * 0.55,
+    reward: "You can haggle with every merchant now.",
   },
   {
     id: "invest", title: "Become a stall partner",

@@ -140,7 +140,7 @@ export function createMenu(game: Game, play: Play): { open(): void } {
   let nameDraft = "", nameErr = "";
   const where = (): string => {
     const a = play.account();
-    const who = cap(a.label ? `signed in as ${a.label}` : savedName() ? `playing as ${savedName()}` : a.id ? "playing as guest" : a.offline ? "playing offline" : "connecting");
+    const who = cap(a.problem ? "not connected to the market, retrying" : a.label ? `signed in as ${a.label}` : savedName() ? `playing as ${savedName()}` : a.id ? "playing as guest" : a.offline ? "playing offline" : "connecting");
     if (!play.restored && !started) return `Saltlight Market, where every merchant keeps their own till. ${who}.`;
     const s = play.state;
     const shares = MERCHANT_IDS.filter((id) => s.player.shares[id] > 0).map((id) => `${s.player.shares[id]}/${shareSupply(s, id)} of ${s.merchants[id].shop}`);

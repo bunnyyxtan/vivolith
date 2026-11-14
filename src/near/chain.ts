@@ -71,14 +71,16 @@ export async function chainStatus(): Promise<ChainStatus> {
   // ?offline: play with the local economy only (playtests and demos without touching NEAR); the HUD says "Offline"
   const wanted = !new URLSearchParams(location.search).has("offline");
   // a passing network error must not turn a real session into an offline one: three tries before giving up
+  let answered = !wanted;
   for (let attempt = 0; wanted && !status && attempt < 3; attempt++) {
     if (attempt > 0) await new Promise((r) => setTimeout(r, 1500 * attempt));
     try {
       const r = await fetch("/api/near/status");
       if (r.ok) status = (await r.json()) as ChainStatus;
-      else if (r.status < 500) break; // the server answered: not configured here
+      else if (r.status < 500) { answered = true; break; } // the server answered: not configured here
     } catch { /* network: try again */ }
   }
+  if (!status && !answered) connectionProblem = "The market can't be reached right now."; // never a silent offline game
   status ??= { configured: false, contractId: "", relayer: null, merchants: [], auth: null };
   return status;
 }
@@ -142,6 +144,11 @@ export async function lastMarketTurn(): Promise<LastTick | null> {
     return null;
   }
 }
+
+/** Why this real session could not connect (the market unreachable, or the player's account could not be opened); null
+ *  when connected, or offline on purpose (?offline, or a server without NEAR configured). The game says so and retries. */
+let connectionProblem: string | null = null;
+export const connectionError = (): string | null => connectionProblem;
 
 /** True once we know NEAR is not available (not configured, unreachable or ?offline): the game runs locally. */
 export const isOffline = (): boolean => status !== null && !status.configured;
@@ -280,7 +287,10 @@ export async function connectGuest(): Promise<string | null> {
   let accountId = store.get(ACCOUNT_STORE);
   if (!accountId) {
     const r = await retried("guest", { publicKey: key.getPublicKey().toString() });
-    if (r.status !== "onchain" || typeof r.accountId !== "string") return null;
+    if (r.status !== "onchain" || typeof r.accountId !== "string") {
+      connectionProblem = Number(r.httpStatus) === 429 ? "Too many new players from this network in the last hour: your market account can't be opened yet." : "Your market account couldn't be opened right now.";
+      return null;
+    }
     accountId = r.accountId;
     store.set(ACCOUNT_STORE, accountId);
   }
@@ -288,7 +298,7 @@ export async function connectGuest(): Promise<string | null> {
   const known = await view<boolean>("is_registered", { account_id: accountId }).catch(() => true);
   if (!known) {
     const r = await retried("register", { accountId });
-    if (r.status !== "onchain") return null;
+    if (r.status !== "onchain") { connectionProblem = "Your market account couldn't be registered right now."; return null; }
   }
   player = new Account(accountId, provider, new KeyPairSigner(key));
   return accountId;

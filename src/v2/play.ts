@@ -32,7 +32,7 @@ import { CONVERSATIONS } from "../quests/mango";
 import type { Conversation, DialogueContext } from "../quests/dialogue";
 import {
   EXPLORER_ACCOUNT, EXPLORER_TX, agentDecision, finalHeight, type AgentDecision, type ChainReceipt, balances, buyPosted, sellPosted, connectGuest, haggleDeal, marketTick, merchantAccount, playerId, playerLabel, receipts as chainReceipts,
-  settleDay, claimDividends, repriceMerchant, lastMarketTurn, askMerchant, chainStatus, chronicleEvents, pickOrchard, marketDay, marketDayMs, isOffline, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
+  settleDay, claimDividends, repriceMerchant, connectionError, lastMarketTurn, askMerchant, chainStatus, chronicleEvents, pickOrchard, marketDay, marketDayMs, isOffline, onAccountChange, chooseSignIn, cloudGet, cloudPut, socialAvailable, type SignInResult, type SignInConflict, finishSocialRedirect, signInSocial, signOutSocial, view, type TxOutcome,
 } from "../near/chain";
 
 const GAME_MIN_PER_SEC = 2.4; // 09:00 -> 21:00 in five real minutes
@@ -133,7 +133,7 @@ export interface Play {
   enterWorld(): void;
   signIn(): Promise<void>;
   signOut(): Promise<void>;
-  account(): { id: string | null; label: string | null; canSignIn: boolean; offline: boolean };
+  account(): { id: string | null; label: string | null; canSignIn: boolean; offline: boolean; problem: string | null };
 }
 
 /** Pema's first conversation: the opening of the first mission. */
@@ -591,7 +591,7 @@ export async function createPlay(game: Game): Promise<Play> {
   const goodFor = (id: MerchantId, tab: Tab): Good => (tab === "buy" && id === "arin" ? "lassi" : "mango");
   /** What a merchant asks this player. On the first day's buying step the tutorial seller gives a newcomer's price
    *  (NEWCOMER_FLOOR, never above his posted price and never below the 55% the relayer lets a merchant sign), so
-   *  three mangoes always fit the starter purse and always sell to Pema at a profit, whatever the live market. */
+   *  three mangoes always fit the starter purse; a resale profit is likely, not promised (bids move with tills and NEAR AI). */
   const buyUnit = (id: MerchantId): number => {
     const p = priceOf(state, id).price;
     // the relayer signs a newcomer price only for Tomas and Mira (haggle.ts newcomerPrice); Pema, the fallback seller, asks her own
@@ -1845,7 +1845,7 @@ export async function createPlay(game: Game): Promise<Play> {
     if (tickIn <= 0 && playerId()) {
       tickIn = TICK_EVERY_SEC;
       const me = playerId()!;
-      void marketTick().then((t) => { hungry(t); return syncMerchants(); }).then(syncResidents).then(() => { void refreshTown(); return claimDividends(me); }).then((r) => {
+      void marketTick().then((t) => { lostTouch(t); hungry(t); return syncMerchants(); }).then(syncResidents).then(() => { void refreshTown(); return claimDividends(me); }).then((r) => {
         if (Number(r.coins) > 0 && r.status === "onchain") { hud.toast(`+${String(r.coins)} c in dividends from your stall shares`, true); void audio.sfx("coin_big"); }
         return syncPlayer(me); // every turn re-reads the wallet, so the purse can never drift from the chain for long
       });
@@ -2054,13 +2054,43 @@ export async function createPlay(game: Game): Promise<Play> {
       if (m && who >= 0) market.life.errand(who, "arin", `A ${m[2]} is ${m[3]} c? Not today.`);
     }
   };
+  /** The real game could not connect: say so plainly (never a silent offline game), wait on a card, and come back by
+   *  itself once the market answers (the story save is kept across the reload). */
+  const notConnected = (why: string): void => {
+    let left = 15;
+    const draw = (): void => {
+      openCard((card) => {
+        card.append(el("h2", "", "Not connected to the market"));
+        const s = el("section");
+        s.append(el("p", "", why), el("p", "", "Coins, goods and shares live in the shared market, so nothing would be kept if you played now. Your story so far is safe in this browser."), el("p", "why", `Trying again in ${left} s.`));
+        card.append(s);
+        footer(card, "Try again now", () => location.reload());
+      });
+    };
+    const retry = async (): Promise<void> => {
+      const ok = await fetch("/api/near/status").then((r) => r.ok).catch(() => false);
+      if (ok) { location.reload(); return; }
+      left = 15; if (mode.kind === "card") draw();
+      setTimeout(() => void retry(), 15_000);
+    };
+    draw();
+    const count = setInterval(() => { left = Math.max(0, left - 1); const w = hud.card.querySelector(".why"); if (w) w.textContent = `Trying again in ${left} s.`; if (!left) clearInterval(count); }, 1000);
+    setTimeout(() => void retry(), 15_000);
+  };
+  /** Market turns that cannot reach the server two times running: the player hears it once, and again when it is back. */
+  let missedTurns = 0;
+  const lostTouch = (t: Record<string, unknown>): void => {
+    const unreachable = t.status === "failed" && t.httpStatus === undefined; // the request itself failed (no answer)
+    if (unreachable && ++missedTurns === 2) hud.toast("Lost touch with the market. Trades wait until it's back; trying again every minute.");
+    if (!unreachable) { if (missedTurns >= 2) hud.toast("Back in touch with the market.", true); missedTurns = 0; }
+  };
   let signingIn = false;
   const renderAcct = (): void => {
     const id = playerId(), label = playerLabel();
     hud.acct.innerHTML = "";
     const who = el("div", "who");
     const name = typeof state.flags.name === "string" ? state.flags.name : null; // display only, never an account
-    who.append(el("b", "", !id ? name ?? "Offline" : label || name || "Guest"), el("span", "", READ_ONLY ? " · read-only, nothing saved" : id ? (label ? " · saved to your account" : " · saved in this browser") : " · trades stay here"));
+    who.append(el("b", "", !id ? name ?? "Offline" : label || name || "Guest"), el("span", "", READ_ONLY ? " · read-only, nothing saved" : id ? (label ? " · saved to your account" : " · saved in this browser") : connectionError() ? " · not connected, retrying" : " · trades stay here"));
     hud.acct.append(who);
     if (!id || (!label && !socialAvailable())) return; // sign-in appears once Google/email login is configured
     if (label) return; // signed in: sign-out is in the menu (Esc), behind a confirmation
@@ -2152,6 +2182,7 @@ export async function createPlay(game: Game): Promise<Play> {
     const id = await connectGuest();
     if (READ_ONLY) hud.toast(`Read-only inspection${id ? ` of ${id}` : ""}: nothing is signed, sent or saved.`);
     renderAcct();
+    if (!id && connectionError()) { notConnected(connectionError()!); return; }
     if (!id) return;
     void syncMerchants();
     void refreshTown(); // Town news at once (a GET), not only after the first market turn answers
@@ -2199,7 +2230,7 @@ export async function createPlay(game: Game): Promise<Play> {
     },
     signIn: () => signIn(),
     signOut: () => signOut(),
-    account: () => ({ id: playerId(), label: playerLabel(), canSignIn: socialAvailable(), offline: isOffline() }),
+    account: () => ({ id: playerId(), label: playerLabel(), canSignIn: socialAvailable(), offline: isOffline(), problem: connectionError() }),
     interact() {
       if (mode.kind !== "walk" || ff) return;
       if (!market.nearest(player.root.position) && atOrchard()) { void pickAtOrchard(); return; }
