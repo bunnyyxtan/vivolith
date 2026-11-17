@@ -12949,6 +12949,7 @@ var lines_default = {
 		"<p class=\"judge\"><b>Ledger view is on.</b> In town, press <kbd>N</kbd> for your NEAR account and every receipt, each with its explorer link.</p>",
 		"<p class=\"judge\">Judging VIVOLITH?",
 		"@auth0/auth0-spa-js",
+		"@vercel/analytics",
 		"A big order!",
 		"A fair customer.",
 		"A forecast of the week ahead from today's market.",

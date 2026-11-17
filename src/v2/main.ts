@@ -1,8 +1,12 @@
+import { inject } from '@vercel/analytics';
 import { createGame } from "./game";
 import { createPlay } from "./play";
 import { BOOT_GROUPS, createBoot, createMenu } from "./menu";
 import { cleanUrl, installInspectGuard } from "../near/inspect";
 import { prefetch, releasePrefetch } from "../assets";
+
+// Initialize Vercel Web Analytics
+inject();
 
 // Every model the first screen needs starts downloading now, in parallel (they used to load one after another).
 prefetch(BOOT_GROUPS.flatMap((g) => g.urls));

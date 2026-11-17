@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@auth0/auth0-spa-js": "2.11.3",
+    "@vercel/analytics": "^2.0.1",
     "near-api-js": "7.4.0",
     "three": "0.187.0"
   },
